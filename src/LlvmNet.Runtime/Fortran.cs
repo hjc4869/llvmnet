@@ -2,6 +2,29 @@ namespace LlvmNet.Runtime;
 
 public static unsafe class Fortran
 {
+    [CExport("_FortranAIsContiguous")]
+    public static int IsContiguous(nint array)
+    {
+        var descriptor = new FortranDescriptor(array);
+        if (descriptor.Elements == 0) return 1;
+        long stride = descriptor.ElementBytes;
+        for (int dimension = 0; dimension < descriptor.Rank; dimension++)
+        {
+            long extent = descriptor.Extent(dimension);
+            if (extent > 1 && descriptor.Stride(dimension) != stride) return 0;
+            stride = checked(stride * extent);
+        }
+        return 1;
+    }
+
+    [CExport("_FortranAIndex1")]
+    public static long Index1(nint text, long length, nint substring, long substringLength, int back)
+    {
+        var characters = new ReadOnlySpan<byte>((void*)text, checked((int)length));
+        var pattern = new ReadOnlySpan<byte>((void*)substring, checked((int)substringLength));
+        return (back != 0 ? characters.LastIndexOf(pattern) : characters.IndexOf(pattern)) + 1L;
+    }
+
     [CExport("_FortranAArgumentCount")]
     public static int ArgumentCount() => ProcessRuntime.ArgumentCount - 1;
     [CExport("_FortranAGetCommandArgument")]

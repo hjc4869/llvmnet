@@ -236,14 +236,14 @@ internal static class Driver
                 File.Copy(linked, output, true);
                 return 0;
             }
-            if (!options.Library)
-            {
-                string reachable = Path.Combine(temporary, "reachable.bc");
-                int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), ["-passes=internalize,globaldce", "--internalize-public-api-list=main,_QQmain", linked, "-o", reachable], verbose);
-                if (optimizeResult != 0)
-                    return optimizeResult;
-                linked = reachable;
-            }
+            string lowered = Path.Combine(temporary, "lowered.bc");
+            string passes = (options.Library ? "" : "internalize,globaldce,") + "function(expand-reductions,scalarizer<load-store>),globaldce,verify";
+            List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
+            if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain");
+            int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);
+            if (optimizeResult != 0)
+                return optimizeResult;
+            linked = lowered;
             using var module = new LlvmModule(linked);
             bool launcher = !nativeAot && !options.Library && !output.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
             string payloadDirectory = nativeAot ? Path.Combine(temporary, "payload") : launcher ? output + ".llvmnet" : Path.GetDirectoryName(output)!;

@@ -41,7 +41,7 @@ internal sealed class HostInterop : IDisposable
     {
         string name = Llvm.Name(function);
         return Llvm.LLVMIsAFunction(function) != 0 && Llvm.LLVMIsDeclaration(function) != 0 &&
-            !options.NativeImports.ContainsKey(name) &&
+            !options.NativeImports.ContainsKey(name) && !compiler.IsManagedImport(name) &&
             !name.StartsWith("llvm.", StringComparison.Ordinal) && !name.StartsWith("_Z", StringComparison.Ordinal) &&
                 !name.StartsWith("__cxa_", StringComparison.Ordinal) && !name.StartsWith("_Fortran", StringComparison.Ordinal) && name != "_Unwind_Resume" &&
                 Adapter(name) is null && name is not ("pthread_exit" or "pthread_cancel");

@@ -22,6 +22,23 @@ internal sealed class ConstantData
         nint type = Llvm.LLVMTypeOf(value);
         if (TypeSystem.IsAggregate(type))
         {
+            if (TypeSystem.Kind(type) == 13 && TypeSystem.Width(Llvm.LLVMGetElementType(type)) is int width &&
+                width > 0 && width is not (8 or 16 or 32 or 64 or 128))
+            {
+                for (uint index = 0; index < types.ElementCount(type); index++)
+                {
+                    nint element = Llvm.LLVMGetAggregateElement(value, index);
+                    if (Llvm.LLVMIsNull(element) != 0 || Llvm.LLVMIsUndef(element) != 0 || Llvm.LLVMIsPoison(element) != 0)
+                        continue;
+                    byte[] bits = Llvm.Bits(element);
+                    for (int bit = 0; bit < width; bit++)
+                    {
+                        long position = checked((long)index * width + bit);
+                        Bytes[checked(offset + position / 8)] |= (byte)(((bits[bit / 8] >> (bit % 8)) & 1) << (int)(position % 8));
+                    }
+                }
+                return;
+            }
             for (uint index = 0; index < types.ElementCount(type); index++)
             {
                 (_, long elementOffset) = types.Element(type, index);

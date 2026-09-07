@@ -1,5 +1,6 @@
 #ifndef __LLVMNET_UNISTD_H
 #define __LLVMNET_UNISTD_H
+#include "__llvmnet_types.h"
 #include <stddef.h>
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
@@ -14,6 +15,8 @@ ssize_t write(int, const void *, size_t);
 int close(int);
 off_t lseek(int, off_t, int);
 int dup(int);
+int chown(const char *, uid_t, gid_t);
+int fchown(int, uid_t, gid_t);
 int unlink(const char *);
 int rmdir(const char *);
 int isatty(int);

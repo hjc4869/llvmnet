@@ -17,10 +17,13 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal TypeBuilder Program { get; private set; } = null!;
     internal HostInterop? Host { get; private set; }
     private readonly Dictionary<nint, FieldBuilder> constants = [];
+    private readonly HashSet<string> managedImports = new(StringComparer.Ordinal);
     private readonly Dictionary<string, MethodInfo> runtimeExports = typeof(Memory).Assembly.GetTypes()
         .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
         .SelectMany(method => method.GetCustomAttributes<CExportAttribute>().Select(attribute => (attribute.Name, Method: method)))
         .ToDictionary(item => item.Name, item => item.Method, StringComparer.Ordinal);
+
+    internal bool IsManagedImport(string name) => managedImports.Contains(name);
 
     internal MethodInfo ResolveFunction(nint function)
     {
@@ -86,6 +89,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             {
                 if (!runtimeExports.TryAdd(export.Name, method))
                     throw new InvalidOperationException($"Duplicate managed export {export.Name} in {reference}");
+                managedImports.Add(export.Name);
             }
         }
         foreach (nint function in Llvm.Functions(module))

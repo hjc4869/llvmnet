@@ -18,3 +18,24 @@ if "$root/bin/llvmnet" --runtime=portable -include /usr/include/stdio.h "$root/t
     exit 1
 fi
 printf 'PASS: versioned portable ABI, isolated headers, managed CIL output and portable-mode NativeAOT\n'
+clang-22 -O3 "$root/tests/c/libgen.c" -o "$output/libgen-native"
+"$output/libgen-native"
+for runtime in system portable; do
+    "$root/bin/llvmnet" --runtime="$runtime" -O3 "$root/tests/c/libgen.c" -o "$output/libgen-$runtime.dll"
+    dotnet "$output/libgen-$runtime.dll"
+done
+printf 'PASS: POSIX basename/dirname including trailing slashes, roots, empty and null paths in both ABIs\n'
+clang-22 -O3 "$root/tests/c/utime.c" -o "$output/utime-native"
+(cd "$output" && ./utime-native)
+for runtime in system portable; do
+    "$root/bin/llvmnet" --runtime="$runtime" -O3 "$root/tests/c/utime.c" -o "$output/utime-$runtime.dll"
+    (cd "$output" && dotnet "utime-$runtime.dll")
+done
+printf 'PASS: POSIX utime explicit/current timestamps and missing-file errno in both ABIs\n'
+clang-22 -O3 "$root/tests/c/tokenize.c" -o "$output/tokenize-native"
+"$output/tokenize-native"
+for runtime in system portable; do
+    "$root/bin/llvmnet" --runtime="$runtime" -O3 "$root/tests/c/tokenize.c" -o "$output/tokenize-$runtime.dll"
+    dotnet "$output/tokenize-$runtime.dll"
+done
+printf 'PASS: strtok and strtok_r delimiter changes, empty input and independent parser state in both ABIs\n'

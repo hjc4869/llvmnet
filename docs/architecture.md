@@ -6,7 +6,7 @@ The pipeline below is shared by three explicit runtime selections: legacy `manag
 
 1. The driver invokes clang-22 for C/C++ or flang-22 for Fortran and emits LLVM bitcode. Frontend optimization defaults to O1 with automatic vectorization disabled; explicit frontend arguments can override defaults.
 2. The small C++ bridge uses LLVM's parser, archive reader, linker, verifier, and exact numeric-constant APIs. It performs real lazy archive-member extraction. This bridge runs only inside the compiler process.
-3. Executable links internalize definitions except the entry points and run global dead-code elimination. Library links preserve definitions. ABI tags reject incompatible object/archive members.
+3. Executable links internalize definitions except the entry points and run global dead-code elimination. Library links preserve public definitions. Both expand vector reductions and run LLVM's scalarizer with load/store lowering before CIL emission. ABI tags reject incompatible object/archive members.
 4. The C# backend reads LLVM through its C API. LLVM data layout determines sizes, alignments, and structure offsets.
 5. `PersistedAssemblyBuilder` emits static CIL methods and a managed PE image. The .NET JIT executes those methods normally.
 6. Optional NativeAOT consumes the emitted CIL executable directly. System-mode ABI bridges become static native inputs, permitting a single executable to be staged by ordinary build/benchmark tools.
@@ -21,6 +21,8 @@ LLVM `float` and `double` use their CIL equivalents. `x86_fp80` uses a 16-byte-l
 
 `llvm.fmuladd` uses separately rounded multiplication and addition, which LLVM permits and which matches the generic native test baseline. `llvm.fma` remains fused. Saturation, overflow, ordered/unordered comparisons, signed zeros, and bit-width behavior have focused IR tests.
 
+Explicitly enabled frontend vectorization uses a scalar semantics fallback, not hardware SIMD. LLVM expands reductions and scalarizes arithmetic, casts, comparisons, shuffles, selects, and ordinary vector memory operations. Residual fixed-vector arguments/results use explicit-layout value storage with lane insertion/extraction, including bit-packed integer masks. Tests cover ordered floating reductions, wrapping integers, dynamic lane indices, packed constants, relocations, narrowing, and loop tails. Scalable vectors, target-specific intrinsics, and complete masked-memory support remain unsupported. No assumption is made about `Vector<T>.Count`.
+
 ## Memory and Calls
 
 Pointers are native integers into unmanaged memory or stack storage. Globals and constant aggregates are allocated before their initializers and relocations are installed. Function-pointer tables use `ldftn`; indirect calls use managed `calli`.
@@ -28,6 +30,8 @@ Pointers are native integers into unmanaged memory or stack storage. Globals and
 Arrays/structures are explicit-layout managed value types used as bit containers, not GC object graphs. Loads/stores use unaligned-safe CIL or exact-width helpers. Allocas use aligned stack allocation. `byval` parameters receive a private aligned copy; hidden `sret` pointers are preserved. Dynamic stack restoration and returns-twice calls are not yet implemented.
 
 Variadic calls construct a software x86-64 SysV register-save and overflow area. Translated `va_start`, `va_copy`, and `va_arg` sequences and managed libc formatting functions consume the same layout. Variadic aggregate ABI classification is incomplete; scalar integer/pointer/float overflow-register cases are tested.
+
+Legacy C no-prototype call sites may use a variadic LLVM signature even when the linked definition is fixed-arity. Direct calls use that definition when the required argument types match, without appending a spurious variadic frame. Unused trailing arguments, including Fortran hidden character lengths, are not pushed for fixed definitions. A void call site discards a non-void definition's unused result. Other incompatible signatures are diagnosed instead of emitting invalid CIL. NativeAOT xz and nab workloads exercise these cases.
 
 ## Runtime
 
@@ -37,7 +41,7 @@ Atomics deliberately use managed synchronization for correctness before performa
 
 C++ `invoke` becomes a CIL try/catch region, landing pads select matching C++ exception types, and resume/rethrow propagates managed exceptions carrying the C++ object. Public single/multiple/virtual-base RTTI supports tested adjusted catches and dynamic casts. This is not a complete libstdc++ runtime or native C++ ABI.
 
-Fortran uses Flang 22 CFI descriptors: a 24-byte header followed by rank-dependent 24-byte dimension records. Implemented intrinsic arrays preserve extents, lower bounds, and byte strides. Allocation, assignment, reductions, command arguments, and a subset of sequential formatted/list-directed I/O are managed runtime operations. Derived-type lifecycle, coarrays, complete I/O formats, and the full Flang runtime remain work in progress.
+Fortran uses Flang 22 CFI descriptors: a 24-byte header followed by rank-dependent 24-byte dimension records. Implemented intrinsic arrays preserve extents, lower bounds, and byte strides. Numeric pointer allocation preserves prior associations and tracks runtime-owned targets for deallocation through aliases. Contiguity inquiries and temporary copy-in/copy-out preserve noncontiguous array sections without reallocating the destination. Allocation, assignment, reductions, command arguments, scalar byte-character INDEX/REPEAT/ADJUSTL/TRIM, and a subset of sequential formatted/list-directed I/O are managed runtime operations. Formatted BACKSPACE preserves record boundaries and distinguishes the endfile position. Derived-type lifecycle, coarrays, complete I/O formats, and the full Flang runtime remain work in progress.
 
 ## Linking Boundaries
 

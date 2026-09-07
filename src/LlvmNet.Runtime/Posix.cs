@@ -154,6 +154,14 @@ public static unsafe class Posix
         *(long*)(result + 48) = Encoding.UTF8.GetByteCount(info.LinkTarget);
         return 0;
     }
+    [CExport("utime")]
+    public static int Utime(nint path, nint times)
+    {
+        if (times == 0) return Utimensat(-100, path, 0, 0);
+        long* timestamps = stackalloc long[4] { ((long*)times)[0], 0, ((long*)times)[1], 0 };
+        return Utimensat(-100, path, (nint)timestamps, 0);
+    }
+
     [CExport("utimensat")]
     public static int Utimensat(int directory, nint path, nint times, int flags)
     {
@@ -177,7 +185,10 @@ public static unsafe class Posix
             if (modification is not null) File.SetLastWriteTimeUtc(name, modification.Value);
             return 0;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { return ProcessRuntime.Error(22); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return ProcessRuntime.Error(error is FileNotFoundException or DirectoryNotFoundException ? 2 : error is UnauthorizedAccessException ? 13 : 22);
+        }
     }
     [CExport("mkdir")]
     public static int Mkdir(nint path, int mode)

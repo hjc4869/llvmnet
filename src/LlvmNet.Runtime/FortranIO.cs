@@ -6,7 +6,10 @@ namespace LlvmNet.Runtime;
 
 public static unsafe class FortranIO
 {
-    private sealed record Unit(nint File, string? Path, bool Owned);
+    private sealed record Unit(nint File, string? Path, bool Owned)
+    {
+        internal bool AfterEndfile;
+    }
     private sealed class Statement(string operation, int unit, string? format = null)
     {
         internal readonly string Operation = operation;
@@ -64,6 +67,8 @@ public static unsafe class FortranIO
     public static nint Close(int unit, nint source, int line) => New(new Statement("close", unit));
     [CExport("_FortranAioBeginRewind")]
     public static nint Rewind(int unit, nint source, int line) => New(new Statement("rewind", unit));
+    [CExport("_FortranAioBeginBackspace")]
+    public static nint Backspace(int unit, nint source, int line) => New(new Statement("backspace", unit));
     [CExport("_FortranAioBeginFlush")]
     public static nint Flush(int unit, nint source, int line) => New(new Statement("flush", unit));
     [CExport("_FortranAioEnableHandlers")]
@@ -205,7 +210,8 @@ public static unsafe class FortranIO
         List<byte> bytes = [];
         int value;
         while ((value = Stdio.Getc(unit.File)) >= 0 && value != '\n') bytes.Add((byte)value);
-        if (value < 0 && bytes.Count == 0) state.Error = -1;
+        unit.AfterEndfile = value < 0 && bytes.Count == 0;
+        if (unit.AfterEndfile) state.Error = -1;
         if (bytes.Count != 0 && bytes[^1] == '\r') bytes.RemoveAt(bytes.Count - 1);
         state.Input = Encoding.UTF8.GetString(bytes.ToArray());
     }
@@ -345,9 +351,14 @@ public static unsafe class FortranIO
                     }
                     break;
                 case "rewind":
-                    if (units.TryGetValue(state.Unit, out Unit? rewind)) state.Error = Stdio.Fseek(rewind.File, 0, 0);
+                    if (units.TryGetValue(state.Unit, out Unit? rewind))
+                    {
+                        state.Error = Stdio.Fseek(rewind.File, 0, 0);
+                        if (state.Error == 0) { rewind.AfterEndfile = false; Stdio.Clearerr(rewind.File); }
+                    }
                     else state.Error = 1002;
                     break;
+                case "backspace": BackspaceRecord(state); break;
                 case "flush":
                     if (units.TryGetValue(state.Unit, out Unit? flush)) state.Error = Stdio.Flush(flush.File);
                     else state.Error = 1002;
@@ -358,6 +369,31 @@ public static unsafe class FortranIO
         }
         finally { GCHandle.FromIntPtr(cookie).Free(); }
     }
+
+    private static void BackspaceRecord(Statement state)
+    {
+        if (!units.TryGetValue(state.Unit, out Unit? unit)) { state.Error = 1002; return; }
+        if (unit.AfterEndfile)
+        {
+            unit.AfterEndfile = false;
+            Stdio.Clearerr(unit.File);
+            return;
+        }
+        long position = Stdio.Ftell(unit.File);
+        if (position < 0) { state.Error = 1002; return; }
+        long cursor = position - 1;
+        while (cursor >= 0)
+        {
+            if (Stdio.Fseek(unit.File, cursor, 0) != 0) { state.Error = 1002; return; }
+            int value = Stdio.Getc(unit.File);
+            if (value < 0) { state.Error = 1002; return; }
+            if (value == '\n' && cursor != position - 1) break;
+            cursor--;
+        }
+        state.Error = Stdio.Fseek(unit.File, cursor + 1, 0);
+        if (state.Error == 0) Stdio.Clearerr(unit.File);
+    }
+
     private static void Open(Statement state)
     {
         string path = state.Options.GetValueOrDefault("file", $"fort.{state.Unit}");

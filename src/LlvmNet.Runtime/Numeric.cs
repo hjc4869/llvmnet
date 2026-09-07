@@ -5,6 +5,22 @@ namespace LlvmNet.Runtime;
 
 public static unsafe class Numeric
 {
+    public static float PowInteger32(float value, int exponent) => PowInteger(value, exponent);
+    public static double PowInteger64(double value, int exponent) => PowInteger(value, exponent);
+
+    private static TNumber PowInteger<TNumber>(TNumber value, int exponent) where TNumber : IFloatingPointIeee754<TNumber>
+    {
+        long remaining = Math.Abs((long)exponent);
+        TNumber result = TNumber.One;
+        while (remaining != 0)
+        {
+            if ((remaining & 1) != 0) result *= value;
+            remaining >>= 1;
+            if (remaining != 0) value *= value;
+        }
+        return exponent < 0 ? TNumber.One / result : result;
+    }
+
     public static int ByteSwap16(int value) => BinaryPrimitives.ReverseEndianness((ushort)value);
     public static int ByteSwap32(int value) => BinaryPrimitives.ReverseEndianness(value);
     public static long ByteSwap64(long value) => BinaryPrimitives.ReverseEndianness(value);

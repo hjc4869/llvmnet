@@ -207,6 +207,10 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Load(Llvm.LLVMGetOperand(value, 2));
                 Il.MarkLabel(end);
                 break;
+            case 50:
+            case 51:
+                VectorElement(value, opcode == 51);
+                break;
             case 53:
             case 54:
                 Aggregate(value, opcode == 54);
@@ -247,6 +251,59 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         if (locals.TryGetValue(value, out LocalBuilder? local))
             Il.Emit(OpCodes.Stloc, local);
+    }
+
+    private void VectorElement(nint value, bool insert)
+    {
+        nint vector = Llvm.LLVMGetOperand(value, 0);
+        nint vectorType = Llvm.LLVMTypeOf(vector);
+        nint element = Llvm.LLVMGetElementType(vectorType);
+        int width = TypeSystem.Width(element);
+        if (TypeSystem.Kind(element) is not (2 or 3 or 12) &&
+            !(TypeSystem.Kind(element) == 8 && width is > 0 and <= 128))
+            throw new NotSupportedException($"Unsupported vector lane layout: {Llvm.PrintType(element)}");
+        LocalBuilder copy = Il.DeclareLocal(Types.Map(vectorType));
+        Load(vector);
+        Il.Emit(OpCodes.Stloc, copy);
+        Il.Emit(OpCodes.Ldloca, copy);
+        Il.Emit(OpCodes.Conv_I);
+        Load(Llvm.LLVMGetOperand(value, insert ? 2u : 1u));
+        if (width > 0 && width is not (8 or 16 or 32 or 64 or 128))
+        {
+            Il.Emit(OpCodes.Conv_I8);
+            if (insert)
+            {
+                Load(Llvm.LLVMGetOperand(value, 1));
+                if (width <= 64)
+                {
+                    Il.Emit(OpCodes.Conv_U8);
+                    Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.FromUnsigned))!);
+                }
+            }
+            Il.Emit(OpCodes.Ldc_I4, width);
+            Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(insert ? nameof(WideInteger.WritePacked) : nameof(WideInteger.ReadPacked))!);
+            if (insert)
+                Il.Emit(OpCodes.Ldloc, copy);
+            else if (width <= 64)
+            {
+                Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.Low))!);
+                if (width <= 32) Il.Emit(OpCodes.Conv_I4);
+            }
+            return;
+        }
+        Il.Emit(OpCodes.Conv_I);
+        Il.Emit(OpCodes.Ldc_I8, Types.Size(element));
+        Il.Emit(OpCodes.Conv_I);
+        Il.Emit(OpCodes.Mul);
+        Il.Emit(OpCodes.Add);
+        if (insert)
+        {
+            Load(Llvm.LLVMGetOperand(value, 1));
+            StoreMemory(element);
+            Il.Emit(OpCodes.Ldloc, copy);
+        }
+        else
+            ReadMemory(element);
     }
 
     private void Edge(nint source, nint target)
@@ -496,10 +553,23 @@ internal sealed class FunctionEmitter : ValueEmitter
             return;
         }
         nint signature = Llvm.LLVMGetCalledFunctionType(instruction);
+        bool discardReturn = false;
+        if (Llvm.LLVMIsAFunction(target) != 0 && signature != Llvm.LLVMGlobalGetValueType(target))
+        {
+            nint definition = Llvm.LLVMGlobalGetValueType(target);
+            uint arguments = Llvm.LLVMGetNumArgOperands(instruction);
+            uint parameters = Llvm.LLVMCountParamTypes(definition);
+            discardReturn = TypeSystem.Kind(Llvm.LLVMGetReturnType(signature)) == 0 && TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) != 0;
+            if (Llvm.LLVMIsFunctionVarArg(definition) != 0 || parameters > arguments ||
+                !discardReturn && Llvm.LLVMGetReturnType(definition) != Llvm.LLVMGetReturnType(signature) ||
+                Enumerable.Range(0, checked((int)parameters)).Any(index => Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, (uint)index)) != Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index))))
+                throw new NotSupportedException($"Incompatible direct call signature for {name}: {Llvm.PrintType(signature)} versus {Llvm.PrintType(definition)}");
+            signature = definition;
+        }
         bool variadic = Llvm.LLVMIsFunctionVarArg(signature) != 0;
         if (variadic)
             varargs.Pack(instruction);
-        uint count = variadic ? Llvm.LLVMCountParamTypes(signature) : Llvm.LLVMGetNumArgOperands(instruction);
+        uint count = variadic || Llvm.LLVMIsAFunction(target) != 0 ? Llvm.LLVMCountParamTypes(signature) : Llvm.LLVMGetNumArgOperands(instruction);
         for (uint index = 0; index < count; index++)
             Load(Llvm.LLVMGetOperand(instruction, index));
         if (variadic)
@@ -518,6 +588,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             else
                 Il.EmitCalli(OpCodes.Calli, System.Runtime.InteropServices.CallingConvention.Cdecl, Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
         }
+        if (discardReturn) Il.Emit(OpCodes.Pop);
     }
 
     private void Intrinsic(nint instruction, string name)
@@ -590,6 +661,14 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         string operation = name.Split('.')[1];
         int width = TypeSystem.Width(Llvm.LLVMTypeOf(instruction));
+        if (width > 64 && operation is "ctpop" or "ctlz" or "cttz")
+        {
+            Load(Llvm.LLVMGetOperand(instruction, 0));
+            Il.Emit(OpCodes.Ldc_I4, width);
+            Il.Emit(OpCodes.Ldc_I4, operation == "ctpop" ? 0 : operation == "ctlz" ? 1 : 2);
+            Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.CountBits))!);
+            return;
+        }
         if (width > 64)
             throw new NotSupportedException($"Wide integer intrinsic not implemented: {name}");
         if (operation == "fmuladd")
@@ -612,6 +691,43 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Il.Emit(OpCodes.Add);
                 Il.Emit(TypeSystem.Kind(type) == 2 ? OpCodes.Conv_R4 : OpCodes.Conv_R8);
             }
+            return;
+        }
+        if (operation == "frexp")
+        {
+            nint resultType = Llvm.LLVMTypeOf(instruction);
+            (nint fractionType, long fractionOffset) = Types.Element(resultType, 0);
+            (nint exponentType, long exponentOffset) = Types.Element(resultType, 1);
+            if (TypeSystem.Kind(fractionType) is not (2 or 3) || TypeSystem.Width(exponentType) != 32)
+                throw new NotSupportedException($"Unsupported frexp result: {Llvm.PrintType(resultType)}");
+            LocalBuilder result = Il.DeclareLocal(Types.Map(resultType));
+            LocalBuilder exponent = Il.DeclareLocal(typeof(int));
+            Il.Emit(OpCodes.Ldloca, result);
+            Il.Emit(OpCodes.Initobj, Types.Map(resultType));
+            Il.Emit(OpCodes.Ldloca, result);
+            Offset(fractionOffset);
+            Load(Llvm.LLVMGetOperand(instruction, 0));
+            Il.Emit(OpCodes.Conv_R8);
+            Il.Emit(OpCodes.Ldloca, exponent);
+            Il.Emit(OpCodes.Conv_I);
+            Il.Emit(OpCodes.Call, typeof(CMath).GetMethod(nameof(CMath.Frexp))!);
+            if (TypeSystem.Kind(fractionType) == 2) Il.Emit(OpCodes.Conv_R4);
+            StoreMemory(fractionType);
+            Il.Emit(OpCodes.Ldloca, result);
+            Offset(exponentOffset);
+            Il.Emit(OpCodes.Ldloc, exponent);
+            StoreMemory(exponentType);
+            Il.Emit(OpCodes.Ldloc, result);
+            return;
+        }
+        if (operation == "powi")
+        {
+            nint type = Llvm.LLVMTypeOf(instruction);
+            if (TypeSystem.Kind(type) is not (2 or 3) || TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, 1))) != 32)
+                throw new NotSupportedException($"Unsupported integer-power intrinsic: {name}");
+            Load(Llvm.LLVMGetOperand(instruction, 0));
+            Load(Llvm.LLVMGetOperand(instruction, 1));
+            Il.Emit(OpCodes.Call, typeof(Numeric).GetMethod(TypeSystem.Kind(type) == 2 ? nameof(Numeric.PowInteger32) : nameof(Numeric.PowInteger64))!);
             return;
         }
         if (operation == "ldexp")
@@ -855,6 +971,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         string? mathName = operation switch
         {
             "fabs" => "Abs", "sqrt" => "Sqrt", "sin" => "Sin", "cos" => "Cos", "atan" => "Atan", "atan2" => "Atan2",
+            "sinh" => "Sinh", "cosh" => "Cosh", "tanh" => "Tanh",
             "exp" => "Exp", "exp2" => "Exp2", "log" => "Log", "log2" => "Log2", "log10" => "Log10",
             "pow" => "Pow", "floor" => "Floor", "ceil" => "Ceiling", "trunc" => "Truncate",
             "roundeven" or "rint" or "nearbyint" => "Round", "fma" or "fmuladd" => "FusedMultiplyAdd",

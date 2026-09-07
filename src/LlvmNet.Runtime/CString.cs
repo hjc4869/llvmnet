@@ -4,6 +4,8 @@ namespace LlvmNet.Runtime;
 
 public static unsafe class CString
 {
+    [ThreadStatic] private static nint tokenState;
+
     public static string Text(nint pointer) => pointer == 0 ? "(null)" : Marshal.PtrToStringUTF8(pointer) ?? "";
 
     [CExport("malloc")]
@@ -260,6 +262,24 @@ public static unsafe class CString
     {
         nint result = text + (nint)Strcspn(text, accepted);
         return *(byte*)result == 0 ? 0 : result;
+    }
+
+    [CExport("strtok")]
+    public static nint Strtok(nint text, nint delimiters) => Tokenize(text, delimiters, ref tokenState);
+
+    [CExport("strtok_r")]
+    public static nint StrtokR(nint text, nint delimiters, nint saved) => Tokenize(text, delimiters, ref *(nint*)saved);
+
+    private static nint Tokenize(nint text, nint delimiters, ref nint saved)
+    {
+        if (text == 0) text = saved;
+        if (text == 0) return 0;
+        text += checked((nint)Strspn(text, delimiters));
+        if (*(byte*)text == 0) { saved = text; return 0; }
+        nint end = text + checked((nint)Strcspn(text, delimiters));
+        saved = end;
+        if (*(byte*)end != 0) { *(byte*)end = 0; saved++; }
+        return text;
     }
 
     [CExport("wcslen")]

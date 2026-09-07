@@ -44,6 +44,8 @@ The complete `tests/all.sh spec-test` rerun also passed: 186.84 seconds native a
 
 ## SPEC Development Runs
 
+The optimized benchmark-by-benchmark inventory and remaining failures are recorded in [spec-coverage.md](spec-coverage.md). It is distinct from the earlier selected manual runs below; attempted coverage is not full-suite success.
+
 These use one benchmark process, source/input archives from the supplied licensed media, and no reportable SPEC harness configuration. Original kits remain unchanged. No proprietary benchmark source or input is part of the tracked project.
 
 | Suite | Benchmark | Language | Validated Inputs |
@@ -63,12 +65,16 @@ The complete integer-rate suites, complete FP-rate suites, and integer/FP speed 
 
 The core runner covers scalar control flow, parallel PHIs, LLVM 22 switches, memory/global relocations, function pointers, large `byval`/`sret` structures, mixed SysV varargs, libc adapters, C11 atomics, pthread contention, C++ templates/RAII/RTTI/unwinding, Fortran descriptors/allocation/I/O, x87 extended precision, and 128-bit integer arithmetic. Tests generally compare native and CIL behavior, with direct IR cases where frontend optimization could remove the feature being tested.
 
+Optimized regressions additionally compare `-O3 -fvectorize -fslp-vectorize` C with native output in system and portable JIT, NativeAOT, and managed-library configurations. Direct IR tests cover vector arithmetic, reductions, masks, constants, lane operations, function boundaries, and scalar `llvm.frexp` with i32 exponent results. Fortran checks now include O3, scalar CHARACTER INDEX/REPEAT/ADJUSTL, pointer allocation/bounds/alias deallocation, and formatted BACKSPACE with beginning/end-of-file handling in both ABIs and both execution modes. Explicit managed library exports take precedence over native symbol lookup in system mode.
+
+Additional workload-driven checks cover legacy no-prototype calls, discarded return values and unused trailing arguments, scalar hyperbolic and integer-power intrinsics, 80/128-bit population/leading/trailing-zero counts, Fortran contiguity, temporary copy-in/copy-out and SPREAD, and portable basename/dirname, utime and strtok/strtok_r. Unimplemented pointer-derived-type lifecycle and unsupported filesystem operations still fail explicitly.
+
 ## Known Limits
 
 - Not a complete compiler-driver replacement: unsupported native-linker flags and unresolved symbols are errors.
 - No general `setjmp`/`longjmp`, LLVM dynamic stack save/restore, or computed-goto lowering yet.
 - No LLVM TLS global lowering yet, despite managed pthread key support.
-- Vector arithmetic, scalable vectors, binary128, and several wide-integer intrinsic families are not implemented. Auto-vectorization is disabled by default; generic `Vector<T>` acceleration is deferred.
+- Fixed-vector operations supported by LLVM reduction expansion/scalarization have a tested scalar fallback; this is not hardware SIMD acceleration. Scalable vectors, target-specific vector intrinsics, complete masked-memory handling, binary128, and several wide-integer intrinsic families remain unsupported. Auto-vectorization is disabled by default; portable SIMD acceleration is deferred.
 - The C runtime is a tested subset, not complete glibc/POSIX. Locale, wide-character I/O, hexadecimal/long-double printf/scanf, full signal/process behavior, and some filesystem metadata are incomplete.
 - C++ standard-library exports, exception pointer conversions, access/ambiguity corner cases, thread-local destruction, and complete library ABI coverage remain incomplete.
 - Fortran derived types/finalization, complex/quad runtime operations, all array transformations, nondefault floating environments, unformatted/direct I/O, and full formatted/list-directed editing remain incomplete.

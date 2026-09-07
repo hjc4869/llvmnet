@@ -14,6 +14,18 @@ public static unsafe class WideInteger
     public static double ToDouble(UInt128 value, int signed) => signed != 0 ? (double)unchecked((Int128)value) : (double)value;
     public static float ToSingle(UInt128 value, int signed) => signed != 0 ? (float)unchecked((Int128)value) : (float)value;
 
+    public static UInt128 CountBits(UInt128 value, int width, int operation)
+    {
+        value = Mask(value, width);
+        return operation switch
+        {
+            0 => UInt128.PopCount(value),
+            1 => UInt128.LeadingZeroCount(value) - (uint)(128 - width),
+            2 => UInt128.Min(UInt128.TrailingZeroCount(value), (uint)width),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation))
+        };
+    }
+
     public static UInt128 Binary(UInt128 left, UInt128 right, int opcode, int width)
     {
         Int128 signedLeft = unchecked((Int128)ExtendSign(left, width));
@@ -76,4 +88,28 @@ public static unsafe class WideInteger
     }
     public static long ReadNarrow(nint address, int width) => unchecked((long)(ulong)Read(address, width));
     public static void WriteNarrow(nint address, long value, int width) => Write(address, (ulong)value, width);
+
+    public static UInt128 ReadPacked(nint address, long index, int width)
+    {
+        long offset = checked(index * width);
+        UInt128 result = 0;
+        for (int bit = 0; bit < width; bit++)
+        {
+            long position = checked(offset + bit);
+            result |= (UInt128)((((byte*)address)[position / 8] >> (int)(position % 8)) & 1) << bit;
+        }
+        return result;
+    }
+
+    public static void WritePacked(nint address, long index, UInt128 value, int width)
+    {
+        long offset = checked(index * width);
+        for (int bit = 0; bit < width; bit++)
+        {
+            long position = checked(offset + bit);
+            int shift = (int)(position % 8);
+            ref byte destination = ref ((byte*)address)[position / 8];
+            destination = (byte)((destination & ~(1 << shift)) | ((int)((value >> bit) & 1) << shift));
+        }
+    }
 }

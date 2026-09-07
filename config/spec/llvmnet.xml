@@ -12,11 +12,14 @@
   <flag name="nativeaot" class="optimization" regexp="--nativeaot">
     <![CDATA[<p>Publishes the generated CIL executable using .NET 10 NativeAOT. The default NativeAOT optimization preference is Balanced. The generated executable embeds the .NET runtime and any generated native ABI call bridges; ordinary system-library dependencies remain.</p>]]>
   </flag>
-  <flag name="O1" class="optimization" regexp="-O1\b">
-    <![CDATA[<p>Selects Clang/Flang O1 optimization for LLVM generation. The driver defaults to disabling loop and SLP vectorization and C stack protectors because those lowering paths are not yet complete. LLVM global dead-code elimination is applied during executable linking.</p>]]>
+  <flag name="optimization_level" class="optimization" regexp="-O[0-3sz]\b">
+    <![CDATA[<p>Selects the Clang/Flang optimization level for LLVM generation. The SPEC development configuration defaults to O3. The driver defaults to disabling loop and SLP vectorization and C stack protectors because those lowering paths are not yet complete. LLVM global dead-code elimination is applied during executable linking.</p>]]>
   </flag>
-  <flag name="cpp14" class="portability" regexp="-std=gnu\+\+14">
-    <![CDATA[<p>Selects the GNU C++14 language dialect.</p>]]>
+  <flag name="vectorization" class="optimization" regexp="-f(?:slp-)?vectorize\b">
+    <![CDATA[<p>Explicitly enables LLVM loop or SLP vectorization for a separate experimental validation run. This does not imply hardware SIMD lowering or full vector instruction support in the CIL backend.</p>]]>
+  </flag>
+  <flag name="cpp_standard" class="portability" regexp="-std=gnu\+\+(14|17|20|23)">
+    <![CDATA[<p>Selects the GNU C++ language dialect. The harness wrapper defaults to C++14 for CPU 2017 and C++17 for CPU 2026.</p>]]>
   </flag>
   <flag name="SPEC_LP64" class="portability" regexp="-DSPEC_LP64\b">
     <![CDATA[<p>Selects the benchmark's LP64 data-model portability definitions.</p>]]>

@@ -32,6 +32,8 @@ Frontend flags such as `-O0` through `-O3`, `-g`, `-std=`, `-D`, `-U`, `-I`, `-i
 
 The compiler aliases select their language even when a filename alone is ambiguous. `llvmnet-clang++` uses clang's C++ driver mode; `llvmnet-flang` uses Flang. Defaults still favor scalar O1 LLVM IR with auto-vectorization disabled. This is not full clang driver compatibility: arbitrary `-Wl,` options, native `.o` files/static archives, complete LTO policy, and unsupported backend operations are rejected or remain unimplemented. `-pipe` is accepted; bitcode is inherently used for linking, so accepted `-flto` spellings do not invoke clang's native LTO linker.
 
+`-O3 -fvectorize -fslp-vectorize` explicitly opts into optimized vector IR. Before emitting executable or library CIL, LLVM expands reductions and scalarizes supported vector operations. Remaining fixed-vector lane values preserve LLVM's packed layout. This is vectorization compatibility with scalar execution, not a promise of hardware SIMD or support for every vector intrinsic. `--keep-ir` preserves the pre-legalization linked bitcode so vector generation can be inspected.
+
 Output selection is independent of ABI selection:
 
 | Choice | Result |
@@ -113,6 +115,8 @@ The portable C library is a growing subset. Native C libraries or host-header bi
 
 [../config/spec/llvmnet.cfg](../config/spec/llvmnet.cfg) sets normal `CC`, `CXX`, and `FC` variables to the installed compiler aliases. Runtime mode is passed during compile and link; `--nativeaot` is passed only during link. No special runtime submit command is needed because the harness stages a normal native executable.
 
+SPEC builds default to `-O3`, independently of the driver's scalar O1 default. The wrapper selects C++14 for CPU 2017 and C++17 for CPU 2026. Runtime, optimization, vectorization, and C++ dialect are included in build labels. Set `SPEC_OPT_LEVEL`, `SPEC_VECTORIZE=1`, or `SPEC_CXX_STANDARD` for explicit alternatives; set `SPEC_REBUILD=1` to force recompilation after a toolchain update. Equivalent config defines are `llvmnet_opt_level`, `llvmnet_vectorize`, and `llvmnet_cxx_standard`.
+
 ```sh
 bash scripts/spec-harness.sh /path/installed-cpu2017 /path/toolchain system 505.mcf_r test
 bash scripts/spec-harness.sh /path/installed-cpu2017 /path/toolchain portable 505.mcf_r test
@@ -127,6 +131,22 @@ runcpu --config=llvmnet --define llvmnet_dir=/path/toolchain \
 ```
 
 Both modes have passed normal CPU 2017 harness validation for C mcf, C++ deepsjeng, and Fortran exchange2 test workloads. A system-mode mcf one-copy reference workload also passed harness validation. The same configuration passed CPU 2026 system-mode zstd integer-rate and lbm FP-rate test workloads. These are successful benchmark validation runs, not full-suite reportable SPEC results. The configuration intentionally defaults to `reportable=0`; setting a flag to reportable does not satisfy SPEC rules. Full suites, prescribed iteration/run rules, complete flags/system disclosures, portability review, and validation are still required before publishing a valid SPEC score.
+
+Run every installed entry one at a time, system then portable, including speed variants that share sources:
+
+```sh
+bash scripts/spec-matrix.sh artifacts/spec2017-harness artifacts/spec-toolchain test
+bash scripts/spec-matrix.sh artifacts/spec2026-harness artifacts/spec-toolchain test
+SPEC_VECTORIZE=1 bash scripts/spec-matrix.sh artifacts/spec2017-harness artifacts/spec-toolchain test '505.*'
+```
+
+The matrix always rebuilds. It continues after failures and exits nonzero unless every case passes. Each run gets a unique directory under `artifacts/spec-matrix/` containing a TSV result for each benchmark/ABI, harness logs, snapshots of make logs, config/flags, and compiler/runtime hashes. Only a zero harness exit with the benchmark's explicit `Success:` validation marker is PASS. A build without validation is not PASS. `SPEC_TIMEOUT` bounds each build-plus-run (default 1800 seconds); TIMEOUT is incomplete evidence, not an unsupported-operation diagnosis. `SPEC_STACK_KB` sets the child's soft stack limit (default `unlimited`); the hard limit must permit it. Large Fortran automatic arrays can exceed an ordinary 8 MiB shell stack. `SPEC_MATRIX_OUTPUT` changes the output root. The optional fourth argument is a quoted shell pattern selecting benchmark names. Do not run two matrices concurrently against the same installed kit.
+
+Before starting checks, the matrix re-executes a frozen copy of itself and uses copies of the harness wrapper and configuration from the same artifact directory. Later workspace edits cannot change an in-progress run. Keep the selected installed toolchain unchanged until completion. New runs write `completion.txt` only after every selected benchmark/ABI has a result row; its failure count may be nonzero. Absence of that record indicates an interrupted or incomplete run. The completed older inventories predate this marker and retain their terminal completion output.
+
+`bash scripts/spec-summary.sh first/results.tsv retry/results.tsv` prints one row per suite/benchmark/input/optimization/vectorization profile, with separate system/portable results. Later files override earlier attempts for the same profile; missing ABI rows are explicitly marked MISSING. Supply only compatible C++ dialect/toolchain profiles when combining results. Raw files retain their compiler hashes and logs for provenance.
+
+Use `test`, `train`, or `ref` inputs explicitly. A test-input pass is not validation of train/reference inputs, parallel behavior, or a reportable score. The development configuration requests one thread/copy, and kits may add automatic OpenMP/thread suppression flags. These runs must not be represented as complete speed/parallel support. Proprietary sources, inputs, and raw diagnostic snapshots stay in ignored local artifacts, not tracked documentation.
 
 ## Verification
 

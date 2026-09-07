@@ -1,5 +1,6 @@
 #ifndef __LLVMNET_STRING_H
 #define __LLVMNET_STRING_H
+#include "__llvmnet_types.h"
 #include <stddef.h>
 __LLVMNET_BEGIN_C
 void *memcpy(void *, const void *, size_t);
@@ -21,6 +22,8 @@ char *strdup(const char *);
 size_t strspn(const char *, const char *);
 size_t strcspn(const char *, const char *);
 char *strpbrk(const char *, const char *);
+char *strtok(char *, const char *);
+char *strtok_r(char *, const char *, char **);
 char *strerror(int);
 __LLVMNET_END_C
 #endif
