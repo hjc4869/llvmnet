@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -d "$root/libexec/llvm/lib" ]]; then
+	export LD_LIBRARY_PATH="$root/libexec/llvm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+tool="$(basename "$0")"
+tool="${tool#llvmnet-}"
+case "$tool" in ar|ranlib|nm) ;; *) printf 'Invoke as llvmnet-ar, llvmnet-ranlib or llvmnet-nm.\n' >&2; exit 2 ;; esac
+bundled="$root/libexec/llvm/bin/llvm-$tool-22"
+if [[ -x "$bundled" ]]; then exec "$bundled" "$@"; fi
+exec "llvm-$tool-22" "$@"

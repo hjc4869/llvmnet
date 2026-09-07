@@ -1,0 +1,20 @@
+{
+  "configurations": [
+    {
+      "name": "LLVM 22",
+      "compilerPath": "/usr/bin/clang-22",
+      "includePath": [
+        "${workspaceFolder}/native",
+        "/usr/lib/llvm-22/include",
+        "${workspaceFolder}/artifacts/deps/include",
+        "${workspaceFolder}/artifacts/deps/include/libxml2",
+        "${workspaceFolder}/artifacts/ffmpeg-browser",
+        "${workspaceFolder}/artifacts/ffmpeg-browser/src"
+      ],
+      "cStandard": "gnu17",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "linux-clang-x64"
+    }
+  ],
+  "version": 4
+}

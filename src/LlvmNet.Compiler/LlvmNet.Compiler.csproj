@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>llvmnet</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../LlvmNet.Runtime/LlvmNet.Runtime.csproj" />
+  </ItemGroup>
+  <Target Name="BuildLlvmBridge" AfterTargets="Build">
+    <Exec Command="bash &quot;$(MSBuildProjectDirectory)/../../scripts/build-native.sh&quot; &quot;$(TargetDir)&quot;" />
+  </Target>
+</Project>

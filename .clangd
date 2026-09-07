@@ -1,0 +1,22 @@
+If:
+  PathMatch: native/.*
+CompileFlags:
+  Compiler: /usr/bin/clang++-22
+  Add: [-I/usr/lib/llvm-22/include, -std=c++17]
+---
+If:
+  PathMatch: tests/.*\.c
+CompileFlags:
+  Compiler: /usr/bin/clang-22
+  Remove: [-std=*, -xc++]
+  Add: [-xc, -std=gnu17]
+---
+If:
+  PathMatch: tests/dependencies/.*
+CompileFlags:
+  Add: [-Iartifacts/deps/include, -Iartifacts/deps/include/libxml2]
+---
+If:
+  PathMatch: tests/ffmpeg/.*
+CompileFlags:
+  Add: [-Iartifacts/ffmpeg-browser, -Iartifacts/ffmpeg-browser/src]

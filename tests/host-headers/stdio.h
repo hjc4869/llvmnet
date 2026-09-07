@@ -1,0 +1,1 @@
+#error inherited host include directories must not affect portable compilation

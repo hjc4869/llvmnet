@@ -1,0 +1,5 @@
+-O1
+-DRESPONSE_VALUE=42
+"tests/c/response.c"
+-o
+"artifacts/tests/driver/response executable"

@@ -1,0 +1,1 @@
+int calculate(int value) { return value * 3; }

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export LLVMNET_ROOT="${LLVMNET_ROOT:-$root}"
+if [[ -d "$root/libexec/llvm/lib" ]]; then
+    export LD_LIBRARY_PATH="$root/libexec/llvm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+case "$(basename "$0")" in
+    llvmnet-clang++) export LLVMNET_DRIVER=clang++ ;;
+    llvmnet-flang) export LLVMNET_DRIVER=flang ;;
+    *) export LLVMNET_DRIVER="${LLVMNET_DRIVER:-clang}" ;;
+esac
+compiler="$root/lib/llvmnet/llvmnet.dll"
+if [[ ! -f "$compiler" ]]; then compiler="$root/src/LlvmNet.Compiler/bin/Release/net10.0/llvmnet.dll"; fi
+if [[ ! -f "$compiler" ]]; then
+    printf 'Build llvmnet first: dotnet build %s/src/LlvmNet.Compiler -c Release\n' "$root" >&2
+    exit 1
+fi
+if [[ -x "$root/lib/llvmnet/llvmnet" ]]; then exec "$root/lib/llvmnet/llvmnet" "$@"; fi
+exec "${LLVMNET_DOTNET:-dotnet}" "$compiler" "$@"

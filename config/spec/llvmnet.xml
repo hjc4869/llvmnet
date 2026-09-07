@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<!DOCTYPE flagsdescription SYSTEM "http://www.spec.org/dtd/cpuflags2.dtd">
+<flagsdescription>
+  <filename>llvmnet</filename>
+  <title>llvmnet LLVM to .NET CIL Toolchain Flags</title>
+  <flag name="compiler_path" class="compiler" regexp="(?:/[^\s]+/)?llvmnet-(?:clang\+\+|clang|flang)(?=\s|$)">
+    <![CDATA[<p>Runs the llvmnet C, C++, or Fortran compiler driver. Clang/Flang 22 emits LLVM bitcode, which is lowered to .NET CIL.</p>]]>
+  </flag>
+  <flag name="runtime_mode" class="portability" regexp="--runtime=(system|portable|managed-host)">
+    <![CDATA[<p>Selects a runtime and ABI contract. System uses the Linux x86-64 ABI, glibc and native pthreads through generated ABI bridges. Portable uses the toolchain-owned LP64 dotnet64-v1 ABI and managed adapters. Managed-host is the legacy managed runtime with Linux host headers. Object modes cannot be mixed.</p>]]>
+  </flag>
+  <flag name="nativeaot" class="optimization" regexp="--nativeaot">
+    <![CDATA[<p>Publishes the generated CIL executable using .NET 10 NativeAOT. The default NativeAOT optimization preference is Balanced. The generated executable embeds the .NET runtime and any generated native ABI call bridges; ordinary system-library dependencies remain.</p>]]>
+  </flag>
+  <flag name="O1" class="optimization" regexp="-O1\b">
+    <![CDATA[<p>Selects Clang/Flang O1 optimization for LLVM generation. The driver defaults to disabling loop and SLP vectorization and C stack protectors because those lowering paths are not yet complete. LLVM global dead-code elimination is applied during executable linking.</p>]]>
+  </flag>
+  <flag name="cpp14" class="portability" regexp="-std=gnu\+\+14">
+    <![CDATA[<p>Selects the GNU C++14 language dialect.</p>]]>
+  </flag>
+  <flag name="SPEC_LP64" class="portability" regexp="-DSPEC_LP64\b">
+    <![CDATA[<p>Selects the benchmark's LP64 data-model portability definitions.</p>]]>
+  </flag>
+</flagsdescription>

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LlvmNet.Compiler/LlvmNet.Compiler.csproj" />
+    <Project Path="src/LlvmNet.Runtime/LlvmNet.Runtime.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LlvmNet.Checks/LlvmNet.Checks.csproj" />
+  </Folder>
+</Solution>
