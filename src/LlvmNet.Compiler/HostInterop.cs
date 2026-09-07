@@ -125,16 +125,26 @@ internal sealed class HostInterop : IDisposable
         nint signature = Llvm.LLVMGlobalGetValueType(function);
         Type[] parameters = compiler.Types.Parameters(signature);
         Type result = compiler.Types.Map(Llvm.LLVMGetReturnType(signature));
+        bool variadic = Llvm.LLVMIsFunctionVarArg(signature) != 0;
         bool scalar(Type type) => type == typeof(int) || type == typeof(long) || type == typeof(float) || type == typeof(double) || type == typeof(nint) || type == typeof(void);
-        if (Llvm.LLVMIsFunctionVarArg(signature) != 0 || parameters.Any(type => !scalar(type)) || !scalar(result) ||
+        if (parameters.Any(type => !scalar(type)) || !scalar(result) ||
             Enumerable.Range(0, (int)Llvm.LLVMCountParams(function)).Any(index => Llvm.ParameterAttribute(function, (uint)index, "byval") != 0 || Llvm.ParameterAttribute(function, (uint)index, "sret") != 0))
-            throw new NotSupportedException($"System ABI callback {Llvm.Name(function)} requires a non-variadic scalar C signature.");
+            throw new NotSupportedException($"System ABI callback {Llvm.Name(function)} requires scalar C parameters and return values.");
         MethodBuilder callback = compiler.Program.DefineMethod("__callback_" + callbacks.Count, MethodAttributes.Private | MethodAttributes.Static, result, parameters);
         callback.SetCustomAttribute(new CustomAttributeBuilder(typeof(UnmanagedCallersOnlyAttribute).GetConstructor(Type.EmptyTypes)!, [],
             [typeof(UnmanagedCallersOnlyAttribute).GetField(nameof(UnmanagedCallersOnlyAttribute.CallConvs))!], [new[] { typeof(CallConvCdecl) }]));
         ILGenerator il = callback.GetILGenerator();
-        for (int index = 0; index < parameters.Length; index++) il.Emit(OpCodes.Ldarg, checked((short)index));
-        il.Emit(OpCodes.Call, target);
+        if (variadic)
+        {
+            il.Emit(OpCodes.Ldstr, $"Native invocation of variadic callback {Llvm.Name(function)} is not supported.");
+            il.Emit(OpCodes.Call, typeof(Environment).GetMethod(nameof(Environment.FailFast), [typeof(string)])!);
+            if (result != typeof(void)) new ValueEmitter(compiler, il).Zero(Llvm.LLVMGetReturnType(signature));
+        }
+        else
+        {
+            for (int index = 0; index < parameters.Length; index++) il.Emit(OpCodes.Ldarg, checked((short)index));
+            il.Emit(OpCodes.Call, target);
+        }
         il.Emit(OpCodes.Ret);
         callbacks[function] = callback;
         return callback;

@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.Intrinsics;
 using LlvmNet.Runtime;
 
 namespace LlvmNet;
@@ -8,11 +9,13 @@ internal sealed class TypeSystem : IDisposable
 {
     private readonly nint layout;
     private readonly ModuleBuilder module;
+    private readonly bool simd128;
     private readonly Dictionary<nint, Type> types = [];
 
-    internal TypeSystem(nint llvmModule, ModuleBuilder module)
+    internal TypeSystem(nint llvmModule, ModuleBuilder module, bool simd128)
     {
         this.module = module;
+        this.simd128 = simd128;
         layout = Llvm.LLVMCreateTargetData(Llvm.LLVMGetDataLayoutStr(llvmModule));
         if (Llvm.LLVMPointerSize(layout) != 8 || Llvm.LLVMByteOrder(layout) != 1 || !BitConverter.IsLittleEndian || IntPtr.Size != 8)
             throw new NotSupportedException("Only little-endian 64-bit LLVM modules and .NET hosts are supported.");
@@ -39,6 +42,7 @@ internal sealed class TypeSystem : IDisposable
             8 when Width(type) <= 64 => typeof(long),
             8 when Width(type) <= 128 => typeof(UInt128),
             12 => typeof(nint),
+            13 when simd128 && Size(type) == 16 && VectorBits(type) == 128 => typeof(Vector128<byte>),
             10 or 11 or 13 => Aggregate(type),
             _ => throw new NotSupportedException($"Unsupported LLVM type: {Llvm.PrintType(type)}")
         };
@@ -53,6 +57,13 @@ internal sealed class TypeSystem : IDisposable
             Llvm.LLVMGetParamTypes(functionType, pointer);
         Type[] result = parameters.Select(Map).ToArray();
         return Llvm.LLVMIsFunctionVarArg(functionType) != 0 ? [.. result, typeof(nint)] : result;
+    }
+
+    private static int VectorBits(nint type)
+    {
+        nint element = Llvm.LLVMGetElementType(type);
+        int bits = Kind(element) switch { 2 => 32, 3 => 64, 8 => Width(element), _ => 0 };
+        return checked(bits * (int)Llvm.LLVMGetVectorSize(type));
     }
 
     internal (nint Type, long Offset) Element(nint type, uint index)

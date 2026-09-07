@@ -87,6 +87,8 @@ bash scripts/build-ffmpeg.sh
 bash tests/codecs.sh
 bash tests/codecs-extended.sh
 bash tests/manifests.sh
+FFMPEG_THREADS_AOT=1 bash tests/ffmpeg-threads.sh
+bash tests/wasm-simd128.sh
 bash scripts/benchmark-video.sh
 
 bash scripts/spec-mcf.sh test
@@ -99,6 +101,8 @@ bash scripts/spec-lbm.sh 2026 test
 ```
 
 Run `scripts/build-dependencies.sh` before the full ffmpeg build. Its defaults use the supplied LightPlayer-Packages checkout and cached zlib 1.3.2. Override `LIGHTPLAYER_PACKAGES`, `FFMPEG_SOURCE`, `LLVMNET_DEPS_PREFIX`, or `ZLIB_SOURCE` when needed. The smaller [scripts/build-ffmpeg-core.sh](scripts/build-ffmpeg-core.sh) is useful for backend bring-up.
+
+The full ffmpeg profile enables pthreads. Select `LLVMNET_RUNTIME=system` or `LLVMNET_RUNTIME=portable` for both dependency and ffmpeg builds; their default outputs are isolated by ABI. Add `FFMPEG_SIMD128=1` to the ffmpeg build for HEVC SIMD128 through .NET vectors, with separate `-simd128` outputs. The decoder accepts `input [frame-limit] [video|audio] [threads:1-64] [auto|frame|slice] [hash|bench]`; `bench` skips hashing. See [docs/ffmpeg-threading.md](docs/ffmpeg-threading.md), [docs/simd128.md](docs/simd128.md), and [the six-video before/after measurements](docs/video-simd128-performance.md). JIT SIMD improves throughput; baseline NativeAOT SIMD currently regresses, while explicit host-targeted AOT improves it.
 
 Build outputs, generated media, and locally extracted SPEC materials stay under ignored `artifacts/`. The scripts do not modify the original source checkouts or mounted SPEC kits. SPEC development scripts stage only the relevant licensed benchmark archives. A standard harness runner and configuration are also available via [scripts/spec-harness.sh](scripts/spec-harness.sh). These checks are not full-suite SPEC-reportable runs or scores.
 

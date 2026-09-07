@@ -8,6 +8,7 @@ internal sealed class CompilerOptions
     internal string Runtime { get; set; } = "managed-host";
     internal bool Verbose { get; set; }
     internal bool NativeAot { get; set; }
+    internal bool Simd128 { get; set; }
     internal string AbiTag => Runtime switch { "system" => "system-linux-x64-v1", "portable" => "dotnet64-v1", _ => "managed-host-v1" };
     internal List<string> SystemLibraries { get; } = [];
     internal Dictionary<string, NativeImport> NativeImports { get; } = new(StringComparer.Ordinal);
@@ -43,11 +44,13 @@ internal static class Driver
                 "  --native-import <spec>   Explicit scalar P/Invoke: symbol=library!entrypoint",
                 "  --system-library <file>  Additional native library in system ABI mode",
                 "  --runtime <mode>         system, portable, or managed-host (legacy default)",
+                "  --simd128                Enable architecture-neutral SIMD128 helper calls",
                 "  --emit-llvm              Stop after LLVM linking",
                 "  --keep-ir <file>         Preserve linked LLVM bitcode",
                 "  --nativeaot              Publish a self-contained NativeAOT executable",
                 "  --runtime-id <rid>       NativeAOT target RID (default: current host)",
                 "  --aot-optimize <choice>  Balanced, Speed or Size",
+                "  --aot-instruction-set <choice> baseline (default) or native (build host CPU)",
                 "  --aot-debug              Retain NativeAOT native debug symbols",
                 "  @response-file           Read quoted compiler arguments from a file",
                 "A .dll output is managed CIL; other executable outputs are Unix launchers unless --nativeaot is selected.",
@@ -55,12 +58,6 @@ internal static class Driver
             }));
             return arguments.Length == 0 ? 2 : 0;
         }
-        if (arguments is ["-Wl,--version"])
-        {
-            Console.WriteLine("LLD-compatible llvmnet linker interface (LLVM 22.1.8; emits CIL, not native images)");
-            return 0;
-        }
-
         var options = new CompilerOptions();
         List<string> frontend = [];
         List<string> inputs = [];
@@ -77,7 +74,9 @@ internal static class Driver
         bool nativeAot = false;
         bool aotDebug = false;
         bool verbose = false;
+        bool linkerVersion = false;
         string? runtimeId = null;
+        string? aotInstructionSet = null;
         string aotPreference = "Balanced";
         for (int index = 0; index < arguments.Length; index++)
         {
@@ -87,14 +86,20 @@ internal static class Driver
             {
                 case "-o": output = Next(); break;
                 case "-v": verbose = true; break;
+                case "-Wl,--version": linkerVersion = true; break;
                 case "-r": relocatable = true; emitLlvm = true; break;
                 case "-M": case "-MM": dependencyOnly = true; frontend.Add(argument); break;
                 case "-pipe": case "-fuse-ld=lld": case "-flto": case "-flto=full": case "-flto=thin": break;
                 case "--runtime": options.Runtime = Next(); break;
                 case "--system-library": options.SystemLibraries.Add(Next()); break;
                 case "--nativeaot": nativeAot = true; break;
+                case "--simd128": options.Simd128 = true; break;
                 case "--aot-debug": aotDebug = true; break;
                 case "--runtime-id": runtimeId = Next(); break;
+                case "--aot-instruction-set":
+                    aotInstructionSet = Next();
+                    if (aotInstructionSet is not ("baseline" or "native")) throw new ArgumentException("--aot-instruction-set requires baseline or native.");
+                    break;
                 case "--aot-optimize":
                     aotPreference = Next();
                     if (aotPreference is not ("Balanced" or "Speed" or "Size")) throw new ArgumentException("--aot-optimize requires Balanced, Speed or Size.");
@@ -142,7 +147,7 @@ internal static class Driver
         }
         if (nativeAot && (compileOnly || preprocess || dependencyOnly || emitLlvm || options.Library))
             throw new ArgumentException("--nativeaot requires an executable link, not -c, -E, -S, --emit-llvm or -shared.");
-        if (!nativeAot && (runtimeId is not null || aotDebug || aotPreference != "Balanced"))
+        if (!nativeAot && (runtimeId is not null || aotDebug || aotPreference != "Balanced" || aotInstructionSet is not null))
             throw new ArgumentException("NativeAOT output settings require --nativeaot.");
         if (options.Runtime is not ("system" or "portable" or "managed-host")) throw new ArgumentException("--runtime requires system, portable or managed-host.");
         if (options.Runtime == "portable" && options.NativeImports.Count != 0)
@@ -150,8 +155,17 @@ internal static class Driver
         if (options.Runtime != "system" && options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
         if (options.Runtime == "system" && runtimeId is not null && runtimeId != "linux-x64")
             throw new ArgumentException("The current system ABI profile requires NativeAOT RID linux-x64.");
+        if (linkerVersion)
+        {
+            if (inputs.Count != 0 || output is not null || compileOnly || preprocess || dependencyOnly || emitLlvm || nativeAot || options.Library)
+                throw new ArgumentException("-Wl,--version is an informational query, not a link operation.");
+            Console.WriteLine("LLD-compatible llvmnet linker interface (LLVM 22.1.8; emits CIL, not native images)");
+            return 0;
+        }
         options.Verbose = verbose;
         options.NativeAot = nativeAot;
+        if (options.Simd128)
+            frontend.InsertRange(0, ["-D__LLVMNET_SIMD128__=1", "-I", Path.Combine(Toolchain.Root, "sysroot", "dotnet64-v1", "simd128", "include")]);
         string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");
         if (preprocess || dependencyOnly)
         {
@@ -237,7 +251,8 @@ internal static class Driver
                 return 0;
             }
             string lowered = Path.Combine(temporary, "lowered.bc");
-            string passes = (options.Library ? "" : "internalize,globaldce,") + "function(expand-reductions,scalarizer<load-store>),globaldce,verify";
+            string scalarizer = options.Simd128 ? "scalarizer" : "scalarizer<load-store>";
+            string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(expand-reductions,{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
             if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain");
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);
@@ -250,7 +265,7 @@ internal static class Driver
             Directory.CreateDirectory(payloadDirectory);
             string payload = nativeAot || launcher ? Path.Combine(payloadDirectory, "program.dll") : output;
             new CilCompiler(options).Compile(module.Handle, payload);
-            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, runtimeId, aotPreference, verbose, aotDebug, options.SystemLibraries);
+            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, runtimeId, aotPreference, aotInstructionSet ?? "baseline", verbose, aotDebug, options.SystemLibraries);
             if (launcher) Toolchain.Launcher(output, payload);
             return 0;
         }

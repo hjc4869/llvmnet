@@ -14,7 +14,7 @@ The final dual-ABI toolchain gate passed, followed by all 31 existing ffmpeg med
 
 ## ffmpeg
 
-The single-threaded component list from the supplied browser build is reproduced in [../config/ffmpeg-browser.sh](../config/ffmpeg-browser.sh). Assembly, hardware acceleration, runtime CPU dispatch, networking, and ffmpeg threading are disabled. The build produces LLVM bitcode libraries and a CIL decode harness. It does not yet package a drop-in managed ffmpeg command-line application.
+The component list from the supplied browser build is reproduced in [../config/ffmpeg-browser.sh](../config/ffmpeg-browser.sh). The full build enables pthreads in system, portable, and legacy managed-host modes. The optional `FFMPEG_SIMD128=1` profile selects upstream wasm HEVC C SIMD kernels backed by .NET `Vector128<T>` in both ABIs. Native assembly, hardware decoding, native CPU dispatch, and networking remain disabled. The build produces LLVM bitcode libraries and a CIL decode harness, whose default remains one thread. It does not yet package a drop-in managed ffmpeg command-line application.
 
 Verified:
 
@@ -27,11 +27,27 @@ Verified:
 - swscale and swresample output hashes; avfilter graph allocation and avdevice registration with filters/devices disabled as requested.
 - All 1,150 frames of `/home/david/Videos/20260521_215039.mp4`: 3840x2160 HEVC Main 10, yuv420p10le, BT.2020/HLG, about 120 Mb/s. Native/CIL active-pixel hashes matched exactly.
 
-Not every enabled legacy decoder has a fixture, and the full upstream FATE suite has not been run. Multithreaded ffmpeg and libjxl are not validated.
+Not every enabled legacy decoder has a fixture, and the full upstream FATE suite has not been run. libjxl is not validated.
+
+### Threading Update
+
+System and portable dependencies and ffmpeg now build in separate ABI-tagged directories. Portable dependency bring-up added missing public errno, descriptor-control, directory, and math declarations. System libxml2 required checked internal variadic callback dispatch; actual native invocation of a variadic callback still fails explicitly. Upstream sources remain unchanged.
+
+The [threaded media regression](../tests/ffmpeg-threads.sh) passed 96 managed cases: H.264 and 10-bit HEVC frame/slice modes, VP9 frame mode, and dav1d AV1 workers, at two/four threads, in both ABIs under JIT and NativeAOT. Each compares exact frame hashes with single-thread native output and also checks threaded native output. Full 24-frame draining and three-frame early teardown passed; ffmpeg-managed frame/slice activation is asserted. The portable decoder contains 7,202 CIL method bodies and zero generated P/Invoke imports.
+
+Four-thread decoding of the first ten frames of the supplied 4K HDR video matched single-thread native hashes in both ABIs under JIT and NativeAOT. All 31 existing media fixtures, local DASH/HLS, and scaling/resampling/library checks also passed on the newly threaded legacy profile. These runs do not constitute full threaded FATE coverage, cross-platform validation, or a threading performance result. libxml2 remains configured without threading. Build commands and scope are in [ffmpeg-threading.md](ffmpeg-threading.md).
+
+### SIMD128 Update
+
+The opt-in `--simd128` compiler/header path preserves SIMD helper values and vector memory operations using architecture-neutral `Vector128<T>`. The same 21-operation, 67-record C probe now matches real WebAssembly in emitted system/portable CIL under JIT, forced software fallback, baseline NativeAOT, and host-targeted NativeAOT. Upstream HEVC DSP dispatch is asserted; 512 IDCT and 144 SAO cases match scalar output, and real 8/10-bit frame/slice-threaded fixtures pass in both ABIs. The SIMD portable decoder has 7,216 IL method bodies and zero generated P/Invoke imports.
+
+All 2,829 decoded frames across the six supplied `/home/david/Videos/2026*.mp4` files match installed native ffmpeg hashes in both SIMD JIT ABIs. Three-run decode-only measurements show aggregate JIT throughput gains of 12.7% system / 12.9% portable; portable SIMD still takes 2.49x installed native elapsed time. Explicit host-targeted AOT gains about 15%, while baseline SIMD AOT regresses by about 2.2x versus scalar AOT. The baseline remains default; `--aot-instruction-set native` is an explicit, host-CPU-specific deployment choice. Full tables, fairness caveats, and commands are in [video-simd128-performance.md](video-simd128-performance.md).
+
+This is HEVC IDCT at 8/10 bits and SAO at 8 bits, not complete SIMD128, general auto-vectorized hardware lowering, or wasm32 module support. The supported source-header subset and remaining work are in [simd128.md](simd128.md).
 
 ### Preliminary Video Measurement
 
-The first complete-file validation also measured total wall time, including startup, JIT, file I/O and hashing:
+The earlier single-threaded complete-file validation also measured total wall time, including startup, JIT, file I/O and hashing:
 
 | Execution | Seconds | Maximum RSS KiB |
 | --- | ---: | ---: |
@@ -74,7 +90,7 @@ Additional workload-driven checks cover legacy no-prototype calls, discarded ret
 - Not a complete compiler-driver replacement: unsupported native-linker flags and unresolved symbols are errors.
 - No general `setjmp`/`longjmp`, LLVM dynamic stack save/restore, or computed-goto lowering yet.
 - No LLVM TLS global lowering yet, despite managed pthread key support.
-- Fixed-vector operations supported by LLVM reduction expansion/scalarization have a tested scalar fallback; this is not hardware SIMD acceleration. Scalable vectors, target-specific vector intrinsics, complete masked-memory handling, binary128, and several wide-integer intrinsic families remain unsupported. Auto-vectorization is disabled by default; portable SIMD acceleration is deferred.
+- General fixed-vector operations supported by LLVM reduction expansion/scalarization retain a scalar fallback. The opt-in SIMD128 source-header/helper path accelerates the tested HEVC subset, not arbitrary vector IR. Scalable vectors, direct target-specific vector intrinsics, complete masked-memory handling, binary128, and several wide-integer intrinsic families remain unsupported. Auto-vectorization is disabled by default. Baseline NativeAOT SIMD performance and cross-platform execution remain open.
 - The C runtime is a tested subset, not complete glibc/POSIX. Locale, wide-character I/O, hexadecimal/long-double printf/scanf, full signal/process behavior, and some filesystem metadata are incomplete.
 - C++ standard-library exports, exception pointer conversions, access/ambiguity corner cases, thread-local destruction, and complete library ABI coverage remain incomplete.
 - Fortran derived types/finalization, complex/quad runtime operations, all array transformations, nondefault floating environments, unformatted/direct I/O, and full formatted/list-directed editing remain incomplete.

@@ -4,7 +4,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 mode="${1:-core}"
 case "$mode" in core|integration|spec-test) ;; *) printf 'Usage: %s [core|integration|spec-test]\n' "$0" >&2; exit 2 ;; esac
 dotnet build "$root/llvmnet.slnx" -c Release --nologo
-for test in smoke link runtime math io time float80 ir lifecycle ctype atomics threads posix cpp fortran wide vectors spec-matrix; do
+for test in smoke link runtime math io time float80 ir lifecycle ctype atomics threads varargs-callbacks posix cpp fortran wide vectors spec-matrix; do
     bash "$root/tests/$test.sh"
 done
 if [[ "$mode" == integration || "$mode" == spec-test ]]; then
@@ -14,6 +14,9 @@ if [[ "$mode" == integration || "$mode" == spec-test ]]; then
     bash "$root/tests/codecs-extended.sh"
     bash "$root/tests/manifests.sh"
     bash "$root/tests/ffmpeg-libraries.sh"
+    bash "$root/tests/ffmpeg-threads.sh"
+    bash "$root/tests/simd128.sh"
+    bash "$root/tests/ffmpeg-simd128.sh"
     FFMPEG_BUILD_DIR="$root/artifacts/ffmpeg-browser" bash "$root/scripts/validate-video.sh" "${FFMPEG_TEST_VIDEO:-/home/david/Videos/20260521_215039.mp4}" 10
     dotnet "$root/tests/LlvmNet.Checks/bin/Release/net10.0/LlvmNet.Checks.dll" inspect "$root/artifacts/ffmpeg-browser/decode.dll"
 fi

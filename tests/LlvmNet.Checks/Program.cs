@@ -7,6 +7,11 @@ using System.Text.RegularExpressions;
 
 try
 {
+    if (args is ["simd128-probe", string inputPath])
+    {
+        Simd128Probe.Run(inputPath);
+        return 0;
+    }
     if (args is ["compare-numeric", string expectedPath, string actualPath, string toleranceText])
     {
         double tolerance = double.Parse(toleranceText, CultureInfo.InvariantCulture);
@@ -59,7 +64,7 @@ try
         Console.WriteLine($"IL-only: {methods} method bodies, {imports} explicit P/Invoke imports.");
         return 0;
     }
-    Console.Error.WriteLine("Usage: LlvmNet.Checks compare-numeric expected actual absolute-tolerance | inspect assembly.dll");
+    Console.Error.WriteLine("Usage: LlvmNet.Checks compare-numeric expected actual absolute-tolerance | inspect assembly.dll | simd128-probe inputs.bin");
     return 2;
 }
 catch (Exception error)

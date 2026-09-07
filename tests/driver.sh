@@ -4,6 +4,30 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 output="$root/artifacts/tests/driver"
 mkdir -p "$output"
 dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
+for runtime in managed-host system portable; do
+    "$root/bin/llvmnet" -Wl,--version --runtime="$runtime" >"$output/linker-$runtime.txt"
+    grep -q 'emits CIL, not native images' "$output/linker-$runtime.txt"
+    "$root/bin/llvmnet" --runtime "$runtime" -Wl,--version >"$output/linker-$runtime.txt"
+    grep -q 'emits CIL, not native images' "$output/linker-$runtime.txt"
+done
+if "$root/bin/llvmnet" --runtime=invalid -Wl,--version >"$output/linker-invalid.txt" 2>&1; then
+    printf 'FAIL: linker query accepted an invalid runtime\n' >&2
+    exit 1
+fi
+if "$root/bin/llvmnet" --runtime=portable -Wl,--version "$root/tests/c/response.c" >"$output/linker-input.txt" 2>&1; then
+    printf 'FAIL: linker query silently discarded an input\n' >&2
+    exit 1
+fi
+if "$root/bin/llvmnet" --aot-instruction-set native "$root/tests/c/response.c" -o "$output/invalid-aot-option" >"$output/aot-option.log" 2>&1; then
+    printf 'FAIL: instruction-set selection without NativeAOT was accepted\n' >&2
+    exit 1
+fi
+grep -q 'NativeAOT output settings require --nativeaot' "$output/aot-option.log"
+if "$root/bin/llvmnet" --nativeaot --aot-instruction-set invalid "$root/tests/c/response.c" -o "$output/invalid-isa" >"$output/aot-isa.log" 2>&1; then
+    printf 'FAIL: an invalid NativeAOT instruction set was accepted\n' >&2
+    exit 1
+fi
+grep -q 'requires baseline or native' "$output/aot-isa.log"
 (
     cd "$root"
     bin/llvmnet @tests/driver.rsp

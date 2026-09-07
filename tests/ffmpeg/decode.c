@@ -8,6 +8,7 @@
 #include <libavutil/samplefmt.h>
 
 static int frame_count;
+static int benchmark;
 
 static int receive(AVCodecContext *decoder, AVFrame *frame, int limit)
 {
@@ -17,6 +18,11 @@ static int receive(AVCodecContext *decoder, AVFrame *frame, int limit)
             return 0;
         if (result < 0)
             return result;
+        if (benchmark) {
+            frame_count++;
+            av_frame_unref(frame);
+            continue;
+        }
         unsigned char digest[16];
         if (decoder->codec_type == AVMEDIA_TYPE_AUDIO) {
             int channels = frame->ch_layout.nb_channels;
@@ -63,14 +69,37 @@ static int receive(AVCodecContext *decoder, AVFrame *frame, int limit)
 
 int main(int argc, char **argv)
 {
-    if (argc < 2 || argc > 4) {
-        puts("usage: decode input [frame-limit] [video|audio]");
+    if (argc < 2 || argc > 7) {
+        puts("usage: decode input [frame-limit] [video|audio] [threads:1-64] [auto|frame|slice] [hash|bench]");
         return 2;
+    }
+    if (argc == 7) {
+        if (!strcmp(argv[6], "bench"))
+            benchmark = 1;
+        else if (strcmp(argv[6], "hash"))
+            return 2;
     }
     int limit = argc >= 3 ? atoi(argv[2]) : 10;
     if (limit <= 0)
         return 2;
-    enum AVMediaType media_type = argc == 4 && !strcmp(argv[3], "audio") ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO;
+    int thread_count = 1;
+    if (argc >= 5) {
+        char *end;
+        long count = strtol(argv[4], &end, 10);
+        if (end == argv[4] || *end || count < 1 || count > 64)
+            return 2;
+        thread_count = (int)count;
+    }
+    int thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+    if (argc >= 6) {
+        if (!strcmp(argv[5], "frame"))
+            thread_type = FF_THREAD_FRAME;
+        else if (!strcmp(argv[5], "slice"))
+            thread_type = FF_THREAD_SLICE;
+        else if (strcmp(argv[5], "auto"))
+            return 2;
+    }
+    enum AVMediaType media_type = argc >= 4 && !strcmp(argv[3], "audio") ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO;
     av_log_set_level(AV_LOG_ERROR);
     AVFormatContext *input = NULL;
     AVCodecContext *decoder = NULL;
@@ -96,11 +125,14 @@ int main(int argc, char **argv)
     result = avcodec_parameters_to_context(decoder, input->streams[stream]->codecpar);
     if (result < 0)
         goto done;
-    decoder->thread_count = 1;
-    decoder->thread_type = 0;
+    decoder->thread_count = thread_count;
+    decoder->thread_type = thread_count > 1 ? thread_type : 0;
     result = avcodec_open2(decoder, codec, NULL);
     if (result < 0)
         goto done;
+    if (argc >= 5)
+        fprintf(stderr, "decoder=%s threads=%d thread_type=%d\n", codec->name,
+                decoder->thread_count, decoder->active_thread_type);
     packet = av_packet_alloc();
     frame = av_frame_alloc();
     if (!packet || !frame) {

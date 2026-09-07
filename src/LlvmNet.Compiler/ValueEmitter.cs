@@ -18,11 +18,11 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
         else if (Compiler.Globals.TryGetValue(value, out FieldBuilder? global))
             Il.Emit(OpCodes.Ldsfld, global);
         else if (Compiler.Methods.TryGetValue(value, out System.Reflection.MethodInfo? method))
-            Il.Emit(OpCodes.Ldftn, Compiler.Host is null ? method : Compiler.Host.Callback(value, method));
+            FunctionPointer(value, method);
         else if (Llvm.LLVMIsAFunction(value) != 0)
         {
             System.Reflection.MethodInfo target = Compiler.ResolveFunction(value);
-            Il.Emit(OpCodes.Ldftn, Compiler.Host is null ? target : Compiler.Host.Callback(value, target));
+            FunctionPointer(value, target);
         }
         else if (Llvm.LLVMIsAConstantInt(value) != 0)
         {
@@ -72,6 +72,16 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
         }
         else
             throw new NotSupportedException($"Unresolved value: {Llvm.Print(value)}");
+    }
+
+    private void FunctionPointer(nint function, System.Reflection.MethodInfo target)
+    {
+        Il.Emit(OpCodes.Ldftn, Compiler.Host is null ? target : Compiler.Host.Callback(function, target));
+        if (Compiler.Host is not null && Llvm.LLVMIsFunctionVarArg(Llvm.LLVMGlobalGetValueType(function)) != 0)
+        {
+            Il.Emit(OpCodes.Ldftn, target);
+            Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.RegisterVariadicCallback))!);
+        }
     }
 
     internal void Zero(nint type)

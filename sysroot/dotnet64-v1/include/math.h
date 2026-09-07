@@ -1,6 +1,6 @@
 #ifndef __LLVMNET_MATH_H
 #define __LLVMNET_MATH_H
-#include <__llvmnet_types.h>
+#include "__llvmnet_types.h"
 #define HUGE_VAL (__builtin_huge_val())
 #define HUGE_VALF (__builtin_huge_valf())
 #define HUGE_VALL (__builtin_huge_vall())
@@ -65,6 +65,11 @@ double copysign(double, double);
 float copysignf(float, float);
 double fmod(double, double);
 float fmodf(float, float);
+double fmin(double, double);
+float fminf(float, float);
+double fmax(double, double);
+float fmaxf(float, float);
+double j1(double);
 double fma(double, double, double);
 float fmaf(float, float, float);
 double ldexp(double, int);

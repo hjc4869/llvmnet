@@ -34,6 +34,8 @@ The compiler aliases select their language even when a filename alone is ambiguo
 
 `-O3 -fvectorize -fslp-vectorize` explicitly opts into optimized vector IR. Before emitting executable or library CIL, LLVM expands reductions and scalarizes supported vector operations. Remaining fixed-vector lane values preserve LLVM's packed layout. This is vectorization compatibility with scalar execution, not a promise of hardware SIMD or support for every vector intrinsic. `--keep-ir` preserves the pre-legalization linked bitcode so vector generation can be inspected.
 
+`--simd128` separately enables the owned wasm-compatible source-header subset backed by architecture-neutral .NET `Vector128<T>` helpers. It preserves vector memory operations and helper values while keeping the existing system/portable data ABI. The ffmpeg profile `FFMPEG_SIMD128=1` uses this for HEVC IDCT and 8-bit SAO; it does not retarget code to wasm32 or generally accelerate auto-vectorized LLVM IR. See [simd128.md](simd128.md).
+
 Output selection is independent of ABI selection:
 
 | Choice | Result |
@@ -45,7 +47,7 @@ Output selection is independent of ABI selection:
 | `--emit-llvm -o program.bc` | Linked LLVM bitcode |
 | `-r -o combined.o` | Relocatable linked bitcode |
 
-NativeAOT options include `--runtime-id <rid>`, `--aot-optimize Balanced|Speed|Size`, and `--aot-debug`. Invalid combinations such as `--nativeaot -c` are errors. The current system ABI requires `linux-x64`. Other portable NativeAOT RIDs require an appropriate build host/toolchain and have not been executed in this environment.
+NativeAOT options include `--runtime-id <rid>`, `--aot-optimize Balanced|Speed|Size`, `--aot-instruction-set baseline|native`, and `--aot-debug`. Instruction selection defaults to baseline; `native` uses the build host's CPU features and rejects a different RID. Such binaries may not execute on older CPUs even though the C data ABI is unchanged. The SIMD video measurements show a large baseline-AOT performance penalty that host-targeted publishing avoids; this is an explicit portability/performance choice, never a silent default. Invalid combinations such as `--nativeaot -c` or instruction selection without `--nativeaot` are errors. The current system ABI requires `linux-x64`. Other portable NativeAOT RIDs require an appropriate build host/toolchain and have not been executed in this environment.
 
 ## Runtime Modes
 

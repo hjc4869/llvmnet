@@ -20,3 +20,20 @@ If:
   PathMatch: tests/ffmpeg/.*
 CompileFlags:
   Add: [-Iartifacts/ffmpeg-browser, -Iartifacts/ffmpeg-browser/src]
+---
+If:
+  PathMatch: tests/wasm/simd128\.c
+CompileFlags:
+  Add: [--target=wasm32, -msimd128]
+---
+If:
+  PathMatch: sysroot/dotnet64-v1/simd128/include/.*
+CompileFlags:
+  Compiler: /usr/bin/clang-22
+  Add: [-D__LLVMNET_SIMD128__=1]
+---
+If:
+  PathMatch: tests/ffmpeg/simd128\.c
+CompileFlags:
+  Compiler: /usr/bin/clang-22
+  Add: [-I../../artifacts/ffmpeg-browser-system-simd128, -I../../artifacts/ffmpeg-browser-system-simd128/src]

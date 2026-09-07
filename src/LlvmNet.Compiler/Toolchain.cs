@@ -89,8 +89,10 @@ internal static class Toolchain
             File.SetUnixFileMode(output, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
     }
 
-    internal static int NativeAot(string assembly, string output, string temporary, string? rid, string preference, bool verbose, bool debug, IReadOnlyList<string> systemLibraries)
+    internal static int NativeAot(string assembly, string output, string temporary, string? rid, string preference, string instructionSet, bool verbose, bool debug, IReadOnlyList<string> systemLibraries)
     {
+        if (instructionSet == "native" && rid is not null && rid != RuntimeInformation.RuntimeIdentifier)
+            throw new ArgumentException("Host CPU instruction selection requires the current host runtime identifier.");
         string projectDirectory = Path.Combine(temporary, "aot");
         Directory.CreateDirectory(projectDirectory);
         string projectPath = Path.Combine(projectDirectory, "NativeHost.csproj");
@@ -118,6 +120,7 @@ internal static class Toolchain
                 new XElement("DebugType", debug ? "portable" : "none"),
                 new XElement("IlcGenerateMapFile", debug ? "true" : "false"),
                 new XElement("IlcOptimizationPreference", preference), new XElement("InvariantGlobalization", "true"),
+                new XElement("IlcInstructionSet", instructionSet == "native" ? "native" : ""),
                 new XElement("EnableDefaultCompileItems", "false")),
             new XElement("ItemGroup", new XElement("Compile", new XAttribute("Include", "NativeHost.cs"))), references,
             new XElement("Target", new XAttribute("Name", "UseEmittedCil"), new XAttribute("AfterTargets", "CoreCompile"),

@@ -583,7 +583,9 @@ internal sealed class FunctionEmitter : ValueEmitter
         else
         {
             Load(target);
-            if (Compiler.Host is null)
+            if (Compiler.Host is not null && variadic)
+                Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.ResolveVariadicCallback))!);
+            if (Compiler.Host is null || variadic)
                 Il.EmitCalli(OpCodes.Calli, CallingConventions.Standard, Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature), null);
             else
                 Il.EmitCalli(OpCodes.Calli, System.Runtime.InteropServices.CallingConvention.Cdecl, Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));

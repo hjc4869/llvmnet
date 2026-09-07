@@ -1,0 +1,13 @@
+--- configure
++++ configure
+@@ -6986,5 +6986,9 @@
+ check_func_headers malloc.h _aligned_malloc     && enable aligned_malloc
+ check_func  ${malloc_prefix}memalign            && enable memalign
+-check_func  ${malloc_prefix}posix_memalign      && enable posix_memalign
++if test -z "$malloc_prefix"; then
++    check_func_headers stdlib.h posix_memalign
++else
++    check_func ${malloc_prefix}posix_memalign && enable posix_memalign
++fi
+ 
+ check_func  access

@@ -72,10 +72,13 @@ internal sealed class CilCompiler(CompilerOptions options)
         var assembly = new PersistedAssemblyBuilder(new AssemblyName(Path.GetFileNameWithoutExtension(output)), typeof(object).Assembly);
         ModuleBuilder cilModule = assembly.DefineDynamicModule("program");
         Program = cilModule.DefineType("Program", TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
-        using var types = new TypeSystem(module, cilModule);
+        using var types = new TypeSystem(module, cilModule, options.Simd128);
         Types = types;
         using HostInterop? host = options.Runtime == "system" ? new HostInterop(this, module, output, options) : null;
         Host = host;
+        if (options.Simd128)
+            foreach (string name in runtimeExports.Keys.Where(name => name.StartsWith("__llvmnet_simd128_", StringComparison.Ordinal)))
+                managedImports.Add(name);
         assembly.SetCustomAttribute(new CustomAttributeBuilder(typeof(AssemblyMetadataAttribute).GetConstructor([typeof(string), typeof(string)])!, ["llvmnet.abi", options.AbiTag]));
         foreach (string reference in options.CilReferences)
         {
