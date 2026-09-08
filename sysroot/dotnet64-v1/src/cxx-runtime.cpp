@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstdarg>
 #include <algorithm>
+#include <chrono>
+#include <time.h>
 
 namespace {
 long *reference_count(const char *message)
@@ -23,6 +25,28 @@ void release_message(const char *message)
 }
 
 _LIBCPP_BEGIN_NAMESPACE_STD
+namespace chrono {
+system_clock::time_point system_clock::now() noexcept
+{
+    timespec value;
+    if (clock_gettime(CLOCK_REALTIME, &value)) std::abort();
+    return time_point(duration_cast<duration>(seconds(value.tv_sec) + nanoseconds(value.tv_nsec)));
+}
+time_t system_clock::to_time_t(const time_point &value) noexcept
+{
+    return static_cast<time_t>(duration_cast<seconds>(value.time_since_epoch()).count());
+}
+system_clock::time_point system_clock::from_time_t(time_t value) noexcept
+{
+    return time_point(seconds(value));
+}
+steady_clock::time_point steady_clock::now() noexcept
+{
+    timespec value;
+    if (clock_gettime(CLOCK_MONOTONIC, &value)) std::abort();
+    return time_point(duration_cast<duration>(seconds(value.tv_sec) + nanoseconds(value.tv_nsec)));
+}
+}
 template <class Compare, class Iterator>
 void __sort(Iterator first, Iterator last, Compare compare)
 {

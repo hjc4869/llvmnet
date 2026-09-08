@@ -14,6 +14,7 @@ struct tm {
 };
 __LLVMNET_BEGIN_C
 time_t time(time_t *);
+double difftime(time_t, time_t);
 clock_t clock(void);
 struct tm *gmtime(const time_t *);
 struct tm *localtime(const time_t *);

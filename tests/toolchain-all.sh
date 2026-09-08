@@ -6,6 +6,7 @@ bash "$root/tests/driver.sh"
 bash "$root/tests/system-abi.sh"
 bash "$root/tests/portable.sh"
 bash "$root/tests/portable-cpp.sh"
+bash "$root/tests/portable-spec.sh"
 bash "$root/tests/modes.sh"
 bash "$root/tests/toolchain.sh"
 bash "$root/scripts/package-toolchain.sh" "$root/artifacts/deploy-toolchain" --self-contained --bundle-llvm

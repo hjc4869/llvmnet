@@ -1,5 +1,9 @@
 # Optimized SPEC Coverage
 
+## Portable Failure Audit
+
+The subsequent [portable limitation audit](spec-portable-limitations.md) rebuilt all **84 distinct portable failures** from the ordered inventory, fixed bounded string, byte-order, math, file, time, libc++ clock and kit-configuration gaps, and retained a per-benchmark cause with minimal independent reproducers. **525.x264_r, 625.x264_s and 765.roms_r now pass portable SPEC output validation; 81 remain failed.** ROMS's historical constructor failure was already fixed in the current runtime. The 17 earlier portable passes were not rerun, so the combined 20 distinct validated entries are not a clean final-toolchain suite pass. The audit distinguishes unfinished portable library support from deliberate ABI restrictions; most failures are not fundamental CIL limitations.
+
 ## Ordered Compatibility Follow-Up
 
 The repair-first follow-up on 2026-09-07/08 uses [../scripts/spec-ordered.sh](../scripts/spec-ordered.sh). It processes one benchmark at a time in this order: 2017 integer rate; 2026 integer rate; 2026 FP rate; 2026 integer speed; 2026 FP speed; 2017 FP rate; 2017 integer speed; 2017 FP speed. Entries within each group are ascending, using the installed kit's benchmark sets, including their random-number checks. Rate runs use one instance. Speed uses the kit's four-thread setting and enables its OpenMP source paths where applicable, with an explicit system LLVM OpenMP runtime. Some speed entries use kit-managed parallel processes instead of worker threads.
@@ -242,7 +246,9 @@ System 538/638 ImageMagick also passes this profile, while portable ImageMagick 
 
 CPU 2026 777.zstd_r, 782.lbm_r, 816.nab_s and 881.neutron_s also passed vectorized test inputs under both ABIs: **8 PASS / 0 FAIL**. Evidence directories are `spec2026-harness-O3-v1-test.VkEmU9x8`, `spec2026-harness-O3-v1-test.n5txv8Ki`, `spec2026-harness-O3-v1-test.Lxi4HSpq` and `spec2026-harness-O3-v1-test.4g64OO1w`. Total explicitly vectorized test coverage across both suites is **38 PASS / 2 FAIL across 40 cases**.
 
-## Remaining Work
+## Earlier Inventory Blockers
+
+The following list describes the earlier inventories above, not the current toolchain. Many system-led repairs also resolved portable compiler/runtime features. For current portable failures and checked PoCs, use the [portable audit](spec-portable-limitations.md).
 
 - C++ library coverage is the largest group: iostream/locale/file-stream exports, standard-library globals, and unsupported native C++ boundaries. CPU 2026 also needs the correct C++ dialect; C++17 removes the earlier language errors but does not provide missing runtime features.
 - C semantics still need TLS globals, dynamic stack save/restore, nonlocal jumps, variadic callbacks and additional library operations. Povray now gets past `llvm.frexp` and stops at a variadic callback.

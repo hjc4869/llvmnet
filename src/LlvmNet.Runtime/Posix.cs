@@ -18,6 +18,51 @@ public static unsafe class Posix
     private static readonly Dictionary<nint, DirectoryState> directories = [];
     private static readonly Dictionary<int, nint> errorStrings = [];
 
+    [CExport("getcwd")]
+    public static nint Getcwd(nint buffer, long size)
+    {
+        if (size < 0 || buffer != 0 && size == 0)
+        {
+            ProcessRuntime.Error(22);
+            return 0;
+        }
+        try
+        {
+            byte[] path = Encoding.UTF8.GetBytes(Directory.GetCurrentDirectory());
+            long required = (long)path.Length + 1;
+            if (buffer == 0 && size == 0) size = required;
+            if (size < required)
+            {
+                ProcessRuntime.Error(34);
+                return 0;
+            }
+            if (buffer == 0) buffer = CString.Malloc(size);
+            if (buffer == 0) return 0;
+            path.AsSpan().CopyTo(new Span<byte>((void*)buffer, path.Length));
+            ((byte*)buffer)[path.Length] = 0;
+            return buffer;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            ProcessRuntime.Error(error is UnauthorizedAccessException ? 13 : 2);
+            return 0;
+        }
+    }
+
+    [CExport("chdir")]
+    public static int Chdir(nint path)
+    {
+        if (path == 0) return ProcessRuntime.Error(14);
+        string name = CString.Text(path);
+        if (name.Length == 0) return ProcessRuntime.Error(2);
+        if (File.Exists(name)) return ProcessRuntime.Error(20);
+        try { Directory.SetCurrentDirectory(name); return 0; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return ProcessRuntime.Error(error is UnauthorizedAccessException ? 13 : error is PathTooLongException ? 36 : error is ArgumentException ? 22 : 2);
+        }
+    }
+
     [CExport("strerror")]
     public static nint Strerror(int error)
     {

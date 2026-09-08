@@ -42,6 +42,7 @@ __LLVMNET_MATH_UNARY(atan);
 __LLVMNET_MATH_UNARY(sinh);
 __LLVMNET_MATH_UNARY(cosh);
 __LLVMNET_MATH_UNARY(tanh);
+__LLVMNET_MATH_UNARY(atanh);
 __LLVMNET_MATH_UNARY(exp);
 __LLVMNET_MATH_UNARY(exp2);
 __LLVMNET_MATH_UNARY(log);
@@ -54,6 +55,7 @@ __LLVMNET_MATH_UNARY(trunc);
 __LLVMNET_MATH_UNARY(round);
 __LLVMNET_MATH_UNARY(rint);
 __LLVMNET_MATH_UNARY(erf);
+__LLVMNET_MATH_UNARY(tgamma);
 #undef __LLVMNET_MATH_UNARY
 double pow(double, double);
 float powf(float, float);

@@ -30,6 +30,30 @@ public static class CMath
     [CExport("cbrtf")] public static float CbrtF(float value) => MathF.Cbrt(value);
     [CExport("erf")] public static double Erf(double value) => MathNet.Numerics.SpecialFunctions.Erf(value);
     [CExport("erff")] public static float ErfF(float value) => (float)Erf(value);
+    [CExport("tgamma")] public static double Tgamma(double value)
+    {
+        if (double.IsNaN(value) || double.IsPositiveInfinity(value)) return value;
+        if (value == 0)
+        {
+            ProcessRuntime.Error(34);
+            return Math.CopySign(double.PositiveInfinity, value);
+        }
+        if (value < 0 && value == Math.Truncate(value))
+        {
+            ProcessRuntime.Error(33);
+            return double.NaN;
+        }
+        double result = MathNet.Numerics.SpecialFunctions.Gamma(value);
+        if (double.IsInfinity(result) || result == 0) ProcessRuntime.Error(34);
+        return result;
+    }
+    [CExport("tgammaf")] public static float TgammaF(float value)
+    {
+        double wide = Tgamma(value);
+        float result = (float)wide;
+        if (double.IsFinite(wide) && (float.IsInfinity(result) || wide != 0 && result == 0)) ProcessRuntime.Error(34);
+        return result;
+    }
     [CExport("hypot")] public static double Hypot(double left, double right) => double.Hypot(left, right);
     [CExport("hypotf")] public static float HypotF(float left, float right) => float.Hypot(left, right);
     [CExport("atan2")] public static double Atan2(double left, double right) => Math.Atan2(left, right);
@@ -85,6 +109,18 @@ public static class CMath
     [CExport("sinh")] public static double Sinh(double value) => Math.Sinh(value);
     [CExport("cosh")] public static double Cosh(double value) => Math.Cosh(value);
     [CExport("tanh")] public static double Tanh(double value) => Math.Tanh(value);
+    [CExport("atanh")] public static double Atanh(double value)
+    {
+        if (Math.Abs(value) > 1) ProcessRuntime.Error(33);
+        else if (Math.Abs(value) == 1) ProcessRuntime.Error(34);
+        return Math.Atanh(value);
+    }
+    [CExport("atanhf")] public static float AtanhF(float value)
+    {
+        if (MathF.Abs(value) > 1) ProcessRuntime.Error(33);
+        else if (MathF.Abs(value) == 1) ProcessRuntime.Error(34);
+        return MathF.Atanh(value);
+    }
     [CExport("frexp")] public static unsafe double Frexp(double value, nint exponent)
     {
         if (value == 0 || !double.IsFinite(value)) { *(int*)exponent = 0; return value; }

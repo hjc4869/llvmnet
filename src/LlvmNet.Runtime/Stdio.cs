@@ -157,6 +157,26 @@ public static unsafe class Stdio
     [CExport("fclose")]
     public static int Fclose(nint file) => Close(Fileno(file));
 
+    [CExport("ftruncate"), CExport("ftruncate64")]
+    public static int Ftruncate(int descriptor, long length)
+    {
+        if (!descriptors.TryGetValue(descriptor, out Entry? entry))
+            return ProcessRuntime.Error(9);
+        if (length < 0 || !entry.Stream.CanWrite || !entry.Stream.CanSeek)
+            return ProcessRuntime.Error(22);
+        try
+        {
+            long position = entry.Stream.Position;
+            entry.Stream.SetLength(length);
+            entry.Stream.Position = position;
+            return 0;
+        }
+        catch (Exception error) when (error is IOException or NotSupportedException or ObjectDisposedException or ArgumentException)
+        {
+            return Error(error);
+        }
+    }
+
     [CExport("read")]
     public static long Read(int descriptor, nint destination, long count)
     {

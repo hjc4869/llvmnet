@@ -27,6 +27,9 @@ public static unsafe class CTime
         return process.TotalProcessorTime.Ticks / 10;
     }
 
+    [CExport("difftime")]
+    public static double Difftime(long end, long start) => (double)((Int128)end - start);
+
     [CExport("gettimeofday")]
     public static int Gettimeofday(nint result, nint zone)
     {

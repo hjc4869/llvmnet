@@ -19,5 +19,18 @@ int main(void)
     if (modff(single, &integral_single) != -0.5f || integral_single != -2) return 9;
     double fraction = modf(-INFINITY, &integral);
     if (fraction != 0 || !signbit(fraction) || !isinf(integral) || !signbit(integral)) return 10;
+    if (fabs(atanh(value / 5) - 0.5493061443340548) > 1e-14) return 11;
+    if (fabsf(atanhf(single / 5) + 0.5493061443340548f) > 1e-6f) return 12;
+    if (!signbit(atanh(-0.0)) || !signbit(atanhf(-0.0f))) return 13;
+    errno = 0;
+    if (!isnan(atanh(value)) || errno != EDOM) return 14;
+    errno = 0;
+    if (atanh(negative) != -INFINITY || errno != ERANGE) return 15;
+    errno = 0;
+    if (!isnan(atanhf(single)) || errno != EDOM) return 16;
+    errno = 0;
+    if (atanhf(1.0f) != INFINITY || errno != ERANGE) return 17;
+    errno = 0;
+    if (!isnan(atanh(NAN)) || !isnan(atanhf(NAN)) || errno != 0) return 18;
     return 0;
 }

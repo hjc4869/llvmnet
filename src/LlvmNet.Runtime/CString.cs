@@ -195,6 +195,16 @@ public static unsafe class CString
         return destination;
     }
 
+    [CExport("strncat")]
+    public static nint Strncat(nint destination, nint source, long count)
+    {
+        nint end = destination + (nint)Strlen(destination);
+        long length = Strnlen(source, count);
+        Memcpy(end, source, length);
+        ((byte*)end)[length] = 0;
+        return destination;
+    }
+
     [CExport("strchr")]
     public static nint Strchr(nint text, int value)
     {

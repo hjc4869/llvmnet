@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+output="$root/artifacts/tests/portable-spec"
+mkdir -p "$output"
+dotnet build "$root/llvmnet.slnx" -c Release --nologo
+cd "$output"
+fixture="$root/tests/c/portable-spec-functions.c"
+clang-22 -O3 -fno-builtin "$fixture" -lm -o "$output/functions-native"
+"$output/functions-native"
+for runtime in system portable; do
+    "$root/bin/llvmnet" --runtime="$runtime" -O3 -fno-builtin "$fixture" -o "$output/functions-$runtime.dll"
+    dotnet "$output/functions-$runtime.dll"
+    "$root/bin/llvmnet" --runtime="$runtime" -O3 -fno-builtin --nativeaot "$fixture" -o "$output/functions-$runtime-aot"
+    "$output/functions-$runtime-aot"
+done
+dotnet "$root/tests/LlvmNet.Checks/bin/Release/net10.0/LlvmNet.Checks.dll" inspect "$output/functions-portable.dll"
+bash "$root/scripts/build-portable-runtime.sh"
+fixture="$root/tests/cpp/portable-spec-clock.cpp"
+clang++-22 -std=c++17 -O3 "$fixture" -o "$output/clock-native"
+"$output/clock-native"
+"$root/bin/llvmnet" --runtime=portable -std=c++17 -O3 "$fixture" -o "$output/clock.dll"
+dotnet "$output/clock.dll"
+"$root/bin/llvmnet" --runtime=portable -std=c++17 -O3 --nativeaot "$fixture" -o "$output/clock-aot"
+"$output/clock-aot"
+dotnet "$root/tests/LlvmNet.Checks/bin/Release/net10.0/LlvmNet.Checks.dll" inspect "$output/clock.dll"
+fixture="$root/tests/fortran/portable-spec-constructor.f90"
+flang-22 -O3 "$fixture" -o "$output/constructor-native"
+"$output/constructor-native"
+"$root/bin/llvmnet" --runtime=portable -O3 -c "$fixture" -o "$output/constructor.bc"
+llvm-dis-22 "$output/constructor.bc" -o - | grep 'call.*_FortranAInitArrayConstructorVector' > "$output/constructor-symbols.txt"
+"$root/bin/llvmnet" --runtime=portable "$output/constructor.bc" -o "$output/constructor.dll"
+dotnet "$output/constructor.dll"
+"$root/bin/llvmnet" --runtime=portable --nativeaot "$output/constructor.bc" -o "$output/constructor-aot"
+"$output/constructor-aot"
+printf 'PASS: portable SPEC string/math/file/clock repairs, native oracle, JIT/NativeAOT\n'
