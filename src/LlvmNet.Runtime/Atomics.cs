@@ -52,6 +52,38 @@ public static unsafe class Atomics
         }
     }
 
+    public static float ModifySingle(nint address, float operand, int operation)
+    {
+        lock (gate)
+        {
+            float previous = *(float*)address;
+            *(float*)address = operation switch
+            {
+                0 => operand,
+                11 => previous + operand,
+                12 => previous - operand,
+                _ => throw new NotSupportedException($"Floating atomic RMW operation {operation}")
+            };
+            return previous;
+        }
+    }
+
+    public static double ModifyDouble(nint address, double operand, int operation)
+    {
+        lock (gate)
+        {
+            double previous = *(double*)address;
+            *(double*)address = operation switch
+            {
+                0 => operand,
+                11 => previous + operand,
+                12 => previous - operand,
+                _ => throw new NotSupportedException($"Floating atomic RMW operation {operation}")
+            };
+            return previous;
+        }
+    }
+
     private static ulong Mask(long value, int width) => (ulong)value & (width == 64 ? ulong.MaxValue : (1UL << width) - 1);
     private static long Signed(long value, int width) => width == 64 ? value : value << (64 - width) >> (64 - width);
     private static long Read(nint address, int width) => width switch

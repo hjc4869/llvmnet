@@ -4,6 +4,17 @@ namespace LlvmNet.Runtime;
 
 public static unsafe class WideInteger
 {
+    public static UInt128 ByteSwap(UInt128 value, int width)
+    {
+        UInt128 result = 0;
+        for (int offset = 0; offset < width; offset += 8)
+        {
+            result = (result << 8) | (value & 255);
+            value >>= 8;
+        }
+        return result;
+    }
+
     public static UInt128 FromBits(long low, long high) => new(unchecked((ulong)high), unchecked((ulong)low));
     public static UInt128 FromUnsigned(long value) => unchecked((ulong)value);
     public static UInt128 FromSigned(long value) => unchecked((UInt128)(Int128)value);

@@ -4,7 +4,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 mode="${1:-core}"
 case "$mode" in core|integration|spec-test) ;; *) printf 'Usage: %s [core|integration|spec-test]\n' "$0" >&2; exit 2 ;; esac
 dotnet build "$root/llvmnet.slnx" -c Release --nologo
-for test in smoke link runtime math io time float80 ir lifecycle ctype atomics threads varargs-callbacks posix cpp fortran wide vectors spec-matrix; do
+for test in smoke link runtime math complex-runtime io time float80 ir large-locals large-data lifecycle ctype atomics threads thread-local varargs-callbacks native-varargs-pointers legacy-callbacks aggregate-callbacks nonlocal-jumps stack posix debug-trap cpp cpp-filters cpp-terminate cpp-nothrow exception-pointer fortran fortran-time fortran-random fortran-environment fortran-convert fortran-shape fortran-endfile fortran-model fortran-stack fortran-record-length fortran-inquire-length fortran-direct fortran-format namelist unformatted inquire pack derived-lifetime derived-assignment nonadvancing wide vectors spec-matrix spec-ordered; do
     bash "$root/tests/$test.sh"
 done
 if [[ "$mode" == integration || "$mode" == spec-test ]]; then

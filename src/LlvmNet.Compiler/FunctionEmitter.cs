@@ -9,10 +9,20 @@ internal sealed class FunctionEmitter : ValueEmitter
     private readonly nint function;
     private readonly MethodBuilder method;
     private readonly Dictionary<nint, LocalBuilder> locals = [];
+    private readonly Dictionary<nint, (LocalBuilder Array, LocalBuilder Temporary, int Index)> storedScalars = [];
     private readonly Dictionary<nint, int> arguments = [];
     private readonly Dictionary<nint, Label> labels = [];
     private readonly VarArgEmitter varargs;
     private LocalBuilder? currentException;
+    private readonly Dictionary<nint, (int Site, Label Resume)> jumpSites = [];
+    private LocalBuilder? jumpFrame;
+    private LocalBuilder? jumpResume;
+    private LocalBuilder? jumpReturn;
+    private Label jumpDispatch;
+    private Label jumpExit;
+    private LocalBuilder? stackMemory;
+    private LocalBuilder? stackReturn;
+    private Label stackExit;
 
     internal FunctionEmitter(CilCompiler compiler, nint function, MethodBuilder method) : base(compiler, method.GetILGenerator())
     {
@@ -49,6 +59,9 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Pop);
             locals[Llvm.LLVMGetParam(function, index)] = copy;
         }
+        bool scopedStack = false;
+        bool hasAllocations = false;
+        int valueCount = 0;
         foreach (nint block in Llvm.Blocks(function))
         {
             labels[block] = Il.DefineLabel();
@@ -56,8 +69,42 @@ internal sealed class FunctionEmitter : ValueEmitter
             {
                 nint type = Llvm.LLVMTypeOf(instruction);
                 if (TypeSystem.Kind(type) != 0)
-                    locals[instruction] = Il.DeclareLocal(Types.Map(type));
+                    valueCount++;
+                hasAllocations |= Llvm.LLVMGetInstructionOpcode(instruction) == 26;
+                if (Llvm.LLVMGetInstructionOpcode(instruction) == 45 && CilCompiler.IsSetJump(Llvm.LLVMGetCalledValue(instruction)))
+                    jumpSites.Add(instruction, (jumpSites.Count + 1, Il.DefineLabel()));
+                if (Llvm.LLVMGetInstructionOpcode(instruction) == 45)
+                {
+                    string name = Llvm.Name(Llvm.LLVMGetCalledValue(instruction));
+                    scopedStack |= name.StartsWith("llvm.stacksave", StringComparison.Ordinal) || name.StartsWith("llvm.stackrestore", StringComparison.Ordinal);
+                }
             }
+        }
+        AllocateFunctionLocals(valueCount > 32768 && jumpSites.Count == 0);
+        if (scopedStack || hasAllocations && jumpSites.Count != 0)
+        {
+            stackMemory = Il.DeclareLocal(typeof(StackMemory));
+            stackReturn = method.ReturnType == typeof(void) || jumpSites.Count != 0 ? null : Il.DeclareLocal(method.ReturnType);
+            stackExit = Il.DefineLabel();
+            Il.Emit(OpCodes.Newobj, typeof(StackMemory).GetConstructor(Type.EmptyTypes)!);
+            Il.Emit(OpCodes.Stloc, stackMemory);
+            Il.BeginExceptionBlock();
+        }
+        if (jumpSites.Count != 0)
+        {
+            jumpFrame = Il.DeclareLocal(typeof(long));
+            jumpResume = Il.DeclareLocal(typeof(int));
+            jumpReturn = method.ReturnType == typeof(void) ? null : Il.DeclareLocal(method.ReturnType);
+            jumpDispatch = Il.DefineLabel();
+            jumpExit = Il.DefineLabel();
+            Il.Emit(OpCodes.Call, typeof(NonLocalJumps).GetMethod(nameof(NonLocalJumps.NewFrame))!);
+            Il.Emit(OpCodes.Stloc, jumpFrame);
+            Il.MarkLabel(jumpDispatch);
+            Il.BeginExceptionBlock();
+            Il.Emit(OpCodes.Ldloc, jumpResume);
+            Il.Emit(OpCodes.Ldc_I4_1);
+            Il.Emit(OpCodes.Sub);
+            Il.Emit(OpCodes.Switch, jumpSites.Values.Select(site => site.Resume).ToArray());
         }
         foreach (nint block in Llvm.Blocks(function))
         {
@@ -74,12 +121,73 @@ internal sealed class FunctionEmitter : ValueEmitter
                 }
             }
         }
+        if (jumpFrame is not null)
+        {
+            Il.BeginCatchBlock(typeof(NonLocalJumpException));
+            LocalBuilder exception = Il.DeclareLocal(typeof(NonLocalJumpException));
+            Il.Emit(OpCodes.Stloc, exception);
+            Label matched = Il.DefineLabel();
+            Il.Emit(OpCodes.Ldloc, exception);
+            Il.Emit(OpCodes.Callvirt, typeof(NonLocalJumpException).GetProperty(nameof(NonLocalJumpException.Frame))!.GetMethod!);
+            Il.Emit(OpCodes.Ldloc, jumpFrame);
+            Il.Emit(OpCodes.Beq, matched);
+            Il.Emit(OpCodes.Rethrow);
+            Il.MarkLabel(matched);
+            if (stackMemory is not null)
+            {
+                Il.Emit(OpCodes.Ldloc, stackMemory);
+                Il.Emit(OpCodes.Ldloc, exception);
+                Il.Emit(OpCodes.Callvirt, typeof(NonLocalJumpException).GetProperty(nameof(NonLocalJumpException.StackPosition))!.GetMethod!);
+                Il.Emit(OpCodes.Callvirt, typeof(StackMemory).GetMethod(nameof(StackMemory.Restore))!);
+            }
+            foreach ((nint instruction, (int site, _)) in jumpSites)
+            {
+                Label next = Il.DefineLabel();
+                Il.Emit(OpCodes.Ldloc, exception);
+                Il.Emit(OpCodes.Callvirt, typeof(NonLocalJumpException).GetProperty(nameof(NonLocalJumpException.Site))!.GetMethod!);
+                Il.Emit(OpCodes.Ldc_I4, site);
+                Il.Emit(OpCodes.Bne_Un, next);
+                Il.Emit(OpCodes.Ldloc, exception);
+                Il.Emit(OpCodes.Callvirt, typeof(NonLocalJumpException).GetProperty(nameof(NonLocalJumpException.Value))!.GetMethod!);
+                Il.Emit(OpCodes.Stloc, locals[instruction]);
+                Il.Emit(OpCodes.Ldc_I4, site);
+                Il.Emit(OpCodes.Stloc, jumpResume!);
+                Il.Emit(OpCodes.Leave, jumpDispatch);
+                Il.MarkLabel(next);
+            }
+            Il.Emit(OpCodes.Rethrow);
+            Il.EndExceptionBlock();
+            Il.MarkLabel(jumpExit);
+            if (stackMemory is not null)
+                Il.Emit(OpCodes.Leave, stackExit);
+            else
+            {
+                if (jumpReturn is not null) Il.Emit(OpCodes.Ldloc, jumpReturn);
+                Il.Emit(OpCodes.Ret);
+            }
+        }
+        if (stackMemory is not null)
+        {
+            Il.BeginFinallyBlock();
+            Il.Emit(OpCodes.Ldloc, stackMemory);
+            Il.Emit(OpCodes.Callvirt, typeof(StackMemory).GetMethod(nameof(StackMemory.Dispose))!);
+            Il.EndExceptionBlock();
+            Il.MarkLabel(stackExit);
+            if ((jumpReturn ?? stackReturn) is LocalBuilder result) Il.Emit(OpCodes.Ldloc, result);
+            Il.Emit(OpCodes.Ret);
+        }
     }
 
     internal override void Load(nint value)
     {
         if (locals.TryGetValue(value, out LocalBuilder? local))
             Il.Emit(OpCodes.Ldloc, local);
+        else if (storedScalars.TryGetValue(value, out var storage))
+        {
+            Il.Emit(OpCodes.Ldloc, storage.Array);
+            Il.Emit(OpCodes.Ldc_I4, storage.Index);
+            Il.Emit(OpCodes.Ldelem, storage.Temporary.LocalType);
+        }
         else if (arguments.TryGetValue(value, out int index))
             Il.Emit(OpCodes.Ldarg, (short)index);
         else
@@ -94,7 +202,18 @@ internal sealed class FunctionEmitter : ValueEmitter
             case 1:
                 if (method.ReturnType != typeof(void))
                     Load(Llvm.LLVMGetOperand(value, 0));
-                Il.Emit(OpCodes.Ret);
+                if (jumpFrame is not null)
+                {
+                    if (jumpReturn is not null) Il.Emit(OpCodes.Stloc, jumpReturn);
+                    Il.Emit(OpCodes.Leave, jumpExit);
+                }
+                else if (stackMemory is not null)
+                {
+                    if (stackReturn is not null) Il.Emit(OpCodes.Stloc, stackReturn);
+                    Il.Emit(OpCodes.Leave, stackExit);
+                }
+                else
+                    Il.Emit(OpCodes.Ret);
                 return;
             case 2:
                 if (Llvm.LLVMGetNumSuccessors(value) == 1)
@@ -146,13 +265,17 @@ internal sealed class FunctionEmitter : ValueEmitter
                 if (TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0))) > 64)
                     throw new NotSupportedException("Alloca element counts wider than the address space are not supported.");
                 int alignment = Math.Max(Types.Alignment(allocated), checked((int)Llvm.LLVMGetAlignment(value)));
+                if (stackMemory is not null) Il.Emit(OpCodes.Ldloc, stackMemory);
                 Load(Llvm.LLVMGetOperand(value, 0));
                 Il.Emit(OpCodes.Conv_U);
                 Il.Emit(OpCodes.Ldc_I8, Types.Size(allocated));
                 Il.Emit(OpCodes.Conv_U);
                 Il.Emit(OpCodes.Mul_Ovf_Un);
                 Offset(alignment - 1);
-                Il.Emit(OpCodes.Localloc);
+                if (stackMemory is not null)
+                    Il.Emit(OpCodes.Callvirt, typeof(StackMemory).GetMethod(nameof(StackMemory.Allocate))!);
+                else
+                    Il.Emit(OpCodes.Localloc);
                 Offset(alignment - 1);
                 Il.Emit(OpCodes.Ldc_I8, -(long)alignment);
                 Il.Emit(OpCodes.Conv_I);
@@ -249,8 +372,9 @@ internal sealed class FunctionEmitter : ValueEmitter
             default:
                 throw new NotSupportedException($"Unsupported LLVM opcode {opcode}");
         }
-        if (locals.TryGetValue(value, out LocalBuilder? local))
-            Il.Emit(OpCodes.Stloc, local);
+        StoreResult(value);
+        if (jumpSites.TryGetValue(value, out var jump))
+            Il.MarkLabel(jump.Resume);
     }
 
     private void VectorElement(nint value, bool insert)
@@ -308,7 +432,7 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     private void Edge(nint source, nint target)
     {
-        List<LocalBuilder> copies = [];
+        List<nint> copies = [];
         foreach (nint phi in Llvm.Instructions(target))
         {
             if (Llvm.LLVMGetInstructionOpcode(phi) != 44)
@@ -319,7 +443,7 @@ internal sealed class FunctionEmitter : ValueEmitter
                 if (Llvm.LLVMGetIncomingBlock(phi, index) != source)
                     continue;
                 Load(Llvm.LLVMGetIncomingValue(phi, index));
-                copies.Add(locals[phi]);
+                copies.Add(phi);
                 found = true;
                 break;
             }
@@ -327,13 +451,24 @@ internal sealed class FunctionEmitter : ValueEmitter
                 throw new InvalidOperationException("PHI has no incoming value for predecessor.");
         }
         for (int index = copies.Count - 1; index >= 0; index--)
-            Il.Emit(OpCodes.Stloc, copies[index]);
+            StoreResult(copies[index]);
         Il.Emit(OpCodes.Br, labels[target]);
     }
 
     private void Atomic(nint instruction, int opcode)
     {
         nint type = opcode == 27 ? Llvm.LLVMTypeOf(instruction) : Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, opcode == 28 ? 0u : 1u));
+        if (TypeSystem.Kind(type) is 2 or 3)
+        {
+            if (opcode != 57) throw new NotSupportedException($"Floating atomic opcode {opcode}");
+            int operation = Llvm.LLVMGetAtomicRMWBinOp(instruction);
+            if (operation is not (0 or 11 or 12)) throw new NotSupportedException($"Floating atomic RMW operation {operation}");
+            Load(Llvm.LLVMGetOperand(instruction, 0));
+            Load(Llvm.LLVMGetOperand(instruction, 1));
+            Il.Emit(OpCodes.Ldc_I4, operation);
+            Il.Emit(OpCodes.Call, typeof(Atomics).GetMethod(TypeSystem.Kind(type) == 2 ? nameof(Atomics.ModifySingle) : nameof(Atomics.ModifyDouble))!);
+            return;
+        }
         int width = TypeSystem.Kind(type) == 12 ? 64 : TypeSystem.Width(type);
         if (width is not (8 or 16 or 32 or 64))
             throw new NotSupportedException($"Atomic type: {Llvm.PrintType(type)}");
@@ -392,8 +527,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         Il.Emit(OpCodes.Stloc, failed);
         Il.BeginExceptionBlock();
         Call(instruction);
-        if (locals.TryGetValue(instruction, out LocalBuilder? result))
-            Il.Emit(OpCodes.Stloc, result);
+        StoreResult(instruction);
         Il.BeginCatchBlock(typeof(CxxException));
         Il.Emit(OpCodes.Stloc, currentException);
         Il.Emit(OpCodes.Ldc_I4_1);
@@ -419,21 +553,46 @@ internal sealed class FunctionEmitter : ValueEmitter
         Il.Emit(OpCodes.Ldloca, result);
         Il.Emit(OpCodes.Conv_I);
         Offset(Types.Offset(type, 1));
-        Il.Emit(OpCodes.Ldloc, currentException);
         uint count = Llvm.LLVMGetNumClauses(instruction);
-        Il.Emit(OpCodes.Ldc_I4, checked((int)count));
+        nint[] clauses = Enumerable.Range(0, checked((int)count)).Select(index => Llvm.LLVMGetClause(instruction, (uint)index)).ToArray();
+        nint[] catches = clauses.Where(clause => TypeSystem.Kind(Llvm.LLVMTypeOf(clause)) == 12).ToArray();
+        Il.Emit(OpCodes.Ldloc, currentException);
+        Il.Emit(OpCodes.Ldc_I4, catches.Length);
         Il.Emit(OpCodes.Newarr, typeof(nint));
-        for (uint index = 0; index < count; index++)
+        for (int index = 0; index < catches.Length; index++)
         {
-            nint clause = Llvm.LLVMGetClause(instruction, index);
-            if (TypeSystem.Kind(Llvm.LLVMTypeOf(clause)) != 12)
-                throw new NotSupportedException("C++ exception filters are not supported; use catch clauses.");
             Il.Emit(OpCodes.Dup);
-            Il.Emit(OpCodes.Ldc_I4, (int)index);
-            Load(clause);
+            Il.Emit(OpCodes.Ldc_I4, index);
+            Load(catches[index]);
             Il.Emit(OpCodes.Stelem_I);
         }
         Il.Emit(OpCodes.Call, typeof(Cxx).GetMethod(nameof(Cxx.Selector))!);
+        LocalBuilder selector = Il.DeclareLocal(typeof(int));
+        Il.Emit(OpCodes.Stloc, selector);
+        Label selected = Il.DefineLabel();
+        foreach (nint clause in clauses.Where(clause => TypeSystem.Kind(Llvm.LLVMTypeOf(clause)) != 12))
+        {
+            nint filterType = Llvm.LLVMTypeOf(clause);
+            if (TypeSystem.Kind(filterType) != 11 || TypeSystem.Kind(Llvm.LLVMGetElementType(filterType)) != 12)
+                throw new NotSupportedException($"Unsupported C++ exception filter: {Llvm.Print(clause)}");
+            Il.Emit(OpCodes.Ldloc, selector);
+            Il.Emit(OpCodes.Brtrue, selected);
+            Il.Emit(OpCodes.Ldloc, currentException);
+            int length = checked((int)Llvm.LLVMGetArrayLength2(filterType));
+            Il.Emit(OpCodes.Ldc_I4, length);
+            Il.Emit(OpCodes.Newarr, typeof(nint));
+            for (int index = 0; index < length; index++)
+            {
+                Il.Emit(OpCodes.Dup);
+                Il.Emit(OpCodes.Ldc_I4, index);
+                Load(Llvm.LLVMGetAggregateElement(clause, (uint)index));
+                Il.Emit(OpCodes.Stelem_I);
+            }
+            Il.Emit(OpCodes.Call, typeof(Cxx).GetMethod(nameof(Cxx.Filter))!);
+            Il.Emit(OpCodes.Stloc, selector);
+        }
+        Il.MarkLabel(selected);
+        Il.Emit(OpCodes.Ldloc, selector);
         Il.Emit(OpCodes.Stind_I4);
         Il.Emit(OpCodes.Ldloc, result);
     }
@@ -535,10 +694,142 @@ internal sealed class FunctionEmitter : ValueEmitter
         Il.Emit(OpCodes.Ceq);
     }
 
+    private void AllocateFunctionLocals(bool reuse)
+    {
+        var available = new Dictionary<Type, Stack<LocalBuilder>>();
+        var arrays = new Dictionary<Type, (LocalBuilder Array, LocalBuilder Temporary, int Count)>();
+        foreach (nint block in Llvm.Blocks(function))
+        {
+            nint[] instructions = Llvm.Instructions(block).ToArray();
+            var positions = new Dictionary<nint, int>();
+            if (reuse)
+                for (int index = 0; index < instructions.Length; index++) positions.Add(instructions[index], index);
+            var expired = new Dictionary<int, List<LocalBuilder>>();
+            for (int index = 0; index < instructions.Length; index++)
+            {
+                if (expired.Remove(index, out List<LocalBuilder>? released))
+                    foreach (LocalBuilder local in released) Release(local);
+                nint instruction = instructions[index];
+                nint type = Llvm.LLVMTypeOf(instruction);
+                if (TypeSystem.Kind(type) == 0) continue;
+                Type managed = Types.Map(type);
+                int lastUse = -1;
+                if (reuse && managed.IsPrimitive && Llvm.LLVMGetInstructionOpcode(instruction) != 44)
+                {
+                    lastUse = index;
+                    for (nint use = Llvm.LLVMGetFirstUse(instruction); use != 0; use = Llvm.LLVMGetNextUse(use))
+                    {
+                        nint user = Llvm.LLVMGetUser(use);
+                        if (!positions.TryGetValue(user, out int position) || position <= index || Llvm.LLVMGetInstructionOpcode(user) == 44)
+                        {
+                            lastUse = -1;
+                            break;
+                        }
+                        lastUse = Math.Max(lastUse, position);
+                    }
+                }
+                if (reuse && managed.IsPrimitive && lastUse < 0)
+                {
+                    if (!arrays.TryGetValue(managed, out var arrayStorage))
+                        arrayStorage = (Il.DeclareLocal(managed.MakeArrayType()), Il.DeclareLocal(managed), 0);
+                    storedScalars[instruction] = (arrayStorage.Array, arrayStorage.Temporary, arrayStorage.Count);
+                    arrays[managed] = (arrayStorage.Array, arrayStorage.Temporary, arrayStorage.Count + 1);
+                    continue;
+                }
+                LocalBuilder storage = lastUse >= 0 && available.TryGetValue(managed, out Stack<LocalBuilder>? pool) && pool.TryPop(out LocalBuilder? previous)
+                    ? previous : Il.DeclareLocal(managed);
+                if (storage.LocalIndex >= ushort.MaxValue)
+                    throw new NotSupportedException($"Function {Llvm.Name(function)} exceeds the CIL local-variable limit.");
+                locals[instruction] = storage;
+                if (lastUse >= 0)
+                {
+                    if (!expired.TryGetValue(lastUse + 1, out List<LocalBuilder>? entries)) expired.Add(lastUse + 1, entries = []);
+                    entries.Add(storage);
+                }
+            }
+            foreach (List<LocalBuilder> entries in expired.Values)
+                foreach (LocalBuilder local in entries) Release(local);
+        }
+        foreach (var (type, storage) in arrays)
+        {
+            Il.Emit(OpCodes.Ldc_I4, storage.Count);
+            Il.Emit(OpCodes.Newarr, type);
+            Il.Emit(OpCodes.Stloc, storage.Array);
+        }
+
+        void Release(LocalBuilder local)
+        {
+            if (!available.TryGetValue(local.LocalType, out Stack<LocalBuilder>? pool)) available.Add(local.LocalType, pool = new());
+            pool.Push(local);
+        }
+    }
+
+    private void StoreResult(nint value)
+    {
+        if (locals.TryGetValue(value, out LocalBuilder? local))
+            Il.Emit(OpCodes.Stloc, local);
+        else if (storedScalars.TryGetValue(value, out var storage))
+        {
+            Il.Emit(OpCodes.Stloc, storage.Temporary);
+            Il.Emit(OpCodes.Ldloc, storage.Array);
+            Il.Emit(OpCodes.Ldc_I4, storage.Index);
+            Il.Emit(OpCodes.Ldloc, storage.Temporary);
+            Il.Emit(OpCodes.Stelem, storage.Temporary.LocalType);
+        }
+    }
+
     private void Call(nint instruction)
     {
         nint target = Llvm.LLVMGetCalledValue(instruction);
         string name = Llvm.Name(target);
+        if (Llvm.LLVMIsAInlineAsm(target) != 0)
+        {
+            nint text = Llvm.LLVMGetInlineAsmAsmString(target, out nuint length);
+            string assembly = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(text, checked((int)length))!;
+            if (Compiler.Host is not null && NativeCpuQuery(instruction, target, assembly))
+            {
+                for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
+                    Load(Llvm.LLVMGetOperand(instruction, index));
+                Il.Emit(OpCodes.Call, Compiler.Host.Resolve(0, instruction));
+                return;
+            }
+            if (Compiler.Host is not null && length == 4 && TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) == 0 && Llvm.LLVMGetNumArgOperands(instruction) == 0 &&
+                assembly == "int3")
+            {
+                Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.DebugTrap))!);
+                return;
+            }
+            bool commentOnly = assembly.Split('\n').All(line =>
+            {
+                string content = line.Trim(' ', '\t', '\r');
+                return content.Length == 0 || content.StartsWith('#');
+            });
+            if (!commentOnly || TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0)
+                throw new NotSupportedException("Inline assembly with instructions or outputs is not supported; use a pure C configuration.");
+            Il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.MemoryBarrier))!);
+            return;
+        }
+        if (jumpSites.TryGetValue(instruction, out var jump))
+        {
+            Load(Llvm.LLVMGetOperand(instruction, 0));
+            Il.Emit(OpCodes.Ldloc, jumpFrame!);
+            Il.Emit(OpCodes.Ldc_I4, jump.Site);
+            if (name is "sigsetjmp" or "__sigsetjmp") Load(Llvm.LLVMGetOperand(instruction, 1));
+            else Il.Emit(OpCodes.Ldc_I4_0);
+            Il.Emit(OpCodes.Ldc_I4, Compiler.Host is null ? 0 : 1);
+            if (stackMemory is not null)
+            {
+                Il.Emit(OpCodes.Ldloc, stackMemory);
+                Il.Emit(OpCodes.Callvirt, typeof(StackMemory).GetMethod(nameof(StackMemory.Save))!);
+            }
+            else
+            {
+                Il.Emit(OpCodes.Ldc_I4_0);
+                Il.Emit(OpCodes.Conv_I);
+            }
+            Il.Emit(OpCodes.Call, typeof(NonLocalJumps).GetMethod(nameof(NonLocalJumps.Save))!);
+            return;
+        }
         if (name.StartsWith("llvm.", StringComparison.Ordinal))
         {
             Intrinsic(instruction, name);
@@ -554,24 +845,86 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         nint signature = Llvm.LLVMGetCalledFunctionType(instruction);
         bool discardReturn = false;
+        bool truncateBooleanReturn = false;
         if (Llvm.LLVMIsAFunction(target) != 0 && signature != Llvm.LLVMGlobalGetValueType(target))
         {
             nint definition = Llvm.LLVMGlobalGetValueType(target);
             uint arguments = Llvm.LLVMGetNumArgOperands(instruction);
             uint parameters = Llvm.LLVMCountParamTypes(definition);
+            if (Compiler.Host is not null && Compiler.TrapMissingArguments && parameters > arguments &&
+                Llvm.LLVMIsDeclaration(target) == 0 && Llvm.LLVMIsFunctionVarArg(definition) == 0 &&
+                TypeSystem.Kind(Llvm.LLVMGetReturnType(signature)) == 0 && TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) == 0)
+            {
+                string diagnostic = $"Invalid direct call with missing arguments: {Llvm.Name(function)} -> {name}: {Llvm.PrintType(signature)} versus {Llvm.PrintType(definition)}";
+                Console.Error.WriteLine($"llvmnet: emitting runtime trap: {diagnostic}");
+                Il.Emit(OpCodes.Ldstr, diagnostic);
+                Il.Emit(OpCodes.Newobj, typeof(InvalidProgramException).GetConstructor([typeof(string)])!);
+                Il.Emit(OpCodes.Throw);
+                return;
+            }
             discardReturn = TypeSystem.Kind(Llvm.LLVMGetReturnType(signature)) == 0 && TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) != 0;
+            bool unusedVoidReturn = TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) == 0 && Llvm.LLVMGetFirstUse(instruction) == 0;
+            truncateBooleanReturn = Compiler.Host is not null && Llvm.LLVMGetInstructionCallConv(instruction) == 0 && Llvm.LLVMGetFunctionCallConv(target) == 0 &&
+                TypeSystem.Kind(Llvm.LLVMGetReturnType(signature)) == 8 && TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) == 8 &&
+                (TypeSystem.Width(Llvm.LLVMGetReturnType(signature)) == 1 && TypeSystem.Width(Llvm.LLVMGetReturnType(definition)) == 8 ||
+                    TypeSystem.Width(Llvm.LLVMGetReturnType(signature)) == 8 && TypeSystem.Width(Llvm.LLVMGetReturnType(definition)) == 1);
             if (Llvm.LLVMIsFunctionVarArg(definition) != 0 || parameters > arguments ||
-                !discardReturn && Llvm.LLVMGetReturnType(definition) != Llvm.LLVMGetReturnType(signature) ||
-                Enumerable.Range(0, checked((int)parameters)).Any(index => Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, (uint)index)) != Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index))))
+                !discardReturn && !unusedVoidReturn && !truncateBooleanReturn && Llvm.LLVMGetReturnType(definition) != Llvm.LLVMGetReturnType(signature) ||
+                Enumerable.Range(0, checked((int)parameters)).Any(index => Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, (uint)index)) != Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index)) &&
+                    !SystemIntegerArgumentCompatible(instruction, target, (uint)index)))
                 throw new NotSupportedException($"Incompatible direct call signature for {name}: {Llvm.PrintType(signature)} versus {Llvm.PrintType(definition)}");
+            if (unusedVoidReturn) { locals.Remove(instruction); storedScalars.Remove(instruction); }
             signature = definition;
         }
         bool variadic = Llvm.LLVMIsFunctionVarArg(signature) != 0;
+        Label? legacyComplete = null;
+        if (variadic && Llvm.LLVMIsAFunction(target) == 0)
+        {
+            LocalBuilder fixedTarget = Il.DeclareLocal(typeof(nint));
+            Label variadicCall = Il.DefineLabel();
+            legacyComplete = Il.DefineLabel();
+            if (Compiler.Host is not null)
+            {
+                Label translated = Il.DefineLabel();
+                Load(target);
+                Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.IsNativeVariadic))!);
+                Il.Emit(OpCodes.Brfalse, translated);
+                for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
+                    Load(Llvm.LLVMGetOperand(instruction, index));
+                Load(target);
+                Il.Emit(OpCodes.Call, Compiler.Host.Resolve(0, instruction));
+                Il.Emit(OpCodes.Br, legacyComplete.Value);
+                Il.MarkLabel(translated);
+            }
+            Load(target);
+            Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.ResolveCallback))!);
+            Il.Emit(OpCodes.Stloc, fixedTarget);
+            Il.Emit(OpCodes.Ldloc, fixedTarget);
+            Il.Emit(OpCodes.Brfalse, variadicCall);
+            uint argumentCount = Llvm.LLVMGetNumArgOperands(instruction);
+            for (uint index = 0; index < argumentCount; index++)
+                Load(Llvm.LLVMGetOperand(instruction, index));
+            Il.Emit(OpCodes.Ldloc, fixedTarget);
+            Type[] parameters = Enumerable.Range(0, checked((int)argumentCount))
+                .Select(index => Types.Map(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index)))).ToArray();
+            ManagedCalli(Types.Map(Llvm.LLVMGetReturnType(signature)), parameters);
+            Il.Emit(OpCodes.Br, legacyComplete.Value);
+            Il.MarkLabel(variadicCall);
+        }
         if (variadic)
             varargs.Pack(instruction);
         uint count = variadic || Llvm.LLVMIsAFunction(target) != 0 ? Llvm.LLVMCountParamTypes(signature) : Llvm.LLVMGetNumArgOperands(instruction);
         for (uint index = 0; index < count; index++)
-            Load(Llvm.LLVMGetOperand(instruction, index));
+        {
+            nint argument = Llvm.LLVMGetOperand(instruction, index);
+            Load(argument);
+            if (!variadic && Llvm.LLVMIsAFunction(target) != 0 && Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, index)) != Llvm.LLVMTypeOf(argument))
+            {
+                nint parameter = Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, index));
+                Il.Emit(TypeSystem.Kind(parameter) == 12 ? OpCodes.Conv_I : TypeSystem.Width(parameter) == 64 ? OpCodes.Conv_U8 : OpCodes.Conv_I4);
+                Normalize(parameter);
+            }
+        }
         if (variadic)
             varargs.Load();
         if (Compiler.Methods.TryGetValue(target, out MethodInfo? callee))
@@ -586,15 +939,143 @@ internal sealed class FunctionEmitter : ValueEmitter
             if (Compiler.Host is not null && variadic)
                 Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.ResolveVariadicCallback))!);
             if (Compiler.Host is null || variadic)
-                Il.EmitCalli(OpCodes.Calli, CallingConventions.Standard, Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature), null);
+                ManagedCalli(Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
             else
-                Il.EmitCalli(OpCodes.Calli, System.Runtime.InteropServices.CallingConvention.Cdecl, Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
+            {
+                LocalBuilder managedTarget = Il.DeclareLocal(typeof(nint));
+                Label native = Il.DefineLabel();
+                Label complete = Il.DefineLabel();
+                Il.Emit(OpCodes.Dup);
+                Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.ResolveCallback))!);
+                Il.Emit(OpCodes.Stloc, managedTarget);
+                Il.Emit(OpCodes.Ldloc, managedTarget);
+                Il.Emit(OpCodes.Brfalse, native);
+                Il.Emit(OpCodes.Pop);
+                Il.Emit(OpCodes.Ldloc, managedTarget);
+                ManagedCalli(Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
+                Il.Emit(OpCodes.Br, complete);
+                Il.MarkLabel(native);
+                Type returnType = Types.Map(Llvm.LLVMGetReturnType(signature));
+                Type[] parameters = Types.Parameters(signature);
+                bool scalar(Type type) => type == typeof(void) || type == typeof(int) || type == typeof(long) || type == typeof(nint) || type == typeof(float) || type == typeof(double);
+                if (!scalar(returnType) || parameters.Any(type => !scalar(type)))
+                {
+                    for (int index = 0; index <= parameters.Length; index++) Il.Emit(OpCodes.Pop);
+                    Il.Emit(OpCodes.Ldstr, "Indirect native aggregate calls are not supported; compile the callback to bitcode.");
+                    Il.Emit(OpCodes.Newobj, typeof(NotSupportedException).GetConstructor([typeof(string)])!);
+                    Il.Emit(OpCodes.Throw);
+                }
+                else
+                    Il.EmitCalli(OpCodes.Calli, System.Runtime.InteropServices.CallingConvention.Cdecl, returnType, parameters);
+                Il.MarkLabel(complete);
+            }
         }
+        if (legacyComplete is Label completeLegacy) Il.MarkLabel(completeLegacy);
         if (discardReturn) Il.Emit(OpCodes.Pop);
+        if (truncateBooleanReturn) Normalize(Llvm.LLVMTypeOf(instruction));
+    }
+
+    private void ManagedCalli(Type returnType, Type[] parameters)
+    {
+        Compiler.ManagedCalli(Il, method, returnType, parameters);
+    }
+
+    private bool SystemIntegerArgumentCompatible(nint instruction, nint target, uint index)
+    {
+        nint source = Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, index));
+        nint destination = Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, index));
+        bool integerWidths = TypeSystem.Kind(source) == 8 && TypeSystem.Kind(destination) == 8 &&
+            (TypeSystem.Width(source) == 32 && TypeSystem.Width(destination) == 64 || TypeSystem.Width(source) == 64 && TypeSystem.Width(destination) == 32);
+        bool booleanWidths = TypeSystem.Kind(source) == 8 && TypeSystem.Kind(destination) == 8 &&
+            (TypeSystem.Width(source) == 1 && TypeSystem.Width(destination) == 8 || TypeSystem.Width(source) == 8 && TypeSystem.Width(destination) == 1);
+        bool pointerBits = TypeSystem.Kind(source) == 12 && TypeSystem.Kind(destination) == 8 && TypeSystem.Width(destination) == 64 ||
+            TypeSystem.Kind(source) == 8 && TypeSystem.Width(source) == 64 && TypeSystem.Kind(destination) == 12;
+        if (Compiler.Host is null || Llvm.LLVMGetInstructionCallConv(instruction) != 0 || Llvm.LLVMGetFunctionCallConv(target) != 0 ||
+            !(integerWidths || booleanWidths || pointerBits) || integerWidths && TypeSystem.Width(source) == 32 && index >= 6 ||
+            TypeSystem.Kind(Llvm.LLVMGetReturnType(Llvm.LLVMGlobalGetValueType(target))) is 10 or 11)
+            return false;
+        for (uint parameter = 0; parameter <= index; parameter++)
+        {
+            nint type = Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, parameter));
+            if (TypeSystem.Kind(type) is not (2 or 3 or 12) && !(TypeSystem.Kind(type) == 8 && TypeSystem.Width(type) <= 64)) return false;
+            foreach (string attribute in new[] { "byval", "sret", "inreg", "signext" })
+            {
+                uint kind = Llvm.LLVMGetEnumAttributeKindForName(attribute, (nuint)attribute.Length);
+                if (Llvm.LLVMGetEnumAttributeAtIndex(target, parameter + 1, kind) != 0 || Llvm.LLVMGetCallSiteEnumAttribute(instruction, parameter + 1, kind) != 0)
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool NativeCpuQuery(nint instruction, nint target, string assembly)
+    {
+        nint text = Llvm.LLVMGetInlineAsmConstraintString(target, out nuint length);
+        string constraints = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(text, checked((int)length))!;
+        int registers = 0;
+        int arguments = 0;
+        if (assembly == "movq\t%rbx, %rsi\n\tcpuid\n\txchgq\t%rbx, %rsi\n\t")
+        {
+            registers = 4;
+            arguments = constraints switch
+            {
+                "={ax},={si},={cx},={dx},{ax},~{dirflag},~{fpsr},~{flags}" => 1,
+                "={ax},={si},={cx},={dx},{ax},{cx},~{dirflag},~{fpsr},~{flags}" => 2,
+                _ => 0
+            };
+        }
+        else if (assembly == "xchg$(q$)\t$(%$)rbx, ${1:q}; cpuid; xchg$(q$)\t$(%$)rbx, ${1:q}" &&
+            constraints == "={ax},=&r,={cx},={dx},0,2,~{dirflag},~{fpsr},~{flags}")
+        {
+            registers = 4;
+            arguments = 2;
+        }
+        else if (assembly == ".byte 0x0f, 0x01, 0xd0" && constraints == "={ax},={dx},{cx},~{dirflag},~{fpsr},~{flags}")
+        {
+            registers = 2;
+            arguments = 1;
+        }
+        nint result = Llvm.LLVMTypeOf(instruction);
+        return arguments != 0 && Llvm.LLVMGetNumArgOperands(instruction) == arguments && TypeSystem.Kind(result) == 10 &&
+            Llvm.LLVMCountStructElementTypes(result) == registers &&
+            Enumerable.Range(0, registers).All(index => TypeSystem.Width(Llvm.LLVMStructGetTypeAtIndex(result, (uint)index)) == 32) &&
+            Enumerable.Range(0, arguments).All(index => TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index))) == 32);
     }
 
     private void Intrinsic(nint instruction, string name)
     {
+        if (name == "llvm.get.rounding")
+        {
+            Il.Emit(OpCodes.Ldc_I4, Compiler.Host is null ? 0 : 1);
+            Il.Emit(OpCodes.Call, typeof(CMath).GetMethod(nameof(CMath.GetRounding))!);
+            return;
+        }
+        if (name.StartsWith("llvm.threadlocal.address.", StringComparison.Ordinal))
+        {
+            Load(Llvm.LLVMGetOperand(instruction, 0));
+            return;
+        }
+        if (name.StartsWith("llvm.invariant.start.", StringComparison.Ordinal))
+        {
+            Zero(Llvm.LLVMTypeOf(instruction));
+            return;
+        }
+        if (name.StartsWith("llvm.invariant.end.", StringComparison.Ordinal))
+            return;
+        if (name.StartsWith("llvm.launder.invariant.group.", StringComparison.Ordinal) || name.StartsWith("llvm.strip.invariant.group.", StringComparison.Ordinal))
+        {
+            Load(Llvm.LLVMGetOperand(instruction, 0));
+            return;
+        }
+        if (name.StartsWith("llvm.stacksave", StringComparison.Ordinal) || name.StartsWith("llvm.stackrestore", StringComparison.Ordinal))
+        {
+            if (stackMemory is null) throw new NotSupportedException("Stack intrinsics require a scoped allocation frame.");
+            Il.Emit(OpCodes.Ldloc, stackMemory);
+            bool restore = name.StartsWith("llvm.stackrestore", StringComparison.Ordinal);
+            if (restore) Load(Llvm.LLVMGetOperand(instruction, 0));
+            Il.Emit(OpCodes.Callvirt, typeof(StackMemory).GetMethod(restore ? nameof(StackMemory.Restore) : nameof(StackMemory.Save))!);
+            return;
+        }
         if (name.StartsWith("llvm.ptrmask.", StringComparison.Ordinal))
         {
             Load(Llvm.LLVMGetOperand(instruction, 0));
@@ -637,7 +1118,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         if (name.StartsWith("llvm.va_end", StringComparison.Ordinal))
             return;
-        if (name.StartsWith("llvm.lifetime.", StringComparison.Ordinal) || name.StartsWith("llvm.dbg.", StringComparison.Ordinal) || name is "llvm.assume" or "llvm.experimental.noalias.scope.decl")
+        if (name.StartsWith("llvm.lifetime.", StringComparison.Ordinal) || name.StartsWith("llvm.dbg.", StringComparison.Ordinal) || name.StartsWith("llvm.prefetch.", StringComparison.Ordinal) || name is "llvm.assume" or "llvm.experimental.noalias.scope.decl")
             return;
         if (name is "llvm.trap" or "llvm.debugtrap")
         {
@@ -663,6 +1144,13 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         string operation = name.Split('.')[1];
         int width = TypeSystem.Width(Llvm.LLVMTypeOf(instruction));
+                if (operation == "bswap" && width > 64 && width <= 128 && width % 16 == 0)
+                {
+                    Load(Llvm.LLVMGetOperand(instruction, 0));
+                    Il.Emit(OpCodes.Ldc_I4, width);
+                    Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.ByteSwap))!);
+                    return;
+                }
         if (width > 64 && operation is "ctpop" or "ctlz" or "cttz")
         {
             Load(Llvm.LLVMGetOperand(instruction, 0));
@@ -695,30 +1183,33 @@ internal sealed class FunctionEmitter : ValueEmitter
             }
             return;
         }
-        if (operation == "frexp")
+        if (operation is "frexp" or "modf")
         {
             nint resultType = Llvm.LLVMTypeOf(instruction);
             (nint fractionType, long fractionOffset) = Types.Element(resultType, 0);
-            (nint exponentType, long exponentOffset) = Types.Element(resultType, 1);
-            if (TypeSystem.Kind(fractionType) is not (2 or 3) || TypeSystem.Width(exponentType) != 32)
-                throw new NotSupportedException($"Unsupported frexp result: {Llvm.PrintType(resultType)}");
+            (nint integralType, long integralOffset) = Types.Element(resultType, 1);
+            bool frexp = operation == "frexp";
+            if (TypeSystem.Kind(fractionType) is not (2 or 3) ||
+                (frexp ? TypeSystem.Width(integralType) != 32 : integralType != fractionType))
+                throw new NotSupportedException($"Unsupported {operation} result: {Llvm.PrintType(resultType)}");
             LocalBuilder result = Il.DeclareLocal(Types.Map(resultType));
-            LocalBuilder exponent = Il.DeclareLocal(typeof(int));
+            LocalBuilder integral = Il.DeclareLocal(frexp ? typeof(int) : typeof(double));
             Il.Emit(OpCodes.Ldloca, result);
             Il.Emit(OpCodes.Initobj, Types.Map(resultType));
             Il.Emit(OpCodes.Ldloca, result);
             Offset(fractionOffset);
             Load(Llvm.LLVMGetOperand(instruction, 0));
             Il.Emit(OpCodes.Conv_R8);
-            Il.Emit(OpCodes.Ldloca, exponent);
+            Il.Emit(OpCodes.Ldloca, integral);
             Il.Emit(OpCodes.Conv_I);
-            Il.Emit(OpCodes.Call, typeof(CMath).GetMethod(nameof(CMath.Frexp))!);
+            Il.Emit(OpCodes.Call, typeof(CMath).GetMethod(frexp ? nameof(CMath.Frexp) : nameof(CMath.Modf))!);
             if (TypeSystem.Kind(fractionType) == 2) Il.Emit(OpCodes.Conv_R4);
             StoreMemory(fractionType);
             Il.Emit(OpCodes.Ldloca, result);
-            Offset(exponentOffset);
-            Il.Emit(OpCodes.Ldloc, exponent);
-            StoreMemory(exponentType);
+            Offset(integralOffset);
+            Il.Emit(OpCodes.Ldloc, integral);
+            if (!frexp && TypeSystem.Kind(integralType) == 2) Il.Emit(OpCodes.Conv_R4);
+            StoreMemory(integralType);
             Il.Emit(OpCodes.Ldloc, result);
             return;
         }
@@ -742,7 +1233,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) == 4)
         {
-            string helper = operation switch { "fmuladd" or "fma" => nameof(Float80.FusedMultiplyAdd), "fabs" => nameof(Float80.Abs), _ => throw new NotSupportedException($"Unsupported extended floating intrinsic: {name}") };
+            string helper = operation switch { "fmuladd" or "fma" => nameof(Float80.FusedMultiplyAdd), "fabs" => nameof(Float80.Abs), "floor" => nameof(Float80.Floor), _ => throw new NotSupportedException($"Unsupported extended floating intrinsic: {name}") };
             for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
                 Load(Llvm.LLVMGetOperand(instruction, index));
             Il.Emit(OpCodes.Call, typeof(Float80).GetMethod(helper)!);
@@ -887,16 +1378,15 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         if (operation == "bswap")
         {
-            string prefix = operation switch
+            MethodInfo? helper = typeof(Numeric).GetMethod("ByteSwap" + width);
+            if (width == 48)
             {
-                "bswap" => "ByteSwap",
-                "ctpop" => "PopCount",
-                "ctlz" => "LeadingZeros",
-                "cttz" => "TrailingZeros",
-                "fshl" => "FunnelLeft",
-                _ => "FunnelRight"
-            };
-            MethodInfo? helper = typeof(Numeric).GetMethod(prefix + width);
+                Load(Llvm.LLVMGetOperand(instruction, 0));
+                Il.Emit(OpCodes.Call, typeof(Numeric).GetMethod(nameof(Numeric.ByteSwap64))!);
+                Il.Emit(OpCodes.Ldc_I4, 16);
+                Il.Emit(OpCodes.Shr_Un);
+                return;
+            }
             if (helper is null)
                 throw new NotSupportedException($"Unsupported intrinsic width: {name}");
             for (uint index = 0; index < helper.GetParameters().Length; index++)
@@ -973,6 +1463,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         string? mathName = operation switch
         {
             "fabs" => "Abs", "sqrt" => "Sqrt", "sin" => "Sin", "cos" => "Cos", "atan" => "Atan", "atan2" => "Atan2",
+            "asin" => "Asin", "acos" => "Acos", "tan" => "Tan",
             "sinh" => "Sinh", "cosh" => "Cosh", "tanh" => "Tanh",
             "exp" => "Exp", "exp2" => "Exp2", "log" => "Log", "log2" => "Log2", "log10" => "Log10",
             "pow" => "Pow", "floor" => "Floor", "ceil" => "Ceiling", "trunc" => "Truncate",

@@ -62,6 +62,8 @@ The complete `tests/all.sh spec-test` rerun also passed: 186.84 seconds native a
 
 The optimized benchmark-by-benchmark inventory and remaining failures are recorded in [spec-coverage.md](spec-coverage.md). It is distinct from the earlier selected manual runs below; attempted coverage is not full-suite success.
 
+The ordered follow-up completed all eight requested groups in system NativeAOT mode: 103 group entries covering all 101 distinct installed benchmarks. All rate runs use one copy; speed uses the four-thread harness setting with OpenMP or host DO CONCURRENT lowering where applicable. Kit-defined serial and multiprocess behavior is disclosed separately. Portable results remain 17 PASS / 86 FAIL across group entries, not complete portable compatibility. These are evolving-toolchain test-input results, not one final clean matrix, full parallel conformance, or SPEC scores. WRF explicitly traps an invalid missing-argument call path not exercised by the validated input. See the coverage document for counts, evidence and dependencies.
+
 These use one benchmark process, source/input archives from the supplied licensed media, and no reportable SPEC harness configuration. Original kits remain unchanged. No proprietary benchmark source or input is part of the tracked project.
 
 | Suite | Benchmark | Language | Validated Inputs |
@@ -75,7 +77,7 @@ These use one benchmark process, source/input archives from the supplied license
 
 mcf, deepsjeng, and exchange2 matched native and the supplied output artifacts. lbm matched native output exactly, with the native output checked against the benchmark's declared `1e-7` absolute tolerance. zstd completed its built-in compression/decompression verification; its timing text is not treated as deterministic reference output.
 
-The complete integer-rate suites, complete FP-rate suites, and integer/FP speed suites have not been validated. No SPEC performance scores are reported.
+Complete train/reference suites have not been validated. No SPEC performance scores are reported.
 
 ## Compiler Regression Coverage
 
@@ -88,13 +90,14 @@ Additional workload-driven checks cover legacy no-prototype calls, discarded ret
 ## Known Limits
 
 - Not a complete compiler-driver replacement: unsupported native-linker flags and unresolved symbols are errors.
-- No general `setjmp`/`longjmp`, LLVM dynamic stack save/restore, or computed-goto lowering yet.
-- No LLVM TLS global lowering yet, despite managed pthread key support.
+- Direct `setjmp` and translated `longjmp`, including dynamic allocation restoration, now work within translated frames. Cross-native-frame jumps, portable signal-mask saving, and computed-goto lowering remain unsupported.
+- Defined LLVM TLS globals have per-thread initialization and destructor cleanup through managed/native pthread adapters. External native TLS globals and arbitrary foreign-thread teardown remain unsupported.
 - General fixed-vector operations supported by LLVM reduction expansion/scalarization retain a scalar fallback. The opt-in SIMD128 source-header/helper path accelerates the tested HEVC subset, not arbitrary vector IR. Scalable vectors, direct target-specific vector intrinsics, complete masked-memory handling, binary128, and several wide-integer intrinsic families remain unsupported. Auto-vectorization is disabled by default. Baseline NativeAOT SIMD performance and cross-platform execution remain open.
 - The C runtime is a tested subset, not complete glibc/POSIX. Locale, wide-character I/O, hexadecimal/long-double printf/scanf, full signal/process behavior, and some filesystem metadata are incomplete.
-- C++ standard-library exports, exception pointer conversions, access/ambiguity corner cases, thread-local destruction, and complete library ABI coverage remain incomplete.
-- Fortran derived types/finalization, complex/quad runtime operations, all array transformations, nondefault floating environments, unformatted/direct I/O, and full formatted/list-directed editing remain incomplete.
-- OpenMP, MPI, and coarrays are not implemented. Speed/parallel benchmark coverage is therefore not claimed.
+- The optional system libstdc++ bitcode profile adds tested streams, locale facets, containers, threads, futures, OS-backed random_device, demangling and C++17 filesystem operations. System exception_ptr initialization, ownership and concurrent rethrows are tested; terminate-handler registration and invocation pass both ABIs. Portable libc++, access/ambiguity corner cases, and complete library ABI coverage remain incomplete; native invocation of translated aggregate/variadic callbacks is rejected.
+- Fortran default derived allocation/cleanup, restricted intrinsic assignment, namelist input/output, descriptor stacks, RECL/IOLENGTH, direct unformatted records, explicit exponent widths and array/model/environment inquiries are implemented and tested. Final procedures, defined I/O/assignment, general owned-component assignment, parameterized components, formatted direct access, segmented records, value stacks, quad operations and complete editing remain incomplete.
+- Large scalar methods and global initializers no longer require one CIL local or initialized-data field for every value. Aggregate-heavy and setjmp methods remain subject to CLR limits. Missing-argument calls are rejected by default; WRF's explicit trap mode provides no behavior for the invalid path.
+- An explicit system LLVM OpenMP dependency supports tested four-worker C regions and Flang host DO CONCURRENT lowering, with CPU 2017/2026 speed output validation. Portable OpenMP, full OpenMP/TLS lifetime conformance, offload, MPI and coarrays remain unsupported. Serial and kit-managed multiprocess entries are distinguished from worker-thread execution.
 - The explicit scalar P/Invoke option remains limited. System mode adds tested C aggregate/varargs/data/callback bridges, but native C++ linkage, arbitrary callback signatures, native TLS globals and full native-runtime lifecycle remain incomplete.
 
 Unsupported cases should remain visible diagnostics or explicit runtime errors, never silent native fallbacks or claims of successful emulation.

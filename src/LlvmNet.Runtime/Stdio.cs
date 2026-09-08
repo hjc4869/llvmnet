@@ -267,6 +267,20 @@ public static unsafe class Stdio
 
     [CExport("fseek"), CExport("fseeko"), CExport("fseeko64")]
     public static int Fseek(nint file, long offset, int origin) => Seek(Fileno(file), offset, origin) < 0 ? -1 : 0;
+    internal static int Truncate(int descriptor, long length)
+    {
+        if (!descriptors.TryGetValue(descriptor, out Entry? entry)) return ProcessRuntime.Error(9);
+        if (length < 0) return ProcessRuntime.Error(22);
+        try
+        {
+            entry.Stream.SetLength(length);
+            return 0;
+        }
+        catch (Exception error) when (error is IOException or NotSupportedException or ObjectDisposedException or UnauthorizedAccessException)
+        {
+            return error is NotSupportedException ? ProcessRuntime.Error(22) : Error(error);
+        }
+    }
     [CExport("ftell"), CExport("ftello"), CExport("ftello64")]
     public static long Ftell(nint file)
     {

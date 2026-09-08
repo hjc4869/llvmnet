@@ -13,5 +13,11 @@ int main(void)
     if (fabsf(atanf(single) + 1.19028994968f) > 1e-6f) return 6;
     errno = 0;
     if (!isnan(sqrt(negative)) || errno != EDOM) return 7;
+    double integral;
+    float integral_single;
+    if (modf(value, &integral) != 0.5 || integral != 2) return 8;
+    if (modff(single, &integral_single) != -0.5f || integral_single != -2) return 9;
+    double fraction = modf(-INFINITY, &integral);
+    if (fraction != 0 || !signbit(fraction) || !isinf(integral) || !signbit(integral)) return 10;
     return 0;
 }

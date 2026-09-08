@@ -4,11 +4,20 @@ using System.Text;
 
 namespace LlvmNet.Runtime;
 
-public static unsafe class FortranIO
+public static unsafe partial class FortranIO
 {
     private sealed record Unit(nint File, string? Path, bool Owned)
     {
         internal bool AfterEndfile;
+        internal bool Scratch;
+        internal bool Unformatted;
+        internal bool Stream;
+        internal bool Direct;
+        internal bool Swap;
+        internal string Action = "READWRITE";
+        internal string Delimiter = "none";
+        internal long? RecordLength;
+        internal long OutputColumn;
     }
     private sealed class Statement(string operation, int unit, string? format = null)
     {
@@ -18,13 +27,21 @@ public static unsafe class FortranIO
         internal readonly StringBuilder Output = new();
         internal string? Input;
         internal int Cursor;
+        internal int RecordStart;
         internal int Edit;
+        internal bool LastListCharacter;
         internal bool Plus;
         internal int Scale;
         internal bool Handled;
         internal int Error;
+        internal long? RecordLength;
+        internal long IoLength;
+        internal long? RecordNumber;
         internal nint Internal;
         internal long InternalLength;
+        internal MemoryStream? BinaryOutput;
+        internal byte[]? BinaryInput;
+        internal int BinaryCursor;
         internal readonly Dictionary<string, string> Options = new(StringComparer.Ordinal);
     }
     private static readonly Dictionary<int, Unit> units = new()
@@ -34,6 +51,14 @@ public static unsafe class FortranIO
         [0] = new Unit(*(nint*)Stdio.Global("stderr"), null, false)
     };
     private static int nextUnit = -10;
+    private static string defaultConversion = "native";
+    internal static void SetDefaultConversion(string conversion)
+    {
+        string value = conversion.Trim().ToLowerInvariant();
+        if (value is not ("native" or "little_endian" or "big_endian" or "swap"))
+            throw new NotSupportedException($"Fortran FORT_CONVERT mode {conversion} is not implemented.");
+        defaultConversion = value;
+    }
     private static Statement Get(nint cookie) => (Statement)GCHandle.FromIntPtr(cookie).Target!;
     private static nint New(Statement statement) => GCHandle.ToIntPtr(GCHandle.Alloc(statement));
     private static string Text(nint text, long length) => Encoding.UTF8.GetString(new ReadOnlySpan<byte>((void*)text, checked((int)length)));
@@ -69,10 +94,22 @@ public static unsafe class FortranIO
     public static nint Rewind(int unit, nint source, int line) => New(new Statement("rewind", unit));
     [CExport("_FortranAioBeginBackspace")]
     public static nint Backspace(int unit, nint source, int line) => New(new Statement("backspace", unit));
+    [CExport("_FortranAioBeginEndfile")]
+    public static nint Endfile(int unit, nint source, int line) => New(new Statement("endfile", unit));
     [CExport("_FortranAioBeginFlush")]
     public static nint Flush(int unit, nint source, int line) => New(new Statement("flush", unit));
     [CExport("_FortranAioEnableHandlers")]
     public static void EnableHandlers(nint cookie, int status, int error, int end, int endRecord, int message) => Get(cookie).Handled = status != 0 || error != 0 || end != 0 || endRecord != 0;
+    [CExport("_FortranAioGetIoMsg")]
+    public static void GetIoMessage(nint cookie, nint destination, long length)
+    {
+        Statement state = Get(cookie);
+        if (state.Error == 0) return;
+        string message = state.Options.GetValueOrDefault("iomsg", state.Error == -1 ? "End of file" : $"Fortran {state.Operation} failed with IOSTAT={state.Error}.");
+        byte[] bytes = Encoding.UTF8.GetBytes(message);
+        NativeMemory.Fill((void*)destination, checked((nuint)length), (byte)' ');
+        bytes.AsSpan(0, checked((int)Math.Min(bytes.Length, length))).CopyTo(new Span<byte>((void*)destination, checked((int)length)));
+    }
     private static int Option(nint cookie, string key, nint value, long length)
     {
         Get(cookie).Options[key] = Text(value, length).TrimEnd();
@@ -84,6 +121,52 @@ public static unsafe class FortranIO
     [CExport("_FortranAioSetPosition")] public static int SetPosition(nint cookie, nint value, long length) => Option(cookie, "position", value, length);
     [CExport("_FortranAioSetAccess")] public static int SetAccess(nint cookie, nint value, long length) => Option(cookie, "access", value, length);
     [CExport("_FortranAioSetForm")] public static int SetForm(nint cookie, nint value, long length) => Option(cookie, "form", value, length);
+    [CExport("_FortranAioSetRecl")]
+    public static int SetRecordLength(nint cookie, long length)
+    {
+        Statement state = Get(cookie);
+        if (length <= 0) { state.Error = 1003; return 0; }
+        state.RecordLength = length;
+        return 1;
+    }
+    [CExport("_FortranAioSetRec")]
+    public static int SetRecord(nint cookie, long record)
+    {
+        Statement state = Get(cookie);
+        if (state.Error != 0) return 0;
+        if (record <= 0 || !units.TryGetValue(state.Unit, out Unit? unit) || !unit.Direct || unit.RecordLength is not long length ||
+            state.Operation is not ("read-unformatted" or "write-unformatted"))
+        {
+            state.Error = 1003;
+            return 0;
+        }
+        try { state.Error = Stdio.Fseek(unit.File, checked((record - 1) * length), 0); }
+        catch (OverflowException) { state.Error = 1003; }
+        if (state.Error != 0) return 0;
+        state.RecordNumber = record;
+        return 1;
+    }
+    [CExport("_FortranAioSetDelim")]
+    public static int SetDelimiter(nint cookie, nint value, long length)
+    {
+        Statement state = Get(cookie);
+        string delimiter = Text(value, length).Trim().ToLowerInvariant();
+        if (delimiter is not ("none" or "apostrophe" or "quote")) { state.Error = 1003; return 0; }
+        state.Options["delim"] = delimiter;
+        return 1;
+    }
+    [CExport("_FortranAioSetConvert")] public static int SetConvert(nint cookie, nint value, long length) => Option(cookie, "convert", value, length);
+    [CExport("_FortranAioSetAdvance")]
+    public static int SetAdvance(nint cookie, nint value, long length)
+    {
+        Statement state = Get(cookie);
+        string advance = Text(value, length).Trim().ToLowerInvariant();
+        if (advance is not ("yes" or "no")) { state.Error = 1003; return 0; }
+        if (advance == "no" && state.Operation != "write")
+            throw new NotSupportedException("Non-advancing Fortran input is not implemented.");
+        state.Options["advance"] = advance;
+        return 1;
+    }
     [CExport("_FortranAioGetNewUnit")]
     public static int GetNewUnit(nint cookie, nint destination, int kind)
     {
@@ -98,8 +181,8 @@ public static unsafe class FortranIO
         {
             case "literal": if (state.Operation == "write") Put(state, edit.Text); else state.Cursor += edit.Text.Length; return true;
             case "X": if (state.Operation == "write") Put(state, new string(' ', edit.Width)); else state.Cursor += edit.Width; return true;
-            case "T": state.Cursor = Math.Max(0, edit.Width - 1); return true;
-            case "TL": state.Cursor = Math.Max(0, state.Cursor - edit.Width); return true;
+            case "T": state.Cursor = state.RecordStart + Math.Max(0, edit.Width - 1); return true;
+            case "TL": state.Cursor = Math.Max(state.RecordStart, state.Cursor - edit.Width); return true;
             case "TR": state.Cursor += edit.Width; return true;
             case "P": state.Scale = edit.Width; return true;
             case "SP": state.Plus = true; return true;
@@ -143,12 +226,15 @@ public static unsafe class FortranIO
         if (replace > 0) state.Output.Remove(state.Cursor, replace);
         state.Output.Insert(state.Cursor, text);
         state.Cursor += text.Length;
+        int lastNewline = text.LastIndexOf('\n');
+        if (lastNewline >= 0) state.RecordStart = state.Cursor - text.Length + lastNewline + 1;
     }
     private static int OutputInteger(nint cookie, long value)
     {
         Statement state = Get(cookie);
         FortranEdit? edit = Next(state);
         Put(state, edit is null ? " " + value.ToString(CultureInfo.InvariantCulture) : FortranFormat.Integer(value, edit, state.Plus));
+        state.LastListCharacter = false;
         return state.Error == 0 ? 1 : 0;
     }
     [CExport("_FortranAioOutputInteger8")] public static int Integer8(nint cookie, int value) => OutputInteger(cookie, (sbyte)value);
@@ -162,6 +248,7 @@ public static unsafe class FortranIO
         Statement state = Get(cookie);
         FortranEdit? edit = Next(state);
         Put(state, edit is null ? " " + value.ToString("G17", CultureInfo.InvariantCulture) : FortranFormat.Real(value, edit, state.Plus, state.Scale));
+        state.LastListCharacter = false;
         return state.Error == 0 ? 1 : 0;
     }
     [CExport("_FortranAioOutputAscii")]
@@ -170,7 +257,11 @@ public static unsafe class FortranIO
         Statement state = Get(cookie);
         FortranEdit? edit = Next(state);
         string value = Text(text, length);
-        if (edit is null) Put(state, " " + value);
+        if (edit is null)
+        {
+            Put(state, (state.LastListCharacter ? "" : " ") + value);
+            state.LastListCharacter = true;
+        }
         else if (edit.Kind == "A") Put(state, edit.Width == 0 ? value : value.Length > edit.Width ? value[..edit.Width] : value.PadLeft(edit.Width));
         else throw new FormatException("Character value paired with non-character Fortran format.");
         return state.Error == 0 ? 1 : 0;
@@ -181,11 +272,21 @@ public static unsafe class FortranIO
         Statement state = Get(cookie);
         FortranEdit? edit = Next(state);
         Put(state, edit is null ? value != 0 ? " T" : " F" : FortranFormat.Field(value != 0 ? "T" : "F", edit.Width));
+        state.LastListCharacter = false;
         return 1;
     }
     [CExport("_FortranAioOutputDescriptor")]
     public static int OutputDescriptor(nint cookie, nint descriptor)
     {
+        if (Get(cookie).Operation == "inquire-length")
+        {
+            var value = new FortranDescriptor(descriptor);
+            if (value.Type == 42) return TransferDerivedType(cookie, descriptor, 0, true);
+            Statement state = Get(cookie);
+            state.IoLength = checked(state.IoLength + value.Elements * value.ElementBytes);
+            return 1;
+        }
+        if (Get(cookie).Operation == "write-unformatted") return TransferUnformatted(Get(cookie), new FortranDescriptor(descriptor), true);
         var array = new FortranDescriptor(descriptor);
         for (long index = 0; index < array.Elements; index++)
         {
@@ -193,6 +294,19 @@ public static unsafe class FortranIO
             if (array.Type == 40) Ascii(cookie, address, array.ElementBytes);
             else if (array.Type == 27) Real32(cookie, *(float*)address);
             else if (array.Type == 28) Real64(cookie, *(double*)address);
+            else if (array.Type is 34 or 35)
+            {
+                double real = array.Type == 34 ? *(float*)address : *(double*)address;
+                double imaginary = array.Type == 34 ? *(float*)(address + 4) : *(double*)(address + 8);
+                Statement state = Get(cookie);
+                if (state.Format is null)
+                {
+                    Put(state, " (" + real.ToString("G17", CultureInfo.InvariantCulture) + "," + imaginary.ToString("G17", CultureInfo.InvariantCulture) + ")");
+                    state.LastListCharacter = false;
+                }
+                else { OutputReal(cookie, real); OutputReal(cookie, imaginary); }
+            }
+            else if (array.Type is >= 12 and <= 16 or 39) Logical(cookie, array.Logical(index) ? 1 : 0);
             else if (array.Type is >= 1 and <= 24)
             {
                 long value = array.ElementBytes switch { 1 => *(sbyte*)address, 2 => *(short*)address, 4 => *(int*)address, 8 => *(long*)address, _ => throw new NotSupportedException("Fortran integer output kind.") };
@@ -267,6 +381,23 @@ public static unsafe class FortranIO
         }
         return 1;
     }
+    [CExport("_FortranAioInputLogical")]
+    public static int InputLogical(nint cookie, nint destination) => ReadLogical(cookie, destination, 1);
+    private static int ReadLogical(nint cookie, nint destination, long bytes)
+    {
+        Statement state = Get(cookie);
+        string? token = InputToken(state)?.TrimStart();
+        if (token is null) return 0;
+        if (token.StartsWith('.')) token = token[1..];
+        if (token.Length == 0 || char.ToUpperInvariant(token[0]) is not ('T' or 'F'))
+        {
+            state.Error = 1003;
+            return 0;
+        }
+        NativeMemory.Clear((void*)destination, checked((nuint)bytes));
+        if (char.ToUpperInvariant(token[0]) == 'T') *(byte*)destination = 1;
+        return 1;
+    }
     [CExport("_FortranAioInputReal64")]
     public static int InputReal64(nint cookie, nint destination) => InputReal(cookie, destination, false);
     [CExport("_FortranAioInputReal32")]
@@ -296,6 +427,7 @@ public static unsafe class FortranIO
     [CExport("_FortranAioInputDescriptor")]
     public static int InputDescriptor(nint cookie, nint descriptor)
     {
+        if (Get(cookie).Operation == "read-unformatted") return TransferUnformatted(Get(cookie), new FortranDescriptor(descriptor), false);
         var array = new FortranDescriptor(descriptor);
         for (long index = 0; index < array.Elements; index++)
         {
@@ -305,6 +437,9 @@ public static unsafe class FortranIO
                 40 => InputAscii(cookie, address, array.ElementBytes),
                 27 => InputReal32(cookie, address),
                 28 => InputReal64(cookie, address),
+                34 or 35 when Get(cookie).Format is not null =>
+                    InputReal(cookie, address, array.Type == 34) & InputReal(cookie, address + (nint)(array.ElementBytes / 2), array.Type == 34),
+                >= 12 and <= 16 or 39 => ReadLogical(cookie, address, array.ElementBytes),
                 >= 1 and <= 24 => InputInteger(cookie, address, checked((int)array.ElementBytes)),
                 _ => throw new NotSupportedException($"Fortran input descriptor type {array.Type}")
             };
@@ -321,6 +456,12 @@ public static unsafe class FortranIO
         {
             switch (state.Operation)
             {
+                case "read": ReadRecord(state); break;
+                case "read-unformatted":
+                    if (units.TryGetValue(state.Unit, out Unit? input) && input.Direct && state.RecordNumber is null && state.Error == 0)
+                        state.Error = 1003;
+                    break;
+                case "write-unformatted": EndUnformatted(state); break;
                 case "write":
                     if (state.Format is not null)
                         while (state.Edit < state.Format.Count && state.Format[state.Edit].Kind != ":" && Control(state, state.Format[state.Edit])) state.Edit++;
@@ -336,29 +477,56 @@ public static unsafe class FortranIO
                     }
                     else if (units.TryGetValue(state.Unit, out Unit? output))
                     {
+                        long column = output.OutputColumn;
+                        foreach (byte character in bytes)
+                        {
+                            column = character == '\n' ? 0 : checked(column + 1);
+                            if (output.RecordLength is long maximum && column > maximum) { state.Error = 1001; break; }
+                        }
+                        if (state.Error != 0) break;
                         fixed (byte* pointer = bytes)
                             if (Stdio.Write(Stdio.Fileno(output.File), (nint)pointer, bytes.Length) < 0) state.Error = 1002;
-                        Stdio.Putc('\n', output.File);
+                        if (state.Options.GetValueOrDefault("advance", "yes") != "no")
+                        {
+                            Stdio.Putc('\n', output.File);
+                            column = 0;
+                        }
+                        output.OutputColumn = column;
                     }
                     else state.Error = 1002;
                     break;
                 case "open": Open(state); break;
                 case "close":
+                    if (units.TryGetValue(state.Unit, out Unit? connected) && connected.Scratch && state.Options.GetValueOrDefault("status", "delete").Equals("keep", StringComparison.OrdinalIgnoreCase))
+                    {
+                        state.Error = 1002;
+                        break;
+                    }
                     if (units.Remove(state.Unit, out Unit? closing))
                     {
                         if (closing.Owned) Stdio.Fclose(closing.File);
-                        if (state.Options.GetValueOrDefault("status", "keep").Equals("delete", StringComparison.OrdinalIgnoreCase) && closing.Path is not null) File.Delete(closing.Path);
+                        if ((closing.Scratch || state.Options.GetValueOrDefault("status", "keep").Equals("delete", StringComparison.OrdinalIgnoreCase)) && closing.Path is not null) File.Delete(closing.Path);
                     }
                     break;
                 case "rewind":
                     if (units.TryGetValue(state.Unit, out Unit? rewind))
                     {
+                        if (rewind.Direct) { state.Error = 1002; break; }
                         state.Error = Stdio.Fseek(rewind.File, 0, 0);
-                        if (state.Error == 0) { rewind.AfterEndfile = false; Stdio.Clearerr(rewind.File); }
+                        if (state.Error == 0) { rewind.AfterEndfile = false; rewind.OutputColumn = 0; Stdio.Clearerr(rewind.File); }
                     }
                     else state.Error = 1002;
                     break;
                 case "backspace": BackspaceRecord(state); break;
+                case "endfile":
+                    if (units.TryGetValue(state.Unit, out Unit? ending))
+                    {
+                        if (ending.Direct) { state.Error = 1002; break; }
+                        state.Error = Stdio.Truncate(Stdio.Fileno(ending.File), Stdio.Ftell(ending.File));
+                        if (state.Error == 0) { ending.AfterEndfile = !ending.Stream; Stdio.Clearerr(ending.File); }
+                    }
+                    else state.Error = 1002;
+                    break;
                 case "flush":
                     if (units.TryGetValue(state.Unit, out Unit? flush)) state.Error = Stdio.Flush(flush.File);
                     else state.Error = 1002;
@@ -367,12 +535,13 @@ public static unsafe class FortranIO
             if (state.Error != 0 && !state.Handled) throw new IOException($"Fortran {state.Operation} failed with IOSTAT={state.Error} on unit {state.Unit}.");
             return state.Error;
         }
-        finally { GCHandle.FromIntPtr(cookie).Free(); }
+        finally { state.BinaryOutput?.Dispose(); GCHandle.FromIntPtr(cookie).Free(); }
     }
 
     private static void BackspaceRecord(Statement state)
     {
         if (!units.TryGetValue(state.Unit, out Unit? unit)) { state.Error = 1002; return; }
+        if (unit.Direct) { state.Error = 1002; return; }
         if (unit.AfterEndfile)
         {
             unit.AfterEndfile = false;
@@ -381,6 +550,11 @@ public static unsafe class FortranIO
         }
         long position = Stdio.Ftell(unit.File);
         if (position < 0) { state.Error = 1002; return; }
+        if (unit.Unformatted)
+        {
+            BackspaceUnformatted(state, unit, position);
+            return;
+        }
         long cursor = position - 1;
         while (cursor >= 0)
         {
@@ -396,22 +570,41 @@ public static unsafe class FortranIO
 
     private static void Open(Statement state)
     {
+        if (state.Error != 0) return;
         string path = state.Options.GetValueOrDefault("file", $"fort.{state.Unit}");
         string disposition = state.Options.GetValueOrDefault("status", "unknown").ToLowerInvariant();
         string action = state.Options.GetValueOrDefault("action", "readwrite").ToLowerInvariant();
-        if (state.Options.GetValueOrDefault("form", "formatted").ToLowerInvariant() != "formatted" || state.Options.GetValueOrDefault("access", "sequential").ToLowerInvariant() != "sequential")
-            throw new NotSupportedException("Only sequential formatted Fortran units are implemented.");
+        string access = state.Options.GetValueOrDefault("access", "sequential").ToLowerInvariant();
+        string form = state.Options.GetValueOrDefault("form", access == "sequential" ? "formatted" : "unformatted").ToLowerInvariant();
+        string conversion = state.Options.GetValueOrDefault("convert", defaultConversion).ToLowerInvariant();
+        if (access is not ("sequential" or "stream" or "direct") || form is not ("formatted" or "unformatted") || form == "formatted" && access != "sequential")
+            throw new NotSupportedException("Only sequential formatted and sequential/stream/direct unformatted Fortran units are implemented.");
+        if (access == "direct" && state.RecordLength is null || access == "stream" && state.RecordLength is not null) { state.Error = 1003; return; }
+        if (conversion is not ("native" or "little_endian" or "big_endian" or "swap"))
+            throw new NotSupportedException($"Fortran byte conversion mode {conversion} is not implemented.");
         if (disposition == "old" && !File.Exists(path) || disposition == "new" && File.Exists(path)) { state.Error = 1002; return; }
+        bool scratch = disposition == "scratch";
+        if (scratch && state.Options.ContainsKey("file")) { state.Error = 1002; return; }
+        if (scratch) path = Path.GetTempFileName();
         string mode = action == "read" ? "r" : disposition == "replace" || !File.Exists(path) ? "w+" : "r+";
         nint pathPointer = Marshal.StringToCoTaskMemUTF8(path);
         nint modePointer = Marshal.StringToCoTaskMemUTF8(mode);
         try
         {
             nint file = Stdio.Fopen(pathPointer, modePointer);
-            if (file == 0) { state.Error = *(int*)ProcessRuntime.ErrnoLocation(); return; }
+            if (file == 0)
+            {
+                state.Error = *(int*)ProcessRuntime.ErrnoLocation();
+                if (scratch) File.Delete(path);
+                return;
+            }
             if (state.Options.GetValueOrDefault("position", "asis").Equals("append", StringComparison.OrdinalIgnoreCase)) Stdio.Fseek(file, 0, 2);
-            if (units.Remove(state.Unit, out Unit? previous) && previous.Owned) Stdio.Fclose(previous.File);
-            units[state.Unit] = new Unit(file, path, true);
+            if (units.Remove(state.Unit, out Unit? previous) && previous.Owned)
+            {
+                Stdio.Fclose(previous.File);
+                if (previous.Scratch && previous.Path is not null) File.Delete(previous.Path);
+            }
+            units[state.Unit] = new Unit(file, path, true) { Scratch = scratch, Unformatted = form == "unformatted", Stream = access == "stream", Direct = access == "direct", Swap = conversion is "big_endian" or "swap", Action = action.ToUpperInvariant(), Delimiter = state.Options.GetValueOrDefault("delim", "none"), RecordLength = state.RecordLength };
         }
         finally { Marshal.FreeCoTaskMem(pathPointer); Marshal.FreeCoTaskMem(modePointer); }
     }

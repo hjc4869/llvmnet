@@ -9,6 +9,7 @@ internal sealed class CompilerOptions
     internal bool Verbose { get; set; }
     internal bool NativeAot { get; set; }
     internal bool Simd128 { get; set; }
+    internal bool TrapMissingArguments { get; set; }
     internal string AbiTag => Runtime switch { "system" => "system-linux-x64-v1", "portable" => "dotnet64-v1", _ => "managed-host-v1" };
     internal List<string> SystemLibraries { get; } = [];
     internal Dictionary<string, NativeImport> NativeImports { get; } = new(StringComparer.Ordinal);
@@ -45,6 +46,7 @@ internal static class Driver
                 "  --system-library <file>  Additional native library in system ABI mode",
                 "  --runtime <mode>         system, portable, or managed-host (legacy default)",
                 "  --simd128                Enable architecture-neutral SIMD128 helper calls",
+                "  --trap-missing-arguments Trap invalid void calls with missing arguments (system only)",
                 "  --emit-llvm              Stop after LLVM linking",
                 "  --keep-ir <file>         Preserve linked LLVM bitcode",
                 "  --nativeaot              Publish a self-contained NativeAOT executable",
@@ -94,6 +96,7 @@ internal static class Driver
                 case "--system-library": options.SystemLibraries.Add(Next()); break;
                 case "--nativeaot": nativeAot = true; break;
                 case "--simd128": options.Simd128 = true; break;
+                case "--trap-missing-arguments": options.TrapMissingArguments = true; break;
                 case "--aot-debug": aotDebug = true; break;
                 case "--runtime-id": runtimeId = Next(); break;
                 case "--aot-instruction-set":
@@ -153,6 +156,7 @@ internal static class Driver
         if (options.Runtime == "portable" && options.NativeImports.Count != 0)
             throw new ArgumentException("Portable ABI mode cannot contain native imports; use a managed CIL reference or --runtime=system.");
         if (options.Runtime != "system" && options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
+        if (options.Runtime != "system" && options.TrapMissingArguments) throw new ArgumentException("--trap-missing-arguments requires --runtime=system.");
         if (options.Runtime == "system" && runtimeId is not null && runtimeId != "linux-x64")
             throw new ArgumentException("The current system ABI profile requires NativeAOT RID linux-x64.");
         if (linkerVersion)
@@ -251,6 +255,9 @@ internal static class Driver
                 return 0;
             }
             string lowered = Path.Combine(temporary, "lowered.bc");
+            using (var prepared = new LlvmModule(linked))
+                if (Llvm.WrapVectorInvokes(prepared.Handle) != 0 && Llvm.LLVMWriteBitcodeToFile(prepared.Handle, linked) != 0)
+                    throw new IOException("Cannot write vector-invoke legalization.");
             string scalarizer = options.Simd128 ? "scalarizer" : "scalarizer<load-store>";
             string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(expand-reductions,{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];

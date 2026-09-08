@@ -7,6 +7,21 @@ public static unsafe class SystemAbi
 {
     private static readonly ConcurrentDictionary<string, nint> libraries = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<nint, nint> variadicCallbacks = new();
+    private static readonly ConcurrentDictionary<nint, nint> managedCallbacks = new();
+    private static readonly ConcurrentDictionary<nint, byte> nativeVariadicFunctions = new();
+    public static nint RegisterNativeVariadic(nint pointer)
+    {
+        nativeVariadicFunctions.TryAdd(pointer, 0);
+        return pointer;
+    }
+    public static int IsNativeVariadic(nint pointer) => nativeVariadicFunctions.ContainsKey(pointer) ? 1 : 0;
+    public static nint RegisterCallback(nint identity, nint target)
+    {
+        if (managedCallbacks.GetOrAdd(identity, target) != target)
+            throw new InvalidOperationException("Conflicting managed callback identity.");
+        return identity;
+    }
+    public static nint ResolveCallback(nint identity) => managedCallbacks.GetValueOrDefault(identity);
     public static nint RegisterVariadicCallback(nint identity, nint target)
     {
         if (variadicCallbacks.GetOrAdd(identity, target) != target)
@@ -30,5 +45,10 @@ public static unsafe class SystemAbi
     {
         var fflush = (delegate* unmanaged[Cdecl]<nint, int>)Symbol("libc.so.6", "fflush");
         fflush(0);
+    }
+    public static void DebugTrap()
+    {
+        var raise = (delegate* unmanaged[Cdecl]<int, int>)Symbol("libc.so.6", "raise");
+        raise(5);
     }
 }

@@ -29,7 +29,7 @@ internal sealed class HostInterop : IDisposable
         this.output = output;
         LibraryName = "lib" + Path.GetFileNameWithoutExtension(output) + ".llvmnet-host.so";
         shim = Llvm.CreateNativeShim(module);
-        foreach (string library in options.SystemLibraries.Concat(new[] { "libm.so.6", "libc.so.6" }).Distinct())
+        foreach (string library in options.SystemLibraries.Concat(new[] { "libm.so.6", "libc.so.6", "libgcc_s.so.1" }).Distinct())
         {
             if (!NativeLibrary.TryLoad(library, out nint handle))
                 throw new DllNotFoundException($"Cannot load system link library {library} on the compiler host.");
@@ -52,6 +52,9 @@ internal sealed class HostInterop : IDisposable
             "pthread_create" => typeof(SystemThreads).GetMethod(nameof(SystemThreads.Create)),
             "pthread_key_create" => typeof(SystemThreads).GetMethod(nameof(SystemThreads.KeyCreate)),
             "pthread_key_delete" => typeof(SystemThreads).GetMethod(nameof(SystemThreads.KeyDelete)),
+            "longjmp" or "_longjmp" or "siglongjmp" or "__longjmp_chk" => typeof(NonLocalJumps).GetMethod(nameof(NonLocalJumps.Jump)),
+            "__dynamic_cast" => typeof(Cxx).GetMethod(nameof(Cxx.DynamicCast)),
+            "atexit" => typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.AtExit)),
             _ => null
             };
 
@@ -64,22 +67,25 @@ internal sealed class HostInterop : IDisposable
 
     internal MethodInfo Resolve(nint function, nint call = 0)
     {
-        string symbol = Llvm.Name(function);
+        bool indirect = function == 0;
+        bool assembly = indirect && Llvm.LLVMIsAInlineAsm(Llvm.LLVMGetCalledValue(call)) != 0;
+        string symbol = assembly ? "assembly:" + Llvm.Print(Llvm.LLVMGetCalledValue(call)) : indirect ? "indirect" : Llvm.Name(function);
         if (symbol.StartsWith("_Z", StringComparison.Ordinal) || symbol.StartsWith("__cxa_", StringComparison.Ordinal))
             throw new NotSupportedException("Native C++ ABI imports are not supported; provide a C wrapper or compile the C++ implementation to bitcode.");
-        LibraryFor(symbol);
-        nint signature = Llvm.LLVMGlobalGetValueType(function);
+        if (!indirect) LibraryFor(symbol);
+        nint signature = indirect ? Llvm.LLVMGetCalledFunctionType(call) : Llvm.LLVMGlobalGetValueType(function);
         if (call == 0 && Llvm.LLVMIsFunctionVarArg(signature) != 0)
             throw new NotSupportedException($"Taking the address of native variadic function {symbol} is not implemented.");
         nint[] parameters = call == 0
             ? Enumerable.Range(0, (int)Llvm.LLVMCountParams(function)).Select(index => Llvm.LLVMTypeOf(Llvm.LLVMGetParam(function, (uint)index))).ToArray()
             : Enumerable.Range(0, (int)Llvm.LLVMGetNumArgOperands(call)).Select(index => Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(call, (uint)index))).ToArray();
-        string key = symbol + ":" + string.Join(",", parameters.Select(Llvm.PrintType));
+        if (indirect && !assembly) parameters = [.. parameters, Llvm.LLVMTypeOf(Llvm.LLVMGetCalledValue(call))];
+        string key = symbol + ":" + Llvm.PrintType(signature) + ":" + string.Join(",", parameters.Select(Llvm.PrintType));
         if (wrappers.TryGetValue(key, out MethodInfo? cached)) return cached;
         string exportName = "llvmnet_host_" + wrappers.Count;
         Llvm.AddNativeThunk(shim, function, call, exportName);
         Type returnType = compiler.Types.Map(Llvm.LLVMGetReturnType(signature));
-        MethodBuilder wrapper = compiler.Program.DefineMethod("__host_" + wrappers.Count + "_" + symbol,
+        MethodBuilder wrapper = compiler.Program.DefineMethod("__host_" + wrappers.Count + "_" + (assembly ? "assembly" : symbol),
             MethodAttributes.Private | MethodAttributes.Static, returnType, parameters.Select(compiler.Types.Map).ToArray());
         MethodBuilder native = compiler.Program.DefinePInvokeMethod(exportName, LibraryName, exportName,
             MethodAttributes.Private | MethodAttributes.Static | MethodAttributes.PinvokeImpl, CallingConventions.Standard,
@@ -127,18 +133,18 @@ internal sealed class HostInterop : IDisposable
         Type result = compiler.Types.Map(Llvm.LLVMGetReturnType(signature));
         bool variadic = Llvm.LLVMIsFunctionVarArg(signature) != 0;
         bool scalar(Type type) => type == typeof(int) || type == typeof(long) || type == typeof(float) || type == typeof(double) || type == typeof(nint) || type == typeof(void);
-        if (parameters.Any(type => !scalar(type)) || !scalar(result) ||
-            Enumerable.Range(0, (int)Llvm.LLVMCountParams(function)).Any(index => Llvm.ParameterAttribute(function, (uint)index, "byval") != 0 || Llvm.ParameterAttribute(function, (uint)index, "sret") != 0))
-            throw new NotSupportedException($"System ABI callback {Llvm.Name(function)} requires scalar C parameters and return values.");
-        MethodBuilder callback = compiler.Program.DefineMethod("__callback_" + callbacks.Count, MethodAttributes.Private | MethodAttributes.Static, result, parameters);
+        bool aggregate = parameters.Any(type => !scalar(type)) || !scalar(result) ||
+            Enumerable.Range(0, (int)Llvm.LLVMCountParams(function)).Any(index => Llvm.ParameterAttribute(function, (uint)index, "byval") != 0 || Llvm.ParameterAttribute(function, (uint)index, "sret") != 0);
+        bool nativeCallable = !variadic && !aggregate;
+        MethodBuilder callback = compiler.Program.DefineMethod("__callback_" + callbacks.Count, MethodAttributes.Private | MethodAttributes.Static,
+            nativeCallable ? result : typeof(void), nativeCallable ? parameters : Type.EmptyTypes);
         callback.SetCustomAttribute(new CustomAttributeBuilder(typeof(UnmanagedCallersOnlyAttribute).GetConstructor(Type.EmptyTypes)!, [],
             [typeof(UnmanagedCallersOnlyAttribute).GetField(nameof(UnmanagedCallersOnlyAttribute.CallConvs))!], [new[] { typeof(CallConvCdecl) }]));
         ILGenerator il = callback.GetILGenerator();
-        if (variadic)
+        if (!nativeCallable)
         {
-            il.Emit(OpCodes.Ldstr, $"Native invocation of variadic callback {Llvm.Name(function)} is not supported.");
+            il.Emit(OpCodes.Ldstr, $"Native invocation of {(variadic ? "variadic" : "aggregate")} callback {Llvm.Name(function)} is not supported.");
             il.Emit(OpCodes.Call, typeof(Environment).GetMethod(nameof(Environment.FailFast), [typeof(string)])!);
-            if (result != typeof(void)) new ValueEmitter(compiler, il).Zero(Llvm.LLVMGetReturnType(signature));
         }
         else
         {

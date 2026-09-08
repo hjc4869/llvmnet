@@ -31,6 +31,7 @@ public static unsafe class SystemThreads
         try
         {
             nint result = ((delegate* unmanaged[Cdecl]<nint, nint>)state.Routine)(state.Argument);
+            ThreadStorage.RunDestructors();
             for (int iteration = 0; iteration < 4; iteration++)
             foreach ((int key, nint destructor) in destructors.ToArray())
             {
@@ -39,6 +40,7 @@ public static unsafe class SystemThreads
                 ((delegate* unmanaged[Cdecl]<int, nint, int>)setSpecific)(key, 0);
                 ((delegate* unmanaged[Cdecl]<nint, void>)destructor)(value);
             }
+            ThreadStorage.Release();
             return result;
         }
         catch (Exception error)

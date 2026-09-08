@@ -22,6 +22,7 @@ entry:
 define i32 @main() {
 entry:
   call void (...) @initialize()
+  %ignored = call i32 () @initialize()
   %initial = load i32, ptr @counter
   %initialValid = icmp eq i32 %initial, 7
   call void (ptr, ...) @update(ptr @counter, i32 13)

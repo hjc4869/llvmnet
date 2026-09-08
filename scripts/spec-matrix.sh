@@ -11,11 +11,13 @@ optimization="${SPEC_OPT_LEVEL:-3}"
 vectorize="${SPEC_VECTORIZE:-0}"
 limit="${SPEC_TIMEOUT:-1800}"
 stack_kb="${SPEC_STACK_KB:-unlimited}"
+requested_threads="${SPEC_THREADS:-auto}"
 runner="${SPEC_MATRIX_RUNNER:-$root/scripts/spec-harness.sh}"
 case "$size" in test|train|ref) ;; *) printf 'Size must be test, train or ref.\n' >&2; exit 2 ;; esac
 case "$optimization" in 0|1|2|3|s|z) ;; *) printf 'Invalid SPEC_OPT_LEVEL: %s\n' "$optimization" >&2; exit 2 ;; esac
 case "$vectorize" in 0|1) ;; *) printf 'SPEC_VECTORIZE must be 0 or 1.\n' >&2; exit 2 ;; esac
 if [[ ! "$limit" =~ ^[1-9][0-9]*$ ]]; then printf 'SPEC_TIMEOUT must be a positive number of seconds.\n' >&2; exit 2; fi
+if [[ "$requested_threads" != auto && ! "$requested_threads" =~ ^[1-9][0-9]*$ ]]; then printf 'SPEC_THREADS must be a positive integer.\n' >&2; exit 2; fi
 if [[ ! -x "$suite/bin/runcpu" ]]; then printf 'Install the SPEC kit first: %s\n' "$suite" >&2; exit 1; fi
 benchmarks=()
 for directory in "$suite"/benchspec/CPU/[0-9][0-9][0-9].*; do
@@ -36,10 +38,20 @@ if [[ "$snapshot" != "${BASH_SOURCE[0]}" ]]; then
     exec bash "$SPEC_MATRIX_SNAPSHOT" "$suite" "$toolchain" "$size" "$pattern"
 fi
 run="$(dirname "$snapshot")"
-printf 'suite\truntime\tbenchmark\tsize\toptimization\tvectorize\tresult\texit_code\tlog\n' > "$run/results.tsv"
+printf 'suite\truntime\tbenchmark\tsize\toptimization\tvectorize\tresult\texit_code\tlog\tcopies\tthreads\tthreading_profile\n' > "$run/results.tsv"
 {
     printf 'suite=%s\ntoolchain=%s\nrunner=%s\ntimeout=%s\ncxx_standard=%s\n' "$suite" "$toolchain" "$runner" "$limit" "${SPEC_CXX_STANDARD:-suite-default}"
     printf 'stack_kb=%s\n' "$stack_kb"
+    printf 'copies=1\nrequested_threads=%s\n' "$requested_threads"
+    printf 'parallel_profile=kit-openmp-v2\nopenmp_prefix=%s\nopenmp_library=%s\n' "${SPEC_OPENMP_PREFIX:-$root/artifacts/system-openmp}" "${SPEC_OPENMP_LIBRARY:-staged-or-system-libomp.so.5}"
+    openmp_prefix="${SPEC_OPENMP_PREFIX:-$root/artifacts/system-openmp}"
+    for dependency in "$openmp_prefix/include/omp.h" "${SPEC_OPENMP_LIBRARY:-$openmp_prefix/lib/libomp.so.5}"; do
+        if [[ -f "$dependency" ]]; then sha256sum "$dependency"; fi
+    done
+    if [[ -n "${SPEC_SYSTEM_CXX:-}" ]]; then
+        printf 'system_cxx=%s\n' "$SPEC_SYSTEM_CXX"
+        sha256sum "$SPEC_SYSTEM_CXX"
+    fi
     printf 'matrix=%s\nconfig=%s\n' "$snapshot" "$config"
     printf 'revision=%s\n' "$(git -C "$root" rev-parse HEAD)"
     printf 'started=%s\n' "$(date -u +%FT%TZ)"
@@ -51,10 +63,16 @@ printf 'suite\truntime\tbenchmark\tsize\toptimization\tvectorize\tresult\texit_c
 printf 'Checking %s benchmarks, both ABIs, -O%s, vectorize=%s, %s inputs. Results: %s\n' "${#benchmarks[@]}" "$optimization" "$vectorize" "$size" "$run/results.tsv"
 failures=0
 for benchmark in "${benchmarks[@]}"; do
+    threads="$requested_threads"
+    if [[ "$threads" == auto ]]; then
+        case "$benchmark" in *_s|*.specrand_*s) threads=4 ;; *) threads=1 ;; esac
+    fi
+    threading_profile=serial
+    if [[ "$threads" -gt 1 ]]; then threading_profile=kit-openmp-v2; fi
     for runtime in system portable; do
         log="$run/$benchmark-$runtime.log"
         exit_code=0
-        SPEC_OPT_LEVEL="$optimization" SPEC_VECTORIZE="$vectorize" SPEC_STACK_KB="$stack_kb" SPEC_REBUILD=1 \
+        SPEC_OPT_LEVEL="$optimization" SPEC_VECTORIZE="$vectorize" SPEC_STACK_KB="$stack_kb" SPEC_THREADS="$threads" SPEC_REBUILD=1 SPEC_REUSE_BUILD=0 \
             timeout --signal=TERM --kill-after=10 "$limit" bash "$runner" "$suite" "$toolchain" "$runtime" "$benchmark" "$size" > "$log" 2>&1 || exit_code=$?
         build_directory="$(sed -n -E 's/.*\((build_base_[A-Za-z0-9_.-]+)\).*/\1/p' "$log" | head -n 1)"
         if [[ -n "$build_directory" ]]; then
@@ -70,7 +88,7 @@ for benchmark in "${benchmarks[@]}"; do
             result=PASS
         fi
         if [[ "$result" != PASS ]]; then failures=$((failures + 1)); fi
-        printf '%s\t%s\t%s\t%s\t-O%s\t%s\t%s\t%s\t%s\n' "$(basename "$suite")" "$runtime" "$benchmark" "$size" "$optimization" "$vectorize" "$result" "$exit_code" "$log" >> "$run/results.tsv"
+        printf '%s\t%s\t%s\t%s\t-O%s\t%s\t%s\t%s\t%s\t1\t%s\t%s\n' "$(basename "$suite")" "$runtime" "$benchmark" "$size" "$optimization" "$vectorize" "$result" "$exit_code" "$log" "$threads" "$threading_profile" >> "$run/results.tsv"
         printf '%-7s %-22s %-8s exit=%s\n' "$result" "$benchmark" "$runtime" "$exit_code"
     done
 done

@@ -2,6 +2,13 @@ namespace LlvmNet.Runtime;
 
 public static class CMath
 {
+    public static unsafe int GetRounding(int system)
+    {
+        if (system == 0) return 1;
+        var getRounding = (delegate* unmanaged[Cdecl]<int>)SystemAbi.Symbol("libm.so.6", "fegetround");
+        return getRounding() switch { 0 => 1, 0x400 => 3, 0x800 => 2, 0xc00 => 0, _ => -1 };
+    }
+
     [CExport("sqrt")] public static double Sqrt(double value)
     {
         if (value < 0)
@@ -59,6 +66,16 @@ public static class CMath
     [CExport("copysignf")] public static float CopySignF(float value, float sign) => MathF.CopySign(value, sign);
     [CExport("fmod")] public static double Fmod(double value, double divisor) => value % divisor;
     [CExport("fmodf")] public static float FmodF(float value, float divisor) => value % divisor;
+    [CExport("modf")] public static unsafe double Modf(double value, nint integral)
+    {
+        *(double*)integral = Math.Truncate(value);
+        return Math.CopySign(double.IsInfinity(value) ? 0 : value - *(double*)integral, value);
+    }
+    [CExport("modff")] public static unsafe float ModfF(float value, nint integral)
+    {
+        *(float*)integral = MathF.Truncate(value);
+        return MathF.CopySign(float.IsInfinity(value) ? 0 : value - *(float*)integral, value);
+    }
     [CExport("fma")] public static double Fma(double left, double right, double addend) => Math.FusedMultiplyAdd(left, right, addend);
     [CExport("fmaf")] public static float FmaF(float left, float right, float addend) => MathF.FusedMultiplyAdd(left, right, addend);
     [CExport("ldexp")] public static double Ldexp(double value, int exponent) => Math.ScaleB(value, exponent);

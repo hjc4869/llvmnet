@@ -68,3 +68,14 @@ for runtime in system portable; do
     "$output/spread-$runtime-aot" 3
 done
 printf 'PASS: O3 Fortran SPREAD scalar/strided arrays, dimension placement and empty results in both ABIs, JIT and NativeAOT\n'
+flang-22 -O1 "$root/tests/fortran/remainders.f90" -o "$output/remainders-native"
+"$output/remainders-native" > "$output/remainders-native.txt"
+for runtime in system portable; do
+    "$root/bin/llvmnet" --runtime="$runtime" -O1 "$root/tests/fortran/remainders.f90" -o "$output/remainders-$runtime.dll"
+    dotnet "$output/remainders-$runtime.dll" > "$output/remainders-$runtime.txt"
+    diff -u "$output/remainders-native.txt" "$output/remainders-$runtime.txt"
+    "$root/bin/llvmnet" --runtime="$runtime" --nativeaot -O1 "$root/tests/fortran/remainders.f90" -o "$output/remainders-$runtime-aot"
+    "$output/remainders-$runtime-aot" > "$output/remainders-$runtime-aot.txt"
+    diff -u "$output/remainders-native.txt" "$output/remainders-$runtime-aot.txt"
+done
+printf 'PASS: Fortran real MOD/MODULO signs and signed zero in both ABIs and JIT/NativeAOT\n'

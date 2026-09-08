@@ -42,14 +42,18 @@ public static unsafe class ProcessRuntime
 
     public static void Cleanup()
     {
+        ThreadStorage.RunDestructors();
         Cxx.FinalizeModule(0);
         while (exitCallbacks.TryPop(out nint callback))
         {
-            if (AbiContract.SystemCallbacks) ((delegate* unmanaged[Cdecl]<void>)callback)();
+            nint managed = SystemAbi.ResolveCallback(callback);
+            if (managed != 0) ((delegate* managed<void>)managed)();
+            else if (AbiContract.SystemCallbacks) ((delegate* unmanaged[Cdecl]<void>)callback)();
             else ((delegate* managed<void>)callback)();
         }
         foreach (nint pointer in argumentAllocations)
             NativeMemory.Free((void*)pointer);
+        ThreadStorage.Release();
         argumentAllocations.Clear();
         Arguments = 0;
         EnvironmentVector = 0;

@@ -15,12 +15,23 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
         nint type = Llvm.LLVMTypeOf(value);
         if (Llvm.LLVMIsAGlobalAlias(value) != 0)
             Load(Llvm.LLVMAliasGetAliasee(value));
+        else if (Compiler.ThreadGlobals.TryGetValue(value, out MethodBuilder? accessor))
+            Il.Emit(OpCodes.Call, accessor);
         else if (Compiler.Globals.TryGetValue(value, out FieldBuilder? global))
             Il.Emit(OpCodes.Ldsfld, global);
         else if (Compiler.Methods.TryGetValue(value, out System.Reflection.MethodInfo? method))
             FunctionPointer(value, method);
         else if (Llvm.LLVMIsAFunction(value) != 0)
         {
+            if (Compiler.Host is not null && Compiler.Host.IsSystem(value) && Llvm.LLVMIsFunctionVarArg(Llvm.LLVMGlobalGetValueType(value)) != 0)
+            {
+                string name = Llvm.Name(value);
+                Il.Emit(OpCodes.Ldstr, Compiler.Host.LibraryFor(name));
+                Il.Emit(OpCodes.Ldstr, name);
+                Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.Symbol))!);
+                Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.RegisterNativeVariadic))!);
+                return;
+            }
             System.Reflection.MethodInfo target = Compiler.ResolveFunction(value);
             FunctionPointer(value, target);
         }
@@ -77,11 +88,9 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
     private void FunctionPointer(nint function, System.Reflection.MethodInfo target)
     {
         Il.Emit(OpCodes.Ldftn, Compiler.Host is null ? target : Compiler.Host.Callback(function, target));
-        if (Compiler.Host is not null && Llvm.LLVMIsFunctionVarArg(Llvm.LLVMGlobalGetValueType(function)) != 0)
-        {
-            Il.Emit(OpCodes.Ldftn, target);
-            Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.RegisterVariadicCallback))!);
-        }
+        Il.Emit(OpCodes.Ldftn, target);
+        bool variadic = Llvm.LLVMIsFunctionVarArg(Llvm.LLVMGlobalGetValueType(function)) != 0;
+        Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(variadic ? nameof(SystemAbi.RegisterVariadicCallback) : nameof(SystemAbi.RegisterCallback))!);
     }
 
     internal void Zero(nint type)

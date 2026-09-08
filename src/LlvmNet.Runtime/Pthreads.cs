@@ -220,7 +220,9 @@ public static unsafe class Pthreads
                 catch (Exception error) { state.Failure = ExceptionDispatchInfo.Capture(error); }
                 finally
                 {
+                    ThreadStorage.RunDestructors();
                     RunKeyDestructors();
+                    ThreadStorage.Release();
                     if (state.Detached) threads.TryRemove(state.Thread.ManagedThreadId, out _);
                 }
             }, stackSize) { IsBackground = true };

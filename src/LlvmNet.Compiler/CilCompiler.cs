@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Buffers.Binary;
 using System.Reflection.Emit;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -13,10 +14,13 @@ internal sealed class CilCompiler(CompilerOptions options)
 {
     internal readonly Dictionary<nint, MethodInfo> Methods = [];
     internal readonly Dictionary<nint, FieldBuilder> Globals = [];
+    internal readonly Dictionary<nint, MethodBuilder> ThreadGlobals = [];
     internal TypeSystem Types { get; private set; } = null!;
     internal TypeBuilder Program { get; private set; } = null!;
     internal HostInterop? Host { get; private set; }
+    internal bool TrapMissingArguments => options.TrapMissingArguments;
     private readonly Dictionary<nint, FieldBuilder> constants = [];
+    private readonly List<(MethodBuilder Method, int Offset, Type ReturnType, Type[] Parameters)> indirectCalls = [];
     private readonly HashSet<string> managedImports = new(StringComparer.Ordinal);
     private readonly Dictionary<string, MethodInfo> runtimeExports = typeof(Memory).Assembly.GetTypes()
         .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
@@ -25,11 +29,62 @@ internal sealed class CilCompiler(CompilerOptions options)
 
     internal bool IsManagedImport(string name) => managedImports.Contains(name);
 
+    internal static bool IsSetJump(nint function) => Llvm.LLVMIsAFunction(function) != 0 && Llvm.LLVMIsDeclaration(function) != 0 &&
+        Llvm.Name(function) is "setjmp" or "_setjmp" or "sigsetjmp" or "__sigsetjmp";
+
+    internal void ManagedCalli(ILGenerator il, MethodBuilder method, Type returnType, Type[] parameters)
+    {
+        if (NativeScalar(returnType) && parameters.All(NativeScalar))
+        {
+            il.EmitCalli(OpCodes.Calli, CallingConventions.Standard, returnType, parameters, null);
+            return;
+        }
+        indirectCalls.Add((method, il.ILOffset, returnType, parameters));
+        il.EmitCalli(OpCodes.Calli, CallingConventions.Standard, returnType == typeof(void) ? typeof(void) : typeof(nint),
+            parameters.Select(_ => typeof(nint)).ToArray(), null);
+    }
+
+    private List<(MethodBuilder Method, int Offset, int Token)> FinalizeIndirectSignatures(MetadataBuilder metadata)
+    {
+        List<(MethodBuilder Method, int Offset, int Token)> fixups = [];
+        foreach (var call in indirectCalls)
+        {
+            SignatureHelper signature = SignatureHelper.GetMethodSigHelper(Program.Module, CallingConventions.Standard, call.ReturnType);
+            signature.AddArguments(call.Parameters, null, null);
+            StandaloneSignatureHandle handle = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(signature.GetSignature()));
+            fixups.Add((call.Method, call.Offset, MetadataTokens.GetToken(handle)));
+        }
+        return fixups;
+    }
+
+    private static unsafe void FinalizeIndirectCalls(byte[] image, List<(MethodBuilder Method, int Offset, int Token)> fixups)
+    {
+        if (fixups.Count == 0) return;
+        using var stream = new MemoryStream(image, false);
+        using var reader = new PEReader(stream);
+        MetadataReader metadata = reader.GetMetadataReader();
+        foreach (var call in fixups)
+        {
+            MethodDefinition definition = metadata.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(call.Method.MetadataToken));
+            MethodBodyBlock body = reader.GetMethodBody(definition.RelativeVirtualAddress);
+            PEMemoryBlock section = reader.GetSectionData(definition.RelativeVirtualAddress);
+            int headerSize = checked((int)(body.GetILReader().StartPointer - section.Pointer));
+            if (!reader.PEHeaders.TryGetDirectoryOffset(new DirectoryEntry(definition.RelativeVirtualAddress, 1), out int methodOffset))
+                throw new InvalidOperationException("Cannot locate the indirect-call method body.");
+            int offset = checked(methodOffset + headerSize + call.Offset);
+            if (image[offset] != unchecked((byte)OpCodes.Calli.Value))
+                throw new InvalidOperationException("Indirect-call metadata fixup does not point at calli.");
+            BinaryPrimitives.WriteInt32LittleEndian(image.AsSpan(offset + 1, 4), call.Token);
+        }
+    }
+
     internal MethodInfo ResolveFunction(nint function)
     {
         if (Methods.TryGetValue(function, out MethodInfo? method))
             return method;
         string name = Llvm.Name(function);
+        if (IsSetJump(function))
+            throw new NotSupportedException($"{name} requires a direct call in a translated function.");
         nint signature = Llvm.LLVMGlobalGetValueType(function);
         if (options.NativeImports.TryGetValue(name, out NativeImport? import))
         {
@@ -109,13 +164,19 @@ internal sealed class CilCompiler(CompilerOptions options)
         {
             if (Llvm.Name(global).StartsWith("llvm.", StringComparison.Ordinal))
                 continue;
-            if (Llvm.LLVMIsThreadLocal(global) != 0)
-                throw new NotSupportedException($"Thread-local global: {Llvm.Name(global)}");
+            bool threadLocal = Llvm.LLVMIsThreadLocal(global) != 0;
+            if (threadLocal && Llvm.LLVMGetInitializer(global) == 0)
+                throw new NotSupportedException($"External thread-local global requires a bitcode definition: {Llvm.Name(global)}");
             if (Llvm.LLVMGetInitializer(global) == 0 && Host is not null && !Cxx.HasGlobal(Llvm.Name(global)))
                 Host.LibraryFor(Llvm.Name(global));
             else if (Llvm.LLVMGetInitializer(global) == 0 && !Stdio.HasGlobal(Llvm.Name(global)) && !Cxx.HasGlobal(Llvm.Name(global)))
                 throw new NotSupportedException($"Unresolved external global: {Llvm.Name(global)}");
             Globals[global] = Program.DefineField($"__global{Globals.Count}", typeof(nint), FieldAttributes.Private | FieldAttributes.Static);
+            if (threadLocal)
+            {
+                Globals[global].SetCustomAttribute(new CustomAttributeBuilder(typeof(ThreadStaticAttribute).GetConstructor(Type.EmptyTypes)!, []));
+                ThreadGlobals[global] = Program.DefineMethod($"__tls{ThreadGlobals.Count}", MethodAttributes.Private | MethodAttributes.Static, typeof(nint), Type.EmptyTypes);
+            }
         }
         foreach ((nint function, MethodInfo method) in Methods.ToArray())
             new FunctionEmitter(this, function, (MethodBuilder)method).Emit();
@@ -127,13 +188,15 @@ internal sealed class CilCompiler(CompilerOptions options)
         MethodBuilder? entry = options.Library ? null : EmitEntry(main!);
         Program.CreateType();
         MetadataBuilder metadata = assembly.GenerateMetadata(out BlobBuilder ilStream, out BlobBuilder fieldData);
+        var indirectFixups = FinalizeIndirectSignatures(metadata);
         var pe = new ManagedPEBuilder(new PEHeaderBuilder(imageCharacteristics: Characteristics.ExecutableImage | Characteristics.LargeAddressAware | (options.Library ? Characteristics.Dll : 0)),
             new MetadataRootBuilder(metadata), ilStream, mappedFieldData: fieldData,
             entryPoint: options.Library ? default : MetadataTokens.MethodDefinitionHandle(entry!.MetadataToken));
         var image = new BlobBuilder();
         pe.Serialize(image);
-        using (FileStream stream = File.Create(output))
-            image.WriteContentTo(stream);
+        byte[] executable = image.ToArray();
+        FinalizeIndirectCalls(executable, indirectFixups);
+        File.WriteAllBytes(output, executable);
         File.WriteAllText(Path.ChangeExtension(output, ".runtimeconfig.json"), JsonSerializer.Serialize(new
         {
             runtimeOptions = new { tfm = "net10.0", framework = new { name = "Microsoft.NETCore.App", version = "10.0.0" } }
@@ -209,12 +272,29 @@ internal sealed class CilCompiler(CompilerOptions options)
 
     private void EmitInitializer(nint module)
     {
+        foreach ((nint global, MethodBuilder accessor) in ThreadGlobals)
+        {
+            ILGenerator getter = accessor.GetILGenerator();
+            FieldBuilder field = Globals[global];
+            Label initialized = getter.DefineLabel();
+            getter.Emit(OpCodes.Ldsfld, field);
+            getter.Emit(OpCodes.Brtrue, initialized);
+            nint type = Llvm.LLVMGlobalGetValueType(global);
+            getter.Emit(OpCodes.Ldc_I8, Types.Size(type));
+            getter.Emit(OpCodes.Ldc_I4, Math.Max(checked((int)Llvm.LLVMGetAlignment(global)), Types.Alignment(type)));
+            getter.Emit(OpCodes.Call, typeof(ThreadStorage).GetMethod(nameof(ThreadStorage.Allocate))!);
+            getter.Emit(OpCodes.Stsfld, field);
+            InitializeGlobal(getter, Llvm.LLVMGetInitializer(global), field);
+            getter.MarkLabel(initialized);
+            getter.Emit(OpCodes.Ldsfld, field);
+            getter.Emit(OpCodes.Ret);
+        }
         ILGenerator il = Program.DefineTypeInitializer().GetILGenerator();
         il.Emit(OpCodes.Ldstr, options.AbiTag);
         il.Emit(OpCodes.Call, typeof(AbiContract).GetMethod(nameof(AbiContract.Require))!);
-        var emitter = new ValueEmitter(this, il);
         foreach ((nint global, FieldBuilder field) in Globals)
         {
+            if (ThreadGlobals.ContainsKey(global)) continue;
             if (Llvm.LLVMGetInitializer(global) == 0)
             {
                 if (Host is not null && !Cxx.HasGlobal(Llvm.Name(global)))
@@ -236,10 +316,10 @@ internal sealed class CilCompiler(CompilerOptions options)
         foreach ((nint value, FieldBuilder field) in constants)
             Allocate(Llvm.LLVMTypeOf(value), field, 0);
         foreach ((nint global, FieldBuilder field) in Globals)
-            if (Llvm.LLVMGetInitializer(global) != 0)
-                Initialize(Llvm.LLVMGetInitializer(global), field);
+            if (Llvm.LLVMGetInitializer(global) != 0 && !ThreadGlobals.ContainsKey(global))
+                InitializeGlobal(il, Llvm.LLVMGetInitializer(global), field);
         foreach ((nint value, FieldBuilder field) in constants)
-            Initialize(value, field);
+            InitializeGlobal(il, value, field);
         foreach (nint function in LifecycleFunctions("llvm.global_dtors"))
         {
             MethodInfo destructor = ResolveFunction(function);
@@ -278,27 +358,32 @@ internal sealed class CilCompiler(CompilerOptions options)
             il.Emit(OpCodes.Call, typeof(Memory).GetMethod(nameof(Memory.Allocate))!);
             il.Emit(OpCodes.Stsfld, field);
         }
+    }
 
-        void Initialize(nint value, FieldBuilder field)
+    private void InitializeGlobal(ILGenerator il, nint value, FieldBuilder field)
+    {
+        var emitter = new ValueEmitter(this, il);
+        var data = new ConstantData(Types, value);
+        const int chunkSize = 1 << 20;
+        for (int offset = 0; offset < data.Bytes.Length; offset += chunkSize)
         {
-            var data = new ConstantData(Types, value);
-            if (data.Bytes.Any(item => item != 0))
-            {
-                FieldBuilder blob = Program.DefineInitializedData($"__data{field.Name}", data.Bytes, FieldAttributes.Private | FieldAttributes.Static);
-                il.Emit(OpCodes.Ldsfld, field);
-                il.Emit(OpCodes.Ldsflda, blob);
-                il.Emit(OpCodes.Conv_I);
-                il.Emit(OpCodes.Ldc_I8, (long)data.Bytes.Length);
-                il.Emit(OpCodes.Call, typeof(Memory).GetMethod(nameof(Memory.Copy))!);
-                il.Emit(OpCodes.Pop);
-            }
-            foreach ((long offset, nint relocation) in data.Relocations)
-            {
-                il.Emit(OpCodes.Ldsfld, field);
-                emitter.Offset(offset);
-                emitter.Load(relocation);
-                emitter.StoreMemory(Llvm.LLVMTypeOf(relocation));
-            }
+            ReadOnlySpan<byte> bytes = data.Bytes.AsSpan(offset, Math.Min(chunkSize, data.Bytes.Length - offset));
+            if (!bytes.ContainsAnyExcept((byte)0)) continue;
+            FieldBuilder blob = Program.DefineInitializedData($"__data{field.Name}_{offset}", bytes.ToArray(), FieldAttributes.Private | FieldAttributes.Static);
+            il.Emit(OpCodes.Ldsfld, field);
+            emitter.Offset(offset);
+            il.Emit(OpCodes.Ldsflda, blob);
+            il.Emit(OpCodes.Conv_I);
+            il.Emit(OpCodes.Ldc_I8, (long)bytes.Length);
+            il.Emit(OpCodes.Call, typeof(Memory).GetMethod(nameof(Memory.Copy))!);
+            il.Emit(OpCodes.Pop);
+        }
+        foreach ((long offset, nint relocation) in data.Relocations)
+        {
+            il.Emit(OpCodes.Ldsfld, field);
+            emitter.Offset(offset);
+            emitter.Load(relocation);
+            emitter.StoreMemory(Llvm.LLVMTypeOf(relocation));
         }
     }
 }

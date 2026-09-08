@@ -140,6 +140,12 @@ public readonly struct Float80
 
     public static Float80 Negate(Float80 value) => new(unchecked((long)value.Significand), value.SignExponent ^ 0x8000);
     public static Float80 Abs(Float80 value) => new(unchecked((long)value.Significand), value.SignExponent & 0x7fff);
+    public static Float80 Floor(Float80 value)
+    {
+        if (value.IsNan) return Nan;
+        if (value.IsInfinity || value.IsZero || value.Scale >= 0) return value;
+        return Pack(value.Signed >> -value.Scale, BigInteger.One, 0, value.Negative);
+    }
     public static Float80 Add(Float80 left, Float80 right)
     {
         if (left.IsNan || right.IsNan || left.IsInfinity && right.IsInfinity && left.Negative != right.Negative)

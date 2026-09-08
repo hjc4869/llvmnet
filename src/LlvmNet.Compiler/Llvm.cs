@@ -13,6 +13,8 @@ internal static unsafe class Llvm
     private static extern int StampFile([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, int textual, out nint message);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_create_native_shim")]
     internal static extern nint CreateNativeShim(nint source);
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_wrap_vector_invokes")]
+    internal static extern uint WrapVectorInvokes(nint source);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_add_native_thunk")]
     internal static extern void AddNativeThunk(nint shim, nint function, nint call, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
     [DllImport(Library)] internal static extern int LLVMWriteBitcodeToFile(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
@@ -83,6 +85,9 @@ internal static unsafe class Llvm
     [DllImport(Library)] internal static extern nint LLVMGetNextInstruction(nint instruction);
     [DllImport(Library)] internal static extern int LLVMGetInstructionOpcode(nint instruction);
     [DllImport(Library)] internal static extern nint LLVMGetOperand(nint value, uint index);
+    [DllImport(Library)] internal static extern nint LLVMGetFirstUse(nint value);
+    [DllImport(Library)] internal static extern nint LLVMGetNextUse(nint use);
+    [DllImport(Library)] internal static extern nint LLVMGetUser(nint use);
     [DllImport(Library)] internal static extern nint LLVMIsAConstantInt(nint value);
     [DllImport(Library)] internal static extern long LLVMConstIntGetSExtValue(nint value);
     [DllImport(Library)] internal static extern nint LLVMPrintValueToString(nint value);
@@ -121,6 +126,8 @@ internal static unsafe class Llvm
     [DllImport(Library)] internal static extern nint LLVMIsAConstantFP(nint value);
     [DllImport(Library)] internal static extern nint LLVMIsAConstantExpr(nint value);
     [DllImport(Library)] internal static extern nint LLVMIsAInlineAsm(nint value);
+    [DllImport(Library)] internal static extern nint LLVMGetInlineAsmAsmString(nint value, out nuint length);
+    [DllImport(Library)] internal static extern nint LLVMGetInlineAsmConstraintString(nint value, out nuint length);
     [DllImport(Library)] internal static extern nint LLVMIsAFunction(nint value);
     [DllImport(Library)] internal static extern int LLVMGetConstOpcode(nint value);
     [DllImport(Library)] internal static extern double LLVMConstRealGetDouble(nint value, out int losesInfo);
@@ -142,6 +149,8 @@ internal static unsafe class Llvm
     [DllImport(Library)] internal static extern uint LLVMGetNumArgOperands(nint instruction);
     [DllImport(Library)] internal static extern nint LLVMGetCalledValue(nint instruction);
     [DllImport(Library)] internal static extern nint LLVMGetCalledFunctionType(nint instruction);
+    [DllImport(Library)] internal static extern uint LLVMGetInstructionCallConv(nint instruction);
+    [DllImport(Library)] internal static extern uint LLVMGetFunctionCallConv(nint function);
     [DllImport(Library)] internal static extern uint LLVMGetNumIndices(nint instruction);
     [DllImport(Library)] internal static extern uint LLVMGetNumClauses(nint instruction);
     [DllImport(Library)] internal static extern nint LLVMGetClause(nint instruction, uint index);

@@ -65,6 +65,8 @@ double copysign(double, double);
 float copysignf(float, float);
 double fmod(double, double);
 float fmodf(float, float);
+double modf(double, double *);
+float modff(float, float *);
 double fmin(double, double);
 float fminf(float, float);
 double fmax(double, double);

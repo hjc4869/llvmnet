@@ -10,6 +10,23 @@ public static unsafe class FortranAllocation
     [CExport("_FortranAAssign")]
     public static void Assign(nint destination, nint source, nint sourceFile, int line) => AssignCore(destination, source, sourceFile, line, true);
 
+    [CExport("_FortranAAssignExplicitLengthCharacter")]
+    public static void AssignExplicitLength(nint destination, nint source, nint sourceFile, int line) => AssignCore(destination, source, sourceFile, line, true, true);
+
+    [CExport("_FortranAAllocatableInitCharacterForAllocate")]
+    public static void InitializeCharacter(nint descriptor, long length, int kind, int rank, int corank)
+    {
+        if (*(nint*)descriptor != 0) return;
+        if (rank is < 0 or > 15 || corank != 0 || kind is not (1 or 2 or 4))
+            throw new NotSupportedException("Character allocation rank, kind or coarray is not implemented.");
+        NativeMemory.Clear((void*)descriptor, checked((nuint)(24 + rank * 24)));
+        *(long*)(descriptor + 8) = checked(Math.Max(0, length) * kind);
+        *(int*)(descriptor + 16) = 20240719;
+        *(byte*)(descriptor + 20) = (byte)rank;
+        *(sbyte*)(descriptor + 21) = (sbyte)FortranDescriptor.TypeCode(4, kind);
+        *(byte*)(descriptor + 22) = 2;
+    }
+
     [CExport("_FortranAAssignTemporary")]
     public static void AssignTemporary(nint destination, nint source, nint sourceFile, int line) => AssignCore(destination, source, sourceFile, line, false);
 
@@ -43,19 +60,26 @@ public static unsafe class FortranAllocation
         finally { Deallocate(temporary, 0, 0, sourceFile, line); }
     }
 
-    private static void AssignCore(nint destination, nint source, nint sourceFile, int line, bool mayReallocate)
+    private static void AssignCore(nint destination, nint source, nint sourceFile, int line, bool mayReallocate, bool explicitLength = false)
     {
         var target = new FortranDescriptor(destination);
         var input = new FortranDescriptor(source);
         if ((*(byte*)(destination + 23) & 1) != 0 || (*(byte*)(source + 23) & 1) != 0)
-            throw new NotSupportedException("Derived-type Fortran assignment is not implemented.");
+        {
+            nint targetType = FortranDerivedLifetime.CopyableType(destination);
+            nint sourceType = FortranDerivedLifetime.CopyableType(source);
+            if (targetType == 0 || targetType != sourceType)
+                throw new NotSupportedException("Fortran derived assignment requires matching types without owned components, finalizers or defined assignment.");
+        }
         bool allocatable = *(byte*)(destination + 22) == 2;
         bool conforms = target.Rank == input.Rank && Enumerable.Range(0, target.Rank).All(dimension => target.Extent(dimension) == input.Extent(dimension));
-        if (mayReallocate && allocatable && (target.Base == 0 || input.Rank != 0 && !conforms))
+        bool resizeCharacter = !explicitLength && target.Type == 40 && input.Type == 40 && target.ElementBytes != input.ElementBytes;
+        if (mayReallocate && allocatable && (target.Base == 0 || input.Rank != 0 && !conforms || resizeCharacter))
         {
             if (target.Rank != input.Rank) throw new InvalidOperationException("Fortran allocatable assignment rank mismatch.");
             CString.Free(target.Base);
             *(nint*)destination = 0;
+            if (resizeCharacter) *(long*)(destination + 8) = input.ElementBytes;
             for (int dimension = 0; dimension < target.Rank; dimension++)
             {
                 long lower = *(long*)(source + 24 + dimension * 24);
@@ -101,8 +125,8 @@ public static unsafe class FortranAllocation
     public static int Allocate(nint descriptor, nint asynchronous, int hasStatus, nint errorMessage, nint source, int line, nint copyFunction)
     {
         var array = new FortranDescriptor(descriptor);
-        if (asynchronous is not (0 or -1) || (*(byte*)(descriptor + 23) & 1) != 0)
-            throw new NotSupportedException("Fortran asynchronous or derived-type allocation is not implemented.");
+        if (asynchronous is not (0 or -1))
+            throw new NotSupportedException("Fortran asynchronous allocation is not implemented.");
         if (array.Base != 0)
             return Failure(12, hasStatus, "Fortran allocatable is already allocated.");
         long size = array.ElementBytes;
@@ -117,6 +141,8 @@ public static unsafe class FortranAllocation
             if (pointer == 0)
                 return Failure(19, hasStatus, "Fortran allocation failed.");
             *(nint*)descriptor = pointer;
+            try { FortranDerivedLifetime.Initialize(descriptor, source, line); }
+            catch { CString.Free(pointer); *(nint*)descriptor = 0; throw; }
             return 0;
         }
         catch (OverflowException) { return Failure(19, hasStatus, "Fortran allocation size overflow."); }
@@ -126,9 +152,7 @@ public static unsafe class FortranAllocation
     public static int AllocatePointer(nint descriptor, int hasStatus, nint errorMessage, nint source, int line, nint copyFunction)
     {
         var array = new FortranDescriptor(descriptor);
-        if ((*(byte*)(descriptor + 23) & 1) != 0)
-            throw new NotSupportedException("Fortran derived-type pointer allocation is not implemented.");
-        int bytes = 24 + array.Rank * 24;
+        int bytes = array.StorageBytes;
         byte* temporary = stackalloc byte[bytes];
         Memory.Copy((nint)temporary, descriptor, bytes);
         *(nint*)temporary = 0;
@@ -143,8 +167,6 @@ public static unsafe class FortranAllocation
     public static int DeallocatePointer(nint descriptor, int hasStatus, nint errorMessage, nint source, int line)
     {
         var array = new FortranDescriptor(descriptor);
-        if ((*(byte*)(descriptor + 23) & 1) != 0)
-            throw new NotSupportedException("Fortran derived-type pointer finalization is not implemented.");
         if (array.Base == 0 || !pointerAllocations.TryRemove(array.Base, out _))
             return Failure(11, hasStatus, "Fortran pointer target was not allocated by this runtime.");
         return Deallocate(descriptor, hasStatus, errorMessage, source, line);
@@ -153,11 +175,10 @@ public static unsafe class FortranAllocation
     [CExport("_FortranAAllocatableDeallocate")]
     public static int Deallocate(nint descriptor, int hasStatus, nint errorMessage, nint source, int line)
     {
-        if ((*(byte*)(descriptor + 23) & 1) != 0)
-            throw new NotSupportedException("Fortran derived-type finalization is not implemented.");
         nint pointer = *(nint*)descriptor;
         if (pointer == 0)
             return Failure(11, hasStatus, "Fortran allocatable is not allocated.");
+        FortranDerivedLifetime.Destroy(descriptor);
         CString.Free(pointer);
         *(nint*)descriptor = 0;
         return 0;
