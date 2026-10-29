@@ -1404,6 +1404,15 @@ internal sealed class FunctionEmitter : ValueEmitter
             Normalize(type);
             return;
         }
+        if (operation is "lrint" or "llrint" or "lround" or "llround" && TypeSystem.Kind(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, 0))) == 4)
+        {
+            Load(Llvm.LLVMGetOperand(instruction, 0));
+            Il.Emit(OpCodes.Ldc_I4, operation.Contains("round", StringComparison.Ordinal) ? 1 : 0);
+            Il.Emit(OpCodes.Ldc_I4, width);
+            Il.Emit(OpCodes.Call, typeof(Float80).GetMethod(nameof(Float80.RoundToInteger))!);
+            if (width <= 32) Il.Emit(OpCodes.Conv_I4);
+            return;
+        }
         if (operation is "lrint" or "llrint" or "lround" or "llround")
         {
             nint operand = Llvm.LLVMGetOperand(instruction, 0);
@@ -1420,7 +1429,9 @@ internal sealed class FunctionEmitter : ValueEmitter
             nint operand = Llvm.LLVMGetOperand(instruction, 0);
             Load(operand);
             Load(Llvm.LLVMGetOperand(instruction, 1));
-            Il.Emit(OpCodes.Call, typeof(Numeric).GetMethod(Types.Map(Llvm.LLVMTypeOf(operand)) == typeof(float) ? nameof(Numeric.FloatClass32) : nameof(Numeric.FloatClass64))!);
+            Type classified = Types.Map(Llvm.LLVMTypeOf(operand));
+            Il.Emit(OpCodes.Call, classified == typeof(Float80) ? typeof(Float80).GetMethod(nameof(Float80.Class))! :
+                typeof(Numeric).GetMethod(classified == typeof(float) ? nameof(Numeric.FloatClass32) : nameof(Numeric.FloatClass64))!);
             return;
         }
         if (operation is "scmp" or "ucmp")

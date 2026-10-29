@@ -324,6 +324,19 @@ def extended_module(m):
     for a in values[::3]:
         for b in values[1::3]:
             m.call(f, [80, 80, 80], [a, b, values[4]], 80, f"fma {name} {a:#x} {b:#x}")
+    for mask in [1, 2, 3, 4, 8, 16, 32, 64, 128, 256, 512, 1023, 0x60, 0x90]:
+        f = m.probe(f"fpclass_{mask}_f80", [80], 1, [f"%x = bitcast i80 %a to {name}", f"%out = call i1 @llvm.is.fpclass.f80({name} %x, i32 {mask})"])
+        m.declare(f"declare i1 @llvm.is.fpclass.f80({name}, i32)")
+        for a in values:
+            m.call(f, [80], [a], 1, f"is.fpclass {mask} {name} {a:#x}")
+    for intrinsic in ["lround", "llrint"]:
+        f = m.probe(f"{intrinsic}_f80", [80], 64, [f"%x = bitcast i80 %a to {name}", f"%out = call i64 @llvm.{intrinsic}.i64.f80({name} %x)"])
+        m.declare(f"declare i64 @llvm.{intrinsic}.i64.f80({name})")
+        for a in values + [x87(2.5), x87(-2.5), x87(3.5), x87(-0.5), x87(1e18), 16447 << 64 | 0xc000000000000000]:
+            exponent = a >> 64 & 0x7fff
+            if exponent == 0x7fff or exponent >= 16383 + 62:
+                continue  # NaN, infinity and out-of-range results are unspecified
+            m.call(f, [80], [a], 64, f"{intrinsic} {name} {a:#x}")
     for width, short in [(32, "float"), (64, "double")]:
         f = m.probe(f"fptrunc_f80_{short}", [80], width, [f"%x = bitcast i80 %a to {name}", f"%r = fptrunc {name} %x to {short}",
             f"%isnan = fcmp uno {short} %r, %r", f"%bits = bitcast {short} %r to i{width}", f"%out = select i1 %isnan, i{width} {signed(FLOATS[width][3], width)}, i{width} %bits"])

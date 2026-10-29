@@ -76,6 +76,39 @@ public readonly struct Float80
         System.Runtime.CompilerServices.Unsafe.WriteUnaligned((void*)(address + 8), value.SignExponent);
     }
 
+    /// <summary>llvm.is.fpclass: snan 1, qnan 2, -inf 4, -normal 8, -subnormal 16, -0 32, +0 64, +subnormal 128, +normal 256, +inf 512.</summary>
+    public static int Class(Float80 value, int mask)
+    {
+        int bit;
+        if (value.IsNan) bit = (value.Significand & 0x4000000000000000) != 0 ? 2 : 1;
+        else if (value.IsInfinity) bit = value.Negative ? 4 : 512;
+        else if (value.Significand == 0) bit = value.Negative ? 32 : 64;
+        else if (value.Exponent == 0) bit = value.Negative ? 16 : 128;
+        else bit = value.Negative ? 8 : 256;
+        return (mask & bit) != 0 ? 1 : 0;
+    }
+
+    /// <summary>
+    /// llvm.lround/llround (ties away from zero) and llvm.lrint/llrint (ties to even, the default rounding mode),
+    /// computed exactly. NaN, infinity and out-of-range values give the x86 "integer indefinite" value instead of trapping.
+    /// </summary>
+    public static long RoundToInteger(Float80 value, int awayFromZero, int width)
+    {
+        if (value.IsNan || value.IsInfinity) return width == 32 ? int.MinValue : long.MinValue;
+        BigInteger magnitude = value.Significand;
+        int scale = value.Scale;
+        BigInteger result;
+        if (scale >= 0) result = magnitude << scale;
+        else
+        {
+            BigInteger quotient = magnitude >> -scale, remainder = magnitude - (quotient << -scale), half = BigInteger.One << (-scale - 1);
+            result = remainder > half || remainder == half && (awayFromZero != 0 || !quotient.IsEven) ? quotient + 1 : quotient;
+        }
+        if (value.Negative) result = -result;
+        BigInteger minimum = width == 32 ? int.MinValue : long.MinValue, maximum = width == 32 ? int.MaxValue : long.MaxValue;
+        return result < minimum || result > maximum ? (long)minimum : (long)result;
+    }
+
     public static Float80 FromDouble(double value)
     {
         ulong bits = (ulong)BitConverter.DoubleToInt64Bits(value);
