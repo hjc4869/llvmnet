@@ -21,7 +21,9 @@ public static unsafe class WideInteger
     public static long Low(UInt128 value) => unchecked((long)(ulong)value);
     public static UInt128 Mask(UInt128 value, int width) => width == 128 ? value : value & ((UInt128.One << width) - 1);
     public static UInt128 ExtendSign(UInt128 value, int width) => width == 128 ? value : (value & (UInt128.One << (width - 1))) == 0 ? value : value | ~((UInt128.One << width) - 1);
-    public static UInt128 FromFloating(double value, int signed) => signed != 0 ? unchecked((UInt128)checked((Int128)value)) : checked((UInt128)value);
+    // fptosi/fptoui: out-of-range inputs are poison in LLVM and may be evaluated speculatively, so they
+    // must not trap; saturate like .NET's narrow conversions do.
+    public static UInt128 FromFloating(double value, int signed) => FromFloatingSaturated(value, signed, 128);
     public static double ToDouble(UInt128 value, int signed) => signed != 0 ? (double)unchecked((Int128)value) : (double)value;
     public static float ToSingle(UInt128 value, int signed) => signed != 0 ? (float)unchecked((Int128)value) : (float)value;
 
@@ -35,6 +37,75 @@ public static unsafe class WideInteger
             2 => UInt128.Min(UInt128.TrailingZeroCount(value), (uint)width),
             _ => throw new ArgumentOutOfRangeException(nameof(operation))
         };
+    }
+
+    /// <summary>
+    /// Integer intrinsics on 65- to 128-bit values. Codes: 0 abs, 1 smin, 2 smax, 3 umin, 4 umax, 5 bitreverse,
+    /// 6 fshl, 7 fshr, 8 sadd.sat, 9 uadd.sat, 10 ssub.sat, 11 usub.sat. Results are masked to the width.
+    /// </summary>
+    public static UInt128 Operation(UInt128 a, UInt128 b, UInt128 c, int code, int width)
+    {
+        a = Mask(a, width);
+        b = Mask(b, width);
+        Int128 sa = unchecked((Int128)ExtendSign(a, width)), sb = unchecked((Int128)ExtendSign(b, width));
+        UInt128 umax = Mask(UInt128.MaxValue, width);
+        Int128 smax = unchecked((Int128)(umax >> 1)), smin = -smax - 1;
+        UInt128 result = code switch
+        {
+            0 => sa < 0 ? unchecked((UInt128)(-sa)) : a,
+            1 => sa <= sb ? a : b,
+            2 => sa >= sb ? a : b,
+            3 => a <= b ? a : b,
+            4 => a >= b ? a : b,
+            5 => Reverse(a, width),
+            6 or 7 => Funnel(a, b, c % (UInt128)width, width, code == 7),
+            8 => unchecked((UInt128)SaturatingSigned(sa, sb, false, smin, smax)),
+            9 => a + b < a || a + b > umax ? umax : a + b,
+            10 => unchecked((UInt128)SaturatingSigned(sa, sb, true, smin, smax)),
+            11 => a < b ? 0 : a - b,
+            _ => throw new ArgumentOutOfRangeException(nameof(code))
+        };
+        return Mask(result, width);
+    }
+
+    private static UInt128 Reverse(UInt128 value, int width)
+    {
+        UInt128 result = 0;
+        for (int bit = 0; bit < width; bit++)
+            if ((value >> bit & 1) != 0) result |= UInt128.One << (width - 1 - bit);
+        return result;
+    }
+
+    private static UInt128 Funnel(UInt128 high, UInt128 low, UInt128 amount, int width, bool right)
+    {
+        int shift = (int)amount;
+        if (shift == 0) return right ? low : high;
+        return right ? Mask(low >> shift | high << (width - shift), width) : Mask(high << shift | low >> (width - shift), width);
+    }
+
+    private static Int128 SaturatingSigned(Int128 left, Int128 right, bool subtract, Int128 minimum, Int128 maximum)
+    {
+        // Operands are at most 128 bits wide; compute in a wider domain to detect overflow exactly.
+        var exact = subtract ? (System.Numerics.BigInteger)left - right : (System.Numerics.BigInteger)left + right;
+        return exact > maximum ? maximum : exact < minimum ? minimum : (Int128)exact;
+    }
+
+    /// <summary>llvm.fptosi.sat / llvm.fptoui.sat to widths above 64 bits: NaN gives 0, out-of-range values clamp.</summary>
+    public static UInt128 FromFloatingSaturated(double value, int signed, int width)
+    {
+        if (double.IsNaN(value)) return 0;
+        UInt128 umax = Mask(UInt128.MaxValue, width);
+        if (signed != 0)
+        {
+            Int128 maximum = unchecked((Int128)(umax >> 1)), minimum = -maximum - 1;
+            double truncated = Math.Truncate(value);
+            if (truncated >= (double)maximum) return Mask(unchecked((UInt128)maximum), width);
+            if (truncated <= (double)minimum) return Mask(unchecked((UInt128)minimum), width);
+            return Mask(unchecked((UInt128)(Int128)truncated), width);
+        }
+        if (value <= 0) return 0;
+        double whole = Math.Truncate(value);
+        return whole >= (double)umax ? umax : (UInt128)whole;
     }
 
     public static UInt128 Binary(UInt128 left, UInt128 right, int opcode, int width)

@@ -1170,6 +1170,47 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.CountBits))!);
             return;
         }
+        if (width > 64 && operation is "fptosi" or "fptoui" && name.Contains(".sat.", StringComparison.Ordinal))
+        {
+            nint operand = Llvm.LLVMGetOperand(instruction, 0);
+            if (TypeSystem.Kind(Llvm.LLVMTypeOf(operand)) is not (2 or 3))
+                throw new NotSupportedException($"Saturated conversion type: {name}");
+            Load(operand);
+            Il.Emit(OpCodes.Conv_R8);
+            Il.Emit(OpCodes.Ldc_I4, operation == "fptosi" ? 1 : 0);
+            Il.Emit(OpCodes.Ldc_I4, width);
+            Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.FromFloatingSaturated))!);
+            return;
+        }
+        int wideCode = width <= 64 ? -1 : operation switch
+        {
+            "abs" => 0,
+            "smin" => 1,
+            "smax" => 2,
+            "umin" => 3,
+            "umax" => 4,
+            "bitreverse" => 5,
+            "fshl" => 6,
+            "fshr" => 7,
+            "sadd" when name.Contains(".sat.", StringComparison.Ordinal) => 8,
+            "uadd" when name.Contains(".sat.", StringComparison.Ordinal) => 9,
+            "ssub" when name.Contains(".sat.", StringComparison.Ordinal) => 10,
+            "usub" when name.Contains(".sat.", StringComparison.Ordinal) => 11,
+            _ => -1
+        };
+        if (wideCode >= 0)
+        {
+            int operands = wideCode is 0 or 5 ? 1 : wideCode is 6 or 7 ? 3 : 2;
+            for (uint index = 0; index < 3; index++)
+            {
+                if (index < operands) Load(Llvm.LLVMGetOperand(instruction, index));
+                else Zero(Llvm.LLVMTypeOf(instruction));
+            }
+            Il.Emit(OpCodes.Ldc_I4, wideCode);
+            Il.Emit(OpCodes.Ldc_I4, width);
+            Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.Operation))!);
+            return;
+        }
         if (width > 64)
             throw new NotSupportedException($"Wide integer intrinsic not implemented: {name}");
         if (operation == "fmuladd")

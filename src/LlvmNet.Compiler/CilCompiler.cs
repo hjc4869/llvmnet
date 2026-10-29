@@ -231,8 +231,13 @@ internal sealed class CilCompiler(CompilerOptions options)
             if (Llvm.LLVMIsDeclaration(function) != 0)
                 continue;
             nint signature = Llvm.LLVMGlobalGetValueType(function);
-            MethodBuilder method = Program.DefineMethod(Llvm.Name(function), MethodAttributes.Public | MethodAttributes.Static,
-                Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
+            MethodBuilder method;
+            try
+            {
+                method = Program.DefineMethod(Llvm.Name(function), MethodAttributes.Public | MethodAttributes.Static,
+                    Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
+            }
+            catch (Exception error) { throw CompilationError.InFunction(error, function); }
             method.SetCustomAttribute(new CustomAttributeBuilder(typeof(CExportAttribute).GetConstructor([typeof(string)])!, [Llvm.Name(function)]));
             Methods[function] = method;
         }

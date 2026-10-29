@@ -85,6 +85,7 @@ missing() {
             perl) command -v perl >/dev/null || { echo "perl not found"; return; } ;;
             node) command -v node >/dev/null || { echo "node not found"; return; } ;;
             wasm-ld) [[ -n "${WASM_LD:-}" ]] || command -v wasm-ld-22 >/dev/null || command -v wasm-ld >/dev/null || command -v wasm-ld-21 >/dev/null || { echo "no wasm-ld (install lld-22 or set WASM_LD)"; return; } ;;
+            python3) command -v python3 >/dev/null || { echo "python3 not found"; return; } ;;
             ffmpeg-cli) command -v ffmpeg >/dev/null || { echo "ffmpeg command-line tool not found (needed to generate media fixtures)"; return; } ;;
             openmp) [[ -f "${LLVMNET_OPENMP_PREFIX:-$root/artifacts/system-openmp}/lib/libomp.so.5" ]] || { echo "system OpenMP not staged; run scripts/install-system-openmp.sh"; return; } ;;
             system-cxx) [[ -f "${LLVMNET_SYSTEM_CXX:-$root/artifacts/system-cxx/libstdcxx-system.a}" ]] || { echo "system libstdc++ archive not built; see docs/toolchain.md"; return; } ;;
