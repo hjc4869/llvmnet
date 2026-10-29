@@ -1,0 +1,9 @@
+{
+  "name": "llvmnet",
+  "build": { "dockerfile": "Dockerfile", "context": ".." },
+  "remoteUser": "builder",
+  "postCreateCommand": "bash scripts/ensure-built.sh",
+  "customizations": {
+    "vscode": { "extensions": ["ms-dotnettools.csharp", "llvm-vs-code-extensions.vscode-clangd", "timonwong.shellcheck"] }
+  }
+}

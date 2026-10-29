@@ -1,0 +1,98 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: "17 14 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  pr-gate:
+    name: PR gate (Linux x64)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 60
+    steps:
+      - name: Install git
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install packages
+        run: bash scripts/ci/install-packages.sh
+      - name: Mark the workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            artifacts/vendor/downloads
+            artifacts/vendor/libcxx
+          key: deps-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'scripts/sources.lock', 'scripts/install-libcxx-headers.sh') }}
+      - name: Build
+        run: bash scripts/ensure-built.sh
+      - name: Format check
+        run: dotnet format whitespace llvmnet.slnx --verify-no-changes
+      - name: Unit tests
+        run: dotnet test tests/LlvmNet.UnitTests -c Release --no-build --logger "trx;LogFileName=unit-results.trx" --results-directory artifacts/tests/unit
+      - name: Shell lint
+        run: shellcheck -S error scripts/*.sh scripts/ci/*.sh tests/*.sh bin/llvmnet bin/llvmnet-tool
+      - name: Core and toolchain tests
+        run: tests/run.sh --no-build --tag core --tag toolchain --exclude-tag slow -j 4
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-gate-results
+          path: |
+            artifacts/tests/results
+            artifacts/tests/unit
+          if-no-files-found: ignore
+
+  nightly:
+    name: Nightly integration (Linux x64)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 300
+    steps:
+      - name: Install git
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install packages
+        run: bash scripts/ci/install-packages.sh --integration
+      - name: Mark the workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            artifacts/vendor/downloads
+            artifacts/vendor/libcxx
+          key: deps-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'scripts/sources.lock', 'scripts/install-libcxx-headers.sh') }}
+      - name: Fetch pinned sources
+        run: scripts/fetch-sources.sh
+      - name: Build
+        run: bash scripts/ensure-built.sh
+      - name: Unit tests
+        run: dotnet test tests/LlvmNet.UnitTests -c Release --no-build
+      - name: All tags
+        run: tests/run.sh --no-build --tag core --tag toolchain --tag integration --tag optional -j 4 --timeout-scale 2
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-results
+          path: artifacts/tests/results
+          if-no-files-found: ignore
