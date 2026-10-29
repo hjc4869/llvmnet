@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source_dir="${FFMPEG_SOURCE:-/mnt/storage/david/Development/LightPlayer-Packages/ffmpeg}"
+source_dir="${FFMPEG_SOURCE:-$("$root/scripts/fetch-sources.sh" --path ffmpeg)}"
 build_dir="${FFMPEG_BUILD_DIR:-$root/artifacts/ffmpeg-core}"
 if [[ ! -x "$source_dir/configure" ]]; then
     printf 'FFmpeg source not found: %s\n' "$source_dir" >&2
@@ -11,9 +11,9 @@ if [[ -f "$source_dir/ffbuild/config.mak" ]]; then
     printf 'FFmpeg source is configured in-tree; use a clean source checkout. This script will not modify it.\n' >&2
     exit 1
 fi
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
+bash "$root/scripts/ensure-built.sh"
 mkdir -p "$build_dir"
-if [[ ! -f "$build_dir/ffbuild/config.mak" || "$root/src/LlvmNet.Compiler/bin/Release/net10.0/llvmnet.dll" -nt "$build_dir/ffbuild/config.mak" ]]; then
+if [[ ! -f "$build_dir/ffbuild/config.mak" || "$(cat "$build_dir/llvmnet-source" 2>/dev/null)" != "$source_dir" || "$root/src/LlvmNet.Compiler/bin/Release/net10.0/llvmnet.dll" -nt "$build_dir/ffbuild/config.mak" ]]; then
     (
         cd "$build_dir"
         "$source_dir/configure" \
@@ -35,6 +35,7 @@ if [[ ! -f "$build_dir/ffbuild/config.mak" || "$root/src/LlvmNet.Compiler/bin/Re
             --enable-demuxer=mov --enable-protocol=file \
             --extra-cflags='-O1 -fno-vectorize -fno-slp-vectorize'
     )
+    printf '%s\n' "$source_dir" >"$build_dir/llvmnet-source"
 fi
 if [[ "${1:-}" == "--configure-only" ]]; then
     exit 0

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source_dir="${FFMPEG_SOURCE:-/mnt/storage/david/Development/LightPlayer-Packages/ffmpeg}"
+source_dir="${FFMPEG_SOURCE:-$("$root/scripts/fetch-sources.sh" --path ffmpeg)}"
 runtime="${LLVMNET_RUNTIME:-managed-host}"
 case "$runtime" in
     managed-host) suffix= ;;
@@ -39,16 +39,16 @@ for archive in libdav1d.a libxml2.a libz.a; do
         exit 1
     fi
 done
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
+bash "$root/scripts/ensure-built.sh"
 mkdir -p "$build_dir"
 export PKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig"
 export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
-if [[ ! -f "$build_dir/ffbuild/config.mak" || "$root/config/ffmpeg-browser.sh" -nt "$build_dir/ffbuild/config.mak" || "${BASH_SOURCE[0]}" -nt "$build_dir/ffbuild/config.mak" || "$root/config/ffmpeg-configure.patch" -nt "$build_dir/ffbuild/config.mak" ]] ||
+if [[ ! -f "$build_dir/ffbuild/config.mak" || "$(cat "$build_dir/llvmnet-source" 2>/dev/null)" != "$source_dir" || "$root/config/ffmpeg-browser.sh" -nt "$build_dir/ffbuild/config.mak" || "${BASH_SOURCE[0]}" -nt "$build_dir/ffbuild/config.mak" || "$root/config/ffmpeg-configure.patch" -nt "$build_dir/ffbuild/config.mak" ]] ||
     { [[ "$runtime" == portable ]] && [[ -n "$(find "$root/sysroot/dotnet64-v1/include" -type f -newer "$build_dir/ffbuild/config.mak" -print -quit)" ]]; }; then
     configure="$source_dir/configure"
     if [[ "$simd128" == 1 && "$runtime" == portable ]]; then
         mkdir -p "$build_dir/ffbuild"
-        if [[ ! -e "$build_dir/src" ]]; then ln -s "$source_dir" "$build_dir/src"; fi
+        ln -sfn "$source_dir" "$build_dir/src"
         configure="$build_dir/ffbuild/llvmnet-configure"
         cp "$source_dir/configure" "$configure"
         patch --quiet "$configure" "$root/config/ffmpeg-configure.patch"
@@ -71,6 +71,7 @@ if [[ ! -f "$build_dir/ffbuild/config.mak" || "$root/config/ffmpeg-browser.sh" -
                 --extra-ldflags="--runtime=$runtime ${simd_flags[*]} -L$prefix/lib" "${ffmpeg_components[@]}"
     )
             printf '%s\n' "$runtime" >"$build_dir/llvmnet-runtime"
+            printf '%s\n' "$source_dir" >"$build_dir/llvmnet-source"
             printf '%s\n' "$simd128" >"$build_dir/llvmnet-simd128"
 fi
 for feature in CONFIG_ZLIB CONFIG_LIBXML2 HAVE_PTHREADS; do

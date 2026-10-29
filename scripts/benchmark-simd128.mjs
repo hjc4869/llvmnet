@@ -17,6 +17,10 @@ function integer(name, fallback, minimum) {
         throw new Error(`Invalid ${name}: ${text}`);
     return Number(text);
 }
+function mediaDirectory() {
+    if (!process.env.LLVMNET_LOCAL_MEDIA) throw new Error('Pass video files or set LLVMNET_LOCAL_MEDIA to a directory of .mp4 files.');
+    return readdirSync(process.env.LLVMNET_LOCAL_MEDIA);
+}
 const threads = integer('VIDEO_BENCH_THREADS', 4, 1);
 const repeats = integer('VIDEO_BENCH_REPEATS', 3, 1);
 const limit = integer('VIDEO_BENCH_FRAMES', 0, 0);
@@ -27,7 +31,7 @@ const native = process.env.VIDEO_BENCH_NATIVE ?? '/usr/bin/ffmpeg';
 const output = resolve(process.env.VIDEO_BENCH_OUTPUT ?? join(root, 'artifacts', 'video-simd128', new Date().toISOString().replaceAll(':', '-')));
 const argumentsFiles = options.filter(option => !option.startsWith('--'));
 const files = argumentsFiles.length ? argumentsFiles.map(file => resolve(file)) :
-    readdirSync('/home/david/Videos').filter(name => /^2026.*\.mp4$/.test(name)).sort().map(name => join('/home/david/Videos', name));
+    mediaDirectory().filter(name => /\.mp4$/.test(name)).sort().map(name => join(process.env.LLVMNET_LOCAL_MEDIA, name));
 if (!files.length) throw new Error('No video inputs found.');
 if (new Set(files.map(file => basename(file))).size !== files.length) throw new Error('Video basenames must be unique.');
 mkdirSync(output, { recursive: true });

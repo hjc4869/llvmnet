@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
+# tags: integration ffmpeg aot
+# requires: ffmpeg-cli
+# serial: 70
+# timeout: 7200
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
-source_dir="${FFMPEG_SOURCE:-/mnt/storage/david/Development/LightPlayer-Packages/ffmpeg}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source_dir="${FFMPEG_SOURCE:-$("$root/scripts/fetch-sources.sh" --path ffmpeg)}"
 output="$root/artifacts/tests/ffmpeg-simd128"
 mkdir -p "$output"
 for runtime in system portable; do
@@ -53,7 +57,6 @@ for depth in 8 10; do
         done
     done
 done
-dotnet build "$root/tests/LlvmNet.Checks" -c Release --nologo
 dotnet "$root/tests/LlvmNet.Checks/bin/Release/net10.0/LlvmNet.Checks.dll" inspect \
     "$root/artifacts/ffmpeg-browser-portable-simd128/decode.dll" | tee "$output/portable-inspect.txt"
 grep -q ', 0 explicit P/Invoke imports\.$' "$output/portable-inspect.txt"

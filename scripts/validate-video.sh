@@ -2,7 +2,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="${FFMPEG_BUILD_DIR:-$root/artifacts/ffmpeg-core}"
-video="${1:-/home/david/Videos/20260521_215039.mp4}"
+video="${1:-${FFMPEG_TEST_VIDEO:?Pass a video file or set FFMPEG_TEST_VIDEO}}"
 frames="${2:-10}"
 if [[ ! -f "$build_dir/decode.dll" || ! -x "$build_dir/decode-native" ]]; then
     printf 'Build both decoders with scripts/build-ffmpeg-core.sh first.\n' >&2
