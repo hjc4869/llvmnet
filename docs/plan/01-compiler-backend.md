@@ -68,6 +68,11 @@ The backend is the part of llvmnet that must be kept. This workstream makes it p
 - [ ] **BE-33** (L, P1) Emit denser IL and reuse locals across blocks. `--diagnose-limits` shows the hottest ffmpeg, perlbench and gcc functions expand to about 21 IL bytes per LLVM instruction with thousands of locals, putting them past RyuJIT's MinOpts thresholds (38 ffmpeg, 23 perlbench and 40 gcc methods). Target: halve IL bytes per instruction and keep the measured hot functions below the thresholds; complements BE-26.
 - [ ] **BE-34** (M, P2) Constrained floating point with static non-nearest rounding modes and observable exception flags; today such calls are rejected, while to-nearest and dynamic ones are lowered to plain operations.
 
+### Found by fuzzing (FD-16)
+
+- [x] **BE-35** (S, P0) Globals beyond 2 GB. Constant data was collected in one array, so a global over 2 GB, such as YARPGen's multidimensional arrays, failed with an internal overflow error (19 of 400 programs), and every global was cleared page by page at startup. — **Done** (`7a607d2`): sparse 1 MB constant chunks; globals use lazily zeroed memory like ELF `.bss` (`tests/c/huge-globals.c`, 5 GB of globals in 36 MB of memory).
+- [ ] **BE-36** (M, P1) Integers wider than 128 bits. Clang stores a run of adjacent bit-fields as one integer of the combined width, such as `i136` or `i176`, at every optimization level, and llvmnet rejects these types (7 of 884 compared csmith programs). Lower arbitrary widths, at least loads, stores, shifts, masks, extension and truncation, instead of rejecting them.
+
 ### Vectors
 
 - [x] **BE-31** (S, P0) Scalarization remains the default. Fuzz the C fixtures with `-O3 -fvectorize -fslp-vectorize` and confirm every vector type LLVM produces either scalarizes or is rejected, never miscompiled. — **Done** (`6fd80c9`): `tests/vector-sweep.sh`; masked memory intrinsics now scalarized.
