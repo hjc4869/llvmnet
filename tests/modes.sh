@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
+# tags: toolchain aot
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/modes"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 "$root/bin/llvmnet" --runtime=portable -shared "$root/tests/c/link-library.c" -o "$output/PortableLibrary.dll"
 "$root/bin/llvmnet" --runtime=portable "$root/tests/c/link-main.c" --cil-reference "$output/PortableLibrary.dll" -o "$output/portable-client.dll"
 dotnet "$output/portable-client.dll"

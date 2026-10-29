@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+# tags: core aot cpp
+# requires: clang++
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/cpp-nothrow"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 clang++-22 -std=c++14 -O1 "$root/tests/cpp/nothrow.cpp" -o "$output/native"
 "$output/native" > "$output/native.txt"
 for runtime in system portable; do

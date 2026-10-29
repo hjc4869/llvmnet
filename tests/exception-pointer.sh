@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+# tags: core aot cpp
+# requires: clang++
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/exception-pointer"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 clang++-22 -std=c++17 -pthread -O1 "$root/tests/cpp/exception-pointer.cpp" -o "$output/native"
 timeout 30 "$output/native" > "$output/native.txt"
 for optimization in 0 3; do

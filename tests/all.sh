@@ -1,32 +1,26 @@
 #!/usr/bin/env bash
+# Compatibility wrapper for the earlier sequential gates; new work should call tests/run.sh directly.
+#   core         -> tests/run.sh --tag core
+#   integration  -> tests/run.sh --tag core --tag integration
+#   spec-test    -> integration, then the licensed SPEC development runners and the video benchmark
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 mode="${1:-core}"
-case "$mode" in core|integration|spec-test) ;; *) printf 'Usage: %s [core|integration|spec-test]\n' "$0" >&2; exit 2 ;; esac
-dotnet build "$root/llvmnet.slnx" -c Release --nologo
-for test in smoke link runtime math complex-runtime io time float80 ir large-locals large-data lifecycle ctype atomics threads thread-local varargs-callbacks native-varargs-pointers legacy-callbacks aggregate-callbacks nonlocal-jumps stack posix debug-trap cpp cpp-filters cpp-terminate cpp-nothrow exception-pointer fortran fortran-time fortran-random fortran-environment fortran-convert fortran-shape fortran-endfile fortran-model fortran-stack fortran-record-length fortran-inquire-length fortran-direct fortran-format namelist unformatted inquire pack derived-lifetime derived-assignment nonadvancing wide vectors spec-matrix spec-ordered; do
-    bash "$root/tests/$test.sh"
-done
-if [[ "$mode" == integration || "$mode" == spec-test ]]; then
-    bash "$root/scripts/build-dependencies.sh"
-    bash "$root/tests/dependencies.sh" zlib libxml2 dav1d
-    bash "$root/tests/codecs.sh"
-    bash "$root/tests/codecs-extended.sh"
-    bash "$root/tests/manifests.sh"
-    bash "$root/tests/ffmpeg-libraries.sh"
-    bash "$root/tests/ffmpeg-threads.sh"
-    bash "$root/tests/simd128.sh"
-    bash "$root/tests/ffmpeg-simd128.sh"
-    FFMPEG_BUILD_DIR="$root/artifacts/ffmpeg-browser" bash "$root/scripts/validate-video.sh" "${FFMPEG_TEST_VIDEO:-/home/david/Videos/20260521_215039.mp4}" 10
-    dotnet "$root/tests/LlvmNet.Checks/bin/Release/net10.0/LlvmNet.Checks.dll" inspect "$root/artifacts/ffmpeg-browser/decode.dll"
+case "$mode" in
+    core) exec bash "$root/tests/run.sh" --tag core ;;
+    integration) exec bash "$root/tests/run.sh" --tag core --tag integration ;;
+    spec-test) ;;
+    *) printf 'Usage: %s [core|integration|spec-test]\n' "$0" >&2; exit 2 ;;
+esac
+bash "$root/tests/run.sh" --tag core --tag integration
+export LLVMNET_SKIP_BUILD=1
+if [[ -n "${FFMPEG_TEST_VIDEO:-}" ]]; then
+    FFMPEG_BUILD_DIR="$root/artifacts/ffmpeg-browser" bash "$root/scripts/benchmark-video.sh" "$FFMPEG_TEST_VIDEO"
 fi
-if [[ "$mode" == spec-test ]]; then
-    bash "$root/scripts/benchmark-video.sh" "${FFMPEG_TEST_VIDEO:-/home/david/Videos/20260521_215039.mp4}"
-    bash "$root/scripts/spec-mcf.sh" test
-    bash "$root/scripts/spec-deepsjeng.sh" test
-    bash "$root/scripts/spec-exchange2.sh" test
-    bash "$root/scripts/spec-zstd.sh"
-    bash "$root/scripts/spec-lbm.sh" 2017 test
-    bash "$root/scripts/spec-lbm.sh" 2026 test
-fi
-printf 'PASS: llvmnet %s checks\n' "$mode"
+bash "$root/scripts/spec-mcf.sh" test
+bash "$root/scripts/spec-deepsjeng.sh" test
+bash "$root/scripts/spec-exchange2.sh" test
+bash "$root/scripts/spec-zstd.sh"
+bash "$root/scripts/spec-lbm.sh" 2017 test
+bash "$root/scripts/spec-lbm.sh" 2026 test
+printf 'PASS: llvmnet spec-test checks\n'

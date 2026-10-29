@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
+# tags: toolchain cpp
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
-output="$root/artifacts/tests/portable-spec/causes"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+output="$root/artifacts/tests/portable-spec-causes"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 expect_failure() {
     local name="$1" diagnostic="$2"
     shift 2

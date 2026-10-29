@@ -18,7 +18,7 @@ if [[ ! -d "$benchmark/src" ]]; then
 fi
 build="$stage/llvmnet-exchange2"
 mkdir -p "$build/native-$dataset" "$build/cil-$dataset"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
+bash "$root/scripts/ensure-built.sh"
 "$root/bin/llvmnet" -O1 -DSPEC -DSPEC_CPU -DSPEC_CPU_LP64 -DSPEC_AUTO_SUPPRESS_OPENMP \
     "$benchmark/src/exchange2.F90" --keep-ir "$build/exchange2.bc" -o "$build/exchange2.dll"
 flang-22 -O1 "$build/exchange2.bc" -o "$build/exchange2-native"

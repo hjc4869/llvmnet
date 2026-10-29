@@ -23,7 +23,7 @@ fi
 source_dir="$benchmark/src"
 build="$stage/llvmnet-mcf"
 mkdir -p "$build/native-$dataset" "$build/cil-$dataset"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
+bash "$root/scripts/ensure-built.sh"
 sources=(mcf.c mcfutil.c readmin.c implicit.c pstart.c output.c treeup.c pbla.c pflowup.c psimplex.c pbeampp.c spec_qsort/spec_qsort.c)
 paths=()
 for file in "${sources[@]}"; do paths+=("$source_dir/$file"); done

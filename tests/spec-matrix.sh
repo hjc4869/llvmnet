@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
+# tags: core
+# requires: perl
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/spec-matrix"
 mkdir -p "$output"
 suite="$(mktemp -d "$output/fake-suite.XXXXXXXX")"

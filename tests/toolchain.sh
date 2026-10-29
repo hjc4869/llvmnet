@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
+# tags: toolchain aot
+# serial: 90
+# timeout: 1800
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/toolchain"
 mkdir -p "$output"
 bash "$root/scripts/package-toolchain.sh" "$output/install"

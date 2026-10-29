@@ -23,8 +23,7 @@ if [[ ! -d "$benchmark/src" ]]; then
 fi
 build="$stage/llvmnet-lbm"
 mkdir -p "$build/native-$dataset" "$build/cil-$dataset"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
-dotnet build "$root/tests/LlvmNet.Checks" -c Release --nologo
+bash "$root/scripts/ensure-built.sh"
 "$root/bin/llvmnet" -O1 -DSPEC -DSPEC_CPU -DSPEC_CPU_LP64 "${flags[@]}" \
     -I"$benchmark/src" "$benchmark/src/lbm.c" "$benchmark/src/main.c" -lm --keep-ir "$build/lbm.bc" -o "$build/lbm.dll"
 clang-22 -O1 "$build/lbm.bc" -lm -o "$build/lbm-native"

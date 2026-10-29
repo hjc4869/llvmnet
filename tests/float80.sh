@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
+# tags: core aot
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/float80"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 clang-22 -O1 "$root/tests/c/float80.c" -lm -o "$output/native"
 "$output/native"
 for optimization in 0 1 2; do

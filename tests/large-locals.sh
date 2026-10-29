@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
+# tags: core aot
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/large-locals"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 awk 'BEGIN {
     print "target triple = \"x86_64-pc-linux-gnu\""
     print "@_ZTIi = external constant ptr"

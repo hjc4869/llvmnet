@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
+# tags: core aot
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/vectors"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 flags=(-O3 -fvectorize -fslp-vectorize)
 sources=("$root/tests/c/vector-main.c" "$root/tests/c/vector-kernel.c")
 clang-22 "${flags[@]}" "${sources[@]}" -o "$output/native"

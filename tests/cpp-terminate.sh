@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
+# tags: core aot cpp
+# requires: clang++
 set -euo pipefail
 ulimit -c 0
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/cpp-terminate"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 clang++-22 -std=c++17 -O1 "$root/tests/cpp/terminate.cpp" -o "$output/native"
 check_exit() {
     local expected="$1" log="$2" code=0

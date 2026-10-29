@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
+# tags: optional aot cpp
+# requires: clang++ system-cxx
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-archive="$(realpath "${1:?Usage: system-cxx.sh libstdcxx-system.a}")"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+archive="$(realpath "${1:-${LLVMNET_SYSTEM_CXX:-$root/artifacts/system-cxx/libstdcxx-system.a}}")"
 output="$root/artifacts/tests/system-cxx"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 clang++-22 -std=c++14 -pthread -O3 "$root/tests/cpp/streams.cpp" -o "$output/native"
 timeout 30 "$output/native" "$output/native-file.txt" > "$output/native.txt"
 for optimization in 0 3; do

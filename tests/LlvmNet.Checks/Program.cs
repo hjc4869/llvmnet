@@ -81,6 +81,8 @@ try
         }
         return 0;
     }
+    if (args is ["jit-all", .. string[] roots] && roots.Length > 0)
+        return JitValidation.Run(roots);
     if (args is ["inspect", string assemblyPath])
     {
         using FileStream stream = File.OpenRead(assemblyPath);
@@ -115,7 +117,7 @@ try
         }
         return 0;
     }
-    Console.Error.WriteLine("Usage: LlvmNet.Checks compare-numeric expected actual absolute-tolerance | inspect assembly.dll | inspect-methods assembly.dll name-filter | inspect-signatures assembly.dll | simd128-probe inputs.bin");
+    Console.Error.WriteLine("Usage: LlvmNet.Checks compare-numeric expected actual absolute-tolerance | inspect assembly.dll | jit-all path... | inspect-methods assembly.dll name-filter | inspect-signatures assembly.dll | simd128-probe inputs.bin");
     return 2;
 }
 catch (Exception error)

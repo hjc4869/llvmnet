@@ -17,8 +17,7 @@ if [[ "$prefix" == / || "$prefix" == "$root" ]]; then
     printf 'Choose a separate toolchain installation prefix.\n' >&2
     exit 2
 fi
-dotnet build "$root/llvmnet.slnx" -c Release --nologo
-bash "$root/scripts/build-portable-runtime.sh"
+bash "$root/scripts/ensure-built.sh"
 mkdir -p "$prefix/bin" "$prefix/lib/llvmnet" "$prefix/share/llvmnet" "$prefix/sysroot"
 publish_options=(--no-self-contained)
 if [[ "$self_contained" -eq 1 ]]; then publish_options=(--self-contained -r linux-x64); fi

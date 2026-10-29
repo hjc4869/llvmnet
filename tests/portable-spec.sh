@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+# tags: toolchain aot fortran cpp
+# requires: flang clang++
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/portable-spec"
 mkdir -p "$output"
-dotnet build "$root/llvmnet.slnx" -c Release --nologo
 cd "$output"
 fixture="$root/tests/c/portable-spec-functions.c"
 clang-22 -O3 -fno-builtin "$fixture" -lm -o "$output/functions-native"
@@ -15,7 +16,6 @@ for runtime in system portable; do
     "$output/functions-$runtime-aot"
 done
 dotnet "$root/tests/LlvmNet.Checks/bin/Release/net10.0/LlvmNet.Checks.dll" inspect "$output/functions-portable.dll"
-bash "$root/scripts/build-portable-runtime.sh"
 fixture="$root/tests/cpp/portable-spec-clock.cpp"
 clang++-22 -std=c++17 -O3 "$fixture" -o "$output/clock-native"
 "$output/clock-native"

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
+# tags: core aot
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/stack"
 mkdir -p "$output"
 ulimit -S -s 8192
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 clang-22 "$root/tests/ir/stack-save.ll" -o "$output/native"
 "$output/native"
 cp "$root/tests/ir/stack-save.ll" "$output/stack.input"

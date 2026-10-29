@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+# tags: core aot fortran
+# requires: flang
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/fortran-record-length"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 flang-22 -O1 "$root/tests/fortran/record-length.f90" -o "$output/native"
 timeout 30 "$output/native" > "$output/native.txt"
 for runtime in system portable; do

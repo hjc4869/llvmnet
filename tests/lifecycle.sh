@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
+# tags: core
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/lifecycle"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 clang-22 -O1 "$root/tests/c/lifecycle.c" -o "$output/native"
 "$output/native" >"$output/native.txt"
 dotnet "$root/src/LlvmNet.Compiler/bin/Release/net10.0/llvmnet.dll" "$root/tests/c/lifecycle.c" -o "$output/lifecycle.dll"

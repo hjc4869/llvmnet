@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
+# tags: core aot
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/native-varargs-pointers"
 mkdir -p "$output"
-bash "$root/scripts/build-native.sh" "$root/src/LlvmNet.Compiler/bin/Release/net10.0"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 clang-22 -O1 "$root/tests/c/native-varargs-pointers.c" -o "$output/native"
 "$output/native" "$output/native-file" > "$output/native.txt"
 "$root/bin/llvmnet" --runtime=system -O1 "$root/tests/c/native-varargs-pointers.c" -o "$output/pointers.dll"

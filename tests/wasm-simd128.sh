@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
+# tags: optional wasm
+# requires: node wasm-ld
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/wasm-simd128"
 mkdir -p "$output"
 linker="${WASM_LD:-$(command -v wasm-ld-22 || command -v wasm-ld || command -v wasm-ld-21 || true)}"
@@ -12,7 +14,6 @@ clang-22 --target=wasm32 -msimd128 -O2 -c "$root/tests/wasm/simd128.c" -o "$outp
 "$linker" --no-entry --export=run --export=input_address --export=output_address \
     --export-memory "$output/oracle.o" -o "$output/oracle.wasm"
 node "$root/tests/wasm/simd128.mjs" "$output/oracle.wasm" "$output/inputs.bin" >"$output/wasm.txt"
-dotnet build "$root/tests/LlvmNet.Checks" -c Release --nologo
 checks="$root/tests/LlvmNet.Checks/bin/Release/net10.0/LlvmNet.Checks.dll"
 dotnet "$checks" simd128-probe "$output/inputs.bin" >"$output/dotnet.txt" 2>"$output/hardware.log"
 diff -u "$output/wasm.txt" "$output/dotnet.txt"

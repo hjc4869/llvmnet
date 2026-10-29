@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+# tags: integration wasm aot
+# requires: node wasm-ld
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/simd128"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 for runtime in system portable; do
     abi=system-linux-x64-v1
     if [[ "$runtime" == portable ]]; then abi=dotnet64-v1; fi

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
+# tags: toolchain aot
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/portable"
 mkdir -p "$output"
-dotnet build "$root/llvmnet.slnx" -c Release --nologo
 for fixture in portable core runtime threads time; do
     "$root/bin/llvmnet" --runtime=portable "$root/tests/c/$fixture.c" -o "$output/$fixture.dll"
     if [[ "$fixture" == runtime ]]; then dotnet "$output/$fixture.dll" payload; else dotnet "$output/$fixture.dll"; fi

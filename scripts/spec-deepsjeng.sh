@@ -19,7 +19,7 @@ fi
 source_dir="$benchmark/src"
 build="$stage/llvmnet-deepsjeng"
 mkdir -p "$build/native-$dataset" "$build/cil-$dataset"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
+bash "$root/scripts/ensure-built.sh"
 sources=(attacks.cpp bitboard.cpp bits.cpp board.cpp draw.cpp endgame.cpp epd.cpp generate.cpp initp.cpp make.cpp moves.cpp neval.cpp pawn.cpp preproc.cpp search.cpp see.cpp sjeng.cpp state.cpp ttable.cpp utils.cpp)
 paths=()
 for file in "${sources[@]}"; do paths+=("$source_dir/$file"); done

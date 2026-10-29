@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
+# tags: integration ffmpeg
+# requires: ffmpeg-cli
+# serial: 30
+# after: codecs
+# timeout: 1800
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 build="${FFMPEG_BUILD_DIR:-$root/artifacts/ffmpeg-browser}"
 fixtures="$root/artifacts/tests/codecs-extended"
 mkdir -p "$fixtures"

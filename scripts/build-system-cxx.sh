@@ -18,7 +18,7 @@ if ! grep -qx '#define _GLIBCXX_RELEASE 16' "$build/header-macros.txt"; then
 fi
 awk '/^#define (_DARWIN_USE_64_BIT_INODE|_FILE_OFFSET_BITS|_LARGE_FILES)( |$)/' \
     "$build/header-macros.txt" > "$build/include/bits/largefile-config.h"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
+bash "$root/scripts/ensure-built.sh"
 sources=(
     src/c++98/globals_io.cc
     src/c++98/ios_init.cc

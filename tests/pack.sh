@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+# tags: core aot fortran
+# requires: flang
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/pack"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 for fixture in pack reshape array-constructor deferred-character transfer; do
     flang-22 -O3 "$root/tests/fortran/$fixture.f90" -o "$output/$fixture-native"
     "$output/$fixture-native" > "$output/$fixture-native.txt"

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
+# tags: toolchain aot
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/system-abi"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 for fixture in runtime io threads posix; do
     "$root/bin/llvmnet" --runtime=system -O1 "$root/tests/c/$fixture.c" -o "$output/$fixture"
     case "$fixture" in

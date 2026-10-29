@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
+# tags: core aot fortran
+# requires: flang
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/fortran-convert"
 mkdir -p "$output"
 unset FORT_CONVERT
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 flang-22 -O1 -fconvert=big-endian "$root/tests/fortran/conversion-default.f90" -o "$output/native"
 "$output/native" "$output/native-big.bin" > "$output/native.txt"
 FORT_CONVERT=LITTLE_ENDIAN "$output/native" "$output/native-little.bin" > "$output/native-little.txt"

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
+# tags: core
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/link"
 mkdir -p "$output"
 compiler=(dotnet "$root/src/LlvmNet.Compiler/bin/Release/net10.0/llvmnet.dll")
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 "${compiler[@]}" -c "$root/tests/c/link-main.c" -o "$output/main.o"
 "${compiler[@]}" -c "$root/tests/c/link-library.c" -o "$output/library.o"
 "${compiler[@]}" -c "$root/tests/c/link-unused.c" -o "$output/unused.o"

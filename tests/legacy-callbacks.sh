@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
+# tags: core aot
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/legacy-callbacks"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 for optimization in 0 3; do
     clang-22 -std=gnu17 -Wno-deprecated-non-prototype -O"$optimization" "$root/tests/c/legacy-callbacks.c" -o "$output/native"
     "$output/native" > "$output/native.txt"

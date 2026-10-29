@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
+# tags: integration ffmpeg
+# serial: 10
+# timeout: 3600
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 prefix="${LLVMNET_DEPS_PREFIX:-$root/artifacts/deps}"
 output="$root/artifacts/tests/dependencies"
+if [[ $# -eq 0 ]]; then
+    # Under the runner: build the default-ABI dependencies from pinned sources, then check all three.
+    bash "$root/scripts/build-dependencies.sh"
+    set -- zlib libxml2 dav1d
+fi
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 for name in "${@:-zlib libxml2}"; do
     for library in $name; do
         case "$library" in

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+# tags: core cpp
+# requires: clang++
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/cpp"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 clang++-22 -std=c++17 -O1 "$root/tests/cpp/core.cpp" -o "$output/native"
 "$output/native" >"$output/native.txt"
 for optimization in 0 1 2; do

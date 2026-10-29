@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
+# tags: toolchain slow fortran cpp
+# requires: flang
+# serial: 95
+# timeout: 2400
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
-prefix="${1:-$root/artifacts/deploy-toolchain}"
-prefix="$(realpath "$prefix")"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+if [[ $# -gt 0 ]]; then
+    prefix="$(realpath "$1")"
+else
+    # Under the runner: build a fresh self-contained package with bundled LLVM first.
+    prefix="$root/artifacts/tests/deployment/toolchain"
+    rm -rf "$prefix"
+    bash "$root/scripts/package-toolchain.sh" "$prefix" --self-contained --bundle-llvm
+fi
 output="$root/artifacts/tests/deployment"
 mkdir -p "$output/essentials"
 for utility in bash dirname basename; do

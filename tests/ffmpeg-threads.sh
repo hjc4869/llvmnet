@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
+# tags: integration ffmpeg aot
+# requires: ffmpeg-cli
+# serial: 60
+# timeout: 7200
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/ffmpeg-threads"
 mkdir -p "$output"
 timeout_seconds="${FFMPEG_THREADS_TIMEOUT:-120}"
@@ -22,7 +26,6 @@ for runtime in system portable; do
             >"$output/aot-$runtime.log" 2>&1
     fi
 done
-dotnet build "$root/tests/LlvmNet.Checks" -c Release --nologo
 dotnet "$root/tests/LlvmNet.Checks/bin/Release/net10.0/LlvmNet.Checks.dll" inspect \
     "$root/artifacts/ffmpeg-browser-portable/decode.dll" | tee "$output/portable-inspect.txt"
 grep -q ', 0 explicit P/Invoke imports\.$' "$output/portable-inspect.txt"

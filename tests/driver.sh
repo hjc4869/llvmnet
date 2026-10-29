@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
+# tags: toolchain aot cpp
 set -euo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/driver"
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 for runtime in managed-host system portable; do
     "$root/bin/llvmnet" -Wl,--version --runtime="$runtime" >"$output/linker-$runtime.txt"
     grep -q 'emits CIL, not native images' "$output/linker-$runtime.txt"

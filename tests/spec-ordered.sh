@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
+# tags: core
+# requires: perl
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$(mktemp -d "$root/artifacts/tests/spec-ordered.XXXXXXXX")"
 suite2017="$output/spec2017"
 suite2026="$output/spec2026"

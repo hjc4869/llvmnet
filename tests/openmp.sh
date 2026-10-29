@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
+# tags: optional aot
+# requires: openmp
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/openmp"
 prefix="${LLVMNET_OPENMP_PREFIX:-$root/artifacts/system-openmp}"
 library="${LLVMNET_OPENMP_LIBRARY:-libomp.so.5}"
@@ -13,7 +15,6 @@ if [[ -f "$prefix/include/omp.h" && -f "$prefix/lib/libomp.so.5" ]]; then
     export LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 mkdir -p "$output"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
 export OMP_NUM_THREADS=4 OMP_THREAD_LIMIT=4 OMP_DYNAMIC=FALSE
 clang-22 -fopenmp "${compiler_args[@]}" "${native_link_args[@]}" -O1 "$root/tests/c/openmp.c" -o "$output/native"
 timeout 30 "$output/native" > "$output/native.txt"

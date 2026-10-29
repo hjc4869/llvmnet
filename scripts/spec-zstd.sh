@@ -21,7 +21,7 @@ fi
 source_dir="$benchmark/src/zstd-1.5.6"
 build="$stage/llvmnet-zstd"
 mkdir -p "$build"
-dotnet build "$root/src/LlvmNet.Compiler" -c Release --nologo
+bash "$root/scripts/ensure-built.sh"
 sources=(
     programs/fileio.c programs/fileio_asyncio.c programs/util.c programs/timefn.c programs/zstdcli.c
     programs/benchzstd.c programs/datagen.c programs/benchfn.c programs/lorem.c
