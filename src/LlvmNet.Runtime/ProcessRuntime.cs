@@ -24,6 +24,46 @@ public static unsafe class ProcessRuntime
         return values.Length;
     }
 
+    /// <summary>
+    /// For musl (LC-01): one Linux-style start vector, argv entries, NULL, environment entries, NULL, then an
+    /// auxiliary vector with AT_PAGESZ, AT_RANDOM and equal real/effective ids, which musl's __init_libc reads.
+    /// </summary>
+    public static int InitializeStartup(string[] arguments)
+    {
+        string[] values = [Environment.GetCommandLineArgs().FirstOrDefault() ?? Environment.ProcessPath ?? "program", .. arguments];
+        string[] environment = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().Select(item => $"{item.Key}={item.Value}").ToArray();
+        int slots = values.Length + 1 + environment.Length + 1 + 2 * 8;
+        nint vector = (nint)NativeMemory.AllocZeroed((nuint)slots, (nuint)IntPtr.Size);
+        argumentAllocations.Add(vector);
+        nint* slot = (nint*)vector;
+        foreach (string value in values) *slot++ = String(value);
+        slot++;
+        EnvironmentVector = (nint)slot;
+        foreach (string value in environment) *slot++ = String(value);
+        slot++;
+        nint random = (nint)NativeMemory.Alloc(16);
+        argumentAllocations.Add(random);
+        RandomNumberGenerator.Fill(new Span<byte>((void*)random, 16));
+        foreach ((nint key, nint value) in new (nint, nint)[] { (6, 4096), (25, random), (11, 0), (12, 0), (13, 0), (14, 0), (23, 0) })
+        {
+            *slot++ = key;
+            *slot++ = value;
+        }
+        Arguments = vector;
+        ArgumentCount = values.Length;
+        return values.Length;
+
+        static nint String(string value)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(value);
+            nint text = (nint)NativeMemory.Alloc((nuint)bytes.Length + 1);
+            bytes.CopyTo(new Span<byte>((void*)text, bytes.Length));
+            ((byte*)text)[bytes.Length] = 0;
+            argumentAllocations.Add(text);
+            return text;
+        }
+    }
+
     private static nint Strings(string[] values)
     {
         nint array = (nint)NativeMemory.AllocZeroed((nuint)(values.Length + 1), (nuint)IntPtr.Size);

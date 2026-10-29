@@ -108,6 +108,7 @@ internal static class Driver
                 case "--simd128": options.Simd128 = true; break;
                 case "--trap-missing-arguments": options.TrapMissingArguments = true; break;
                 case "--diagnose-limits": options.DiagnoseLimits = true; break;
+                case "--portable-libc": PortableAbi.Libc = Path.GetFullPath(Next()); break;
                 case "--check-indirect-calls": options.CheckIndirectCalls = true; break;
                 case "--aot-debug": aotDebug = true; break;
                 case "--runtime-id": runtimeId = Next(); break;
@@ -182,6 +183,7 @@ internal static class Driver
             throw new ArgumentException("Portable ABI mode cannot contain native imports; use a managed CIL reference or --runtime=system.");
         if (options.Runtime != "system" && options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
         if (options.Runtime != "system" && options.TrapMissingArguments) throw new ArgumentException("--trap-missing-arguments requires --runtime=system.");
+        if (PortableAbi.Libc is not null && options.Runtime != "portable") throw new ArgumentException("--portable-libc requires --runtime=portable.");
         if (options.Runtime == "system" && runtimeId is not null && runtimeId != "linux-x64")
             throw new ArgumentException("The current system ABI profile requires NativeAOT RID linux-x64.");
         if (linkerVersion)
@@ -264,7 +266,12 @@ internal static class Driver
             if (options.Runtime == "portable")
             {
                 string cppRuntime = Path.Combine(Toolchain.Root, "sysroot", "dotnet64-v1", "lib", "libcxx-managed.a");
-                if (File.Exists(cppRuntime)) bitcode.Add(cppRuntime);
+                if (PortableAbi.Libc is not null)
+                {
+                    if (!options.Library) bitcode.Add(Path.Combine(PortableAbi.Libc, "lib", "crt1.o"));
+                    bitcode.Add(Path.Combine(PortableAbi.Libc, "lib", "libc.a"));
+                }
+                else if (File.Exists(cppRuntime)) bitcode.Add(cppRuntime);
             }
             string linked = Path.Combine(temporary, "linked.bc");
             if (bitcode.All(path => Path.GetExtension(path) == ".a"))
@@ -284,13 +291,14 @@ internal static class Driver
             {
                 Llvm.WrapVectorInvokes(prepared.Handle);
                 Llvm.RemoveTargetAttributes(prepared.Handle);
+                Llvm.LowerConstrainedFloatingPoint(prepared.Handle);
                 if (Llvm.LLVMWriteBitcodeToFile(prepared.Handle, linked) != 0)
                     throw new IOException("Cannot write the legalized module.");
             }
             string scalarizer = options.Simd128 ? "scalarizer" : "scalarizer<load-store>";
             string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,expand-reductions,scalarize-masked-mem-intrin,{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
-            if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain");
+            if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (PortableAbi.Libc is null ? "" : ",__llvmnet_libc_main"));
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);
             if (optimizeResult != 0)
                 return optimizeResult;

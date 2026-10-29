@@ -33,6 +33,9 @@ internal sealed class CilCompiler(CompilerOptions options)
         .ToDictionary(item => item.Name, item => item.Method, StringComparer.Ordinal);
 
     private readonly Dictionary<nint, bool> undefinedWeak = [];
+    private MethodBuilder constructors = null!;
+    private nint libcMain;
+    private nint libcFinalizer;
 
     private static readonly Lazy<HashSet<string>> FrameworkAssemblyNames = new(() =>
         ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string) ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
@@ -188,6 +191,8 @@ internal sealed class CilCompiler(CompilerOptions options)
             Methods[function] = adapter;
             return adapter;
         }
+        if (name == "__llvmnet_run_constructors")
+            return Methods[function] = constructors;
         if (!runtimeExports.TryGetValue(name, out method))
             throw new NotSupportedException($"Unresolved function: {name}");
         if (Types.Map(Llvm.LLVMGetReturnType(signature)) != method.ReturnType ||
@@ -209,6 +214,11 @@ internal sealed class CilCompiler(CompilerOptions options)
         Program = cilModule.DefineType("Program", TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
         using var types = new TypeSystem(module, cilModule, options.Simd128);
         Types = types;
+        constructors = Program.DefineMethod("__llvmnet_run_constructors", MethodAttributes.Public | MethodAttributes.Static, typeof(void), Type.EmptyTypes);
+        // With musl (--portable-libc), its start object calls main and exit and runs constructors after __init_libc.
+        libcMain = Llvm.LLVMGetNamedFunction(module, "__llvmnet_libc_main");
+        if (libcMain != 0 && Llvm.LLVMIsDeclaration(libcMain) != 0) libcMain = 0;
+        libcFinalizer = Llvm.LLVMGetNamedFunction(module, "__llvmnet_register_finalizer");
         using HostInterop? host = options.Runtime == "system" ? new HostInterop(this, module, output, options) : null;
         Host = host;
         if (options.Simd128)
@@ -350,6 +360,24 @@ internal sealed class CilCompiler(CompilerOptions options)
             throw new NotSupportedException("The entry point must be int main(void), int main(int, char **[, char **]), or a Fortran main.");
         MethodBuilder entry = Program.DefineMethod("__Entry", MethodAttributes.Public | MethodAttributes.Static, typeof(int), [typeof(string[])]);
         ILGenerator il = entry.GetILGenerator();
+        if (libcMain != 0)
+        {
+            // musl: __llvmnet_libc_main(argc, argv, envp, main) initializes libc, runs constructors, calls main and exit.
+            MethodBuilder adapter = Program.DefineMethod("__llvmnet_main3", MethodAttributes.Private | MethodAttributes.Static, typeof(int), [typeof(int), typeof(nint), typeof(nint)]);
+            ILGenerator call = adapter.GetILGenerator();
+            for (short index = 0; index < parameters.Length; index++) call.Emit(OpCodes.Ldarg, index);
+            call.Emit(OpCodes.Call, main);
+            if (fortran) call.Emit(OpCodes.Ldc_I4_0);
+            call.Emit(OpCodes.Ret);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.InitializeStartup))!);
+            il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetProperty(nameof(ProcessRuntime.Arguments))!.GetMethod!);
+            il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetProperty(nameof(ProcessRuntime.EnvironmentVector))!.GetMethod!);
+            il.Emit(OpCodes.Ldftn, adapter);
+            il.Emit(OpCodes.Call, ResolveFunction(libcMain));
+            il.Emit(OpCodes.Ret);
+            return entry;
+        }
         LocalBuilder result = il.DeclareLocal(typeof(int));
         il.Emit(OpCodes.Ldarg_0);
         il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.Initialize))!);
@@ -430,15 +458,25 @@ internal sealed class CilCompiler(CompilerOptions options)
             }
         foreach ((nint value, FieldBuilder field) in constants)
             InitializeGlobal(il, value, field);
+        if (libcMain == 0) il.Emit(OpCodes.Call, constructors);
+        il.Emit(OpCodes.Ret);
+        ILGenerator lifecycle = constructors.GetILGenerator();
         foreach (nint function in LifecycleFunctions("llvm.global_dtors"))
         {
             MethodInfo destructor = ResolveFunction(function);
-            il.Emit(OpCodes.Ldftn, Host is null ? destructor : Host.Callback(function, destructor));
-            il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.AtFini))!);
+            lifecycle.Emit(OpCodes.Ldftn, Host is null ? destructor : Host.Callback(function, destructor));
+            if (libcMain != 0 && libcFinalizer != 0)
+            {
+                // musl runs these through atexit, before it flushes stdio, as it does .fini_array entries.
+                lifecycle.Emit(OpCodes.Call, ResolveFunction(libcFinalizer));
+                lifecycle.Emit(OpCodes.Pop);
+            }
+            else
+                lifecycle.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.AtFini))!);
         }
         foreach (nint function in LifecycleFunctions("llvm.global_ctors"))
-            il.Emit(OpCodes.Call, ResolveFunction(function));
-        il.Emit(OpCodes.Ret);
+            lifecycle.Emit(OpCodes.Call, ResolveFunction(function));
+        lifecycle.Emit(OpCodes.Ret);
 
         IEnumerable<nint> LifecycleFunctions(string name)
         {

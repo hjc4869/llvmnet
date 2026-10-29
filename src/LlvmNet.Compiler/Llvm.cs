@@ -13,6 +13,8 @@ internal static unsafe class Llvm
     private static extern int StampFile([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, int textual, out nint message);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_create_native_shim")]
     internal static extern nint CreateNativeShim(nint source);
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_lower_constrained_fp")]
+    internal static extern uint LowerConstrainedFloatingPoint(nint module);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_wrap_vector_invokes")]
     internal static extern uint WrapVectorInvokes(nint source);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_add_native_thunk")]
@@ -188,6 +190,7 @@ internal static unsafe class Llvm
     [DllImport(Library)] private static extern uint LLVMGetDebugLocLine(nint value);
     [DllImport(Library)] private static extern uint LLVMGetDebugLocColumn(nint value);
     [DllImport(Library)] internal static extern int LLVMGetLinkage(nint global);
+    [DllImport(Library)] internal static extern nint LLVMGetNamedFunction(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
     [DllImport(Library)] internal static extern nint LLVMGetFirstGlobalIFunc(nint module);
     [DllImport(Library)] internal static extern nint LLVMGetNextGlobalIFunc(nint ifunc);
     [DllImport(Library)] internal static extern nint LLVMIsAGlobalIFunc(nint value);

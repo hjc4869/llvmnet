@@ -4,13 +4,16 @@ namespace LlvmNet;
 
 internal static class PortableAbi
 {
+    /// <summary>Experimental (plan item LC-01): a musl prefix built by scripts/build-portable-libc.sh replaces the hand-written C headers and runtime.</summary>
+    internal static string? Libc { get; set; }
+
     internal static List<string> Arguments(IReadOnlyList<string> frontend, bool fortran, bool cpp)
     {
         foreach (string argument in frontend)
             if (argument is "-target" or "--sysroot" or "-isysroot" or "-fshort-wchar" or "-fshort-enums" or "-funsigned-char" or "-fno-signed-char" || argument.StartsWith("-fpack-struct", StringComparison.Ordinal) || argument.StartsWith("--target=", StringComparison.Ordinal) || argument.StartsWith("--sysroot=", StringComparison.Ordinal) || argument.StartsWith("-m", StringComparison.Ordinal) && !argument.StartsWith("-module", StringComparison.Ordinal))
                 throw new ArgumentException($"{argument} cannot change the versioned portable ABI; use --runtime=system for a native target.");
-        string include = Path.Combine(Toolchain.Root, "sysroot", "dotnet64-v1", "include");
-        if (!File.Exists(Path.Combine(include, "__llvmnet_types.h")))
+        string include = Libc is null ? Path.Combine(Toolchain.Root, "sysroot", "dotnet64-v1", "include") : Path.Combine(Libc, "include");
+        if (!File.Exists(Path.Combine(include, Libc is null ? "__llvmnet_types.h" : "bits/alltypes.h")))
             throw new DirectoryNotFoundException($"Portable ABI sysroot is missing from {include}");
         List<string> result = ["--target=x86_64-unknown-none", "-D__LLVMNET__=1", "-D__LLVMNET_PORTABLE__=1", "-D__LLVMNET_ABI_VERSION=1"];
         if (fortran) return result;
