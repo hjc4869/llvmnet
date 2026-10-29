@@ -1,0 +1,30 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{patch,diff}]
+trim_trailing_whitespace = false
+insert_final_newline = false
+
+[sysroot/dotnet64-v1/include/c++/**]
+generated_code = true
+
+[*.cs]
+csharp_style_namespace_declarations = file_scoped:suggestion
+csharp_new_line_before_open_brace = all
+csharp_prefer_braces = when_multiline:silent
+dotnet_sort_system_directives_first = true
+csharp_style_var_for_built_in_types = false:silent
+csharp_style_var_when_type_is_apparent = true:silent

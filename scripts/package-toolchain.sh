@@ -36,7 +36,8 @@ done
 cp -a "$root/docs" "$prefix/share/llvmnet/"
 mkdir -p "$prefix/share/llvmnet/spec"
 cp "$root/config/spec/llvmnet.cfg" "$root/config/spec/llvmnet.xml" "$prefix/share/llvmnet/spec/"
-cp "$root/README.md" "$prefix/share/llvmnet/"
+cp "$root/README.md" "$root/LICENSE.TXT" "$root/THIRD-PARTY-NOTICES.md" "$root/CHANGELOG.md" "$prefix/share/llvmnet/"
+mkdir -p "$prefix/share/llvmnet/licenses"
 if [[ -d "$root/sysroot" ]]; then cp -a "$root/sysroot/." "$prefix/sysroot/"; fi
 if [[ "$bundle_llvm" -eq 1 ]]; then
     llvm_prefix="$prefix/libexec/llvm"
@@ -67,6 +68,15 @@ if [[ "$bundle_llvm" -eq 1 ]]; then
     llvm_library="$(realpath "$(llvm-config-22 --libdir)/libLLVM-22.so")"
     cp -L "$llvm_library" "$llvm_prefix/lib/$(basename "$llvm_library")"
     ln -sfn "$(basename "$llvm_library")" "$llvm_prefix/lib/libLLVM-22.so"
-    if [[ -f /usr/share/doc/libllvm22/copyright ]]; then cp /usr/share/doc/libllvm22/copyright "$prefix/share/llvmnet/LLVM-copyright"; fi
+    # Keep the Debian copyright file of every package whose files were bundled above.
+    while read -r package; do
+        if [[ -f "/usr/share/doc/$package/copyright" ]]; then
+            cp "/usr/share/doc/$package/copyright" "$prefix/share/llvmnet/licenses/$package.copyright"
+        fi
+    done < <(for file in "${original_binaries[@]}" "$llvm_prefix"/lib/*.so*; do
+        source_file="$file"
+        [[ "$file" == "$llvm_prefix"/lib/* ]] && source_file="$(find /usr/lib/llvm-22/lib /usr/lib/x86_64-linux-gnu -maxdepth 1 -name "$(basename "$file")" -print -quit)"
+        [[ -n "$source_file" ]] && dpkg -S "$(realpath "$source_file")" 2>/dev/null | cut -d: -f1
+    done | sort -u)
 fi
 printf 'Toolchain installed in %s (bundled compiler runtime=%s, bundled LLVM=%s). NativeAOT publishing requires the .NET 10 SDK.\n' "$prefix" "$self_contained" "$bundle_llvm"

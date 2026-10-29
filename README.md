@@ -111,3 +111,7 @@ Build outputs, generated media, and locally extracted SPEC materials stay under 
 Generated code is intentionally unsafe and is not a sandbox. C pointers, invalid memory accesses, or untrusted programs can corrupt memory or terminate the process. Only compile and execute code you trust.
 
 Host-ABI modes target Linux/x86-64 SysV. Portable mode uses a fixed little-endian 64-bit .NET ABI with owned headers and runtime structures, not host headers. None of the modes is a sandbox or a complete libc/POSIX implementation. See [docs/toolchain.md](docs/toolchain.md), [docs/architecture.md](docs/architecture.md), and [docs/roadmap.md](docs/roadmap.md).
+
+## License
+
+llvmnet is licensed under the Apache License v2.0 with LLVM Exceptions, the same license as the LLVM project. See [LICENSE.TXT](LICENSE.TXT). Bundled and redistributed third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Contributions are accepted under the same license; see [CONTRIBUTING.md](CONTRIBUTING.md).

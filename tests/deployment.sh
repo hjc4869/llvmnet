@@ -8,6 +8,16 @@ mkdir -p "$output/essentials"
 for utility in bash dirname basename; do
     ln -sfn "$(command -v "$utility")" "$output/essentials/$utility"
 done
+for notice in LICENSE.TXT THIRD-PARTY-NOTICES.md; do
+    if [[ ! -s "$prefix/share/llvmnet/$notice" ]]; then
+        printf 'FAIL: packaged toolchain is missing share/llvmnet/%s\n' "$notice" >&2
+        exit 1
+    fi
+done
+if [[ -d "$prefix/libexec/llvm" ]] && ! compgen -G "$prefix/share/llvmnet/licenses/*.copyright" >/dev/null; then
+    printf 'FAIL: bundled LLVM has no copyright notices under share/llvmnet/licenses\n' >&2
+    exit 1
+fi
 for language in c cpp fortran; do
     case "$language" in
         c) compiler=llvmnet-clang; input="$root/tests/c/portable.c" ;;
