@@ -288,7 +288,7 @@ internal static class Driver
                     throw new IOException("Cannot write the legalized module.");
             }
             string scalarizer = options.Simd128 ? "scalarizer" : "scalarizer<load-store>";
-            string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(expand-reductions,scalarize-masked-mem-intrin,{scalarizer}),globaldce,verify";
+            string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,expand-reductions,scalarize-masked-mem-intrin,{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
             if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain");
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);

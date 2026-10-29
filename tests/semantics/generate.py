@@ -144,6 +144,13 @@ def integer_module(m):
                 for a in ints(w)[::2]:
                     for b in ints(w)[::2]:
                         m.call(f, [w, w], [a, b], width, f"{name}.with.overflow.{part} i{w} {a:#x} {b:#x}")
+        if 1 < w <= 64:
+            for name in ["sshl.sat", "ushl.sat"]:
+                f = m.probe(f"{name.replace('.', '_')}_i{w}", [w, w], w, [f"%out = call i{w} @llvm.{name}.i{w}(i{w} %a, i{w} %b)"])
+                m.declare(f"declare i{w} @llvm.{name}.i{w}(i{w}, i{w})")
+                for a in ints(w):
+                    for b in [0, 1, 2, w // 2, w - 1]:
+                        m.call(f, [w, w], [a, b], w, f"{name} i{w} {a:#x} {b}")
         if w > 1:
             for name in ["fshl", "fshr"]:
                 f = m.probe(f"{name}_i{w}", [w, w, w], w, [f"%out = call i{w} @llvm.{name}.i{w}(i{w} %a, i{w} %b, i{w} %c)"])
@@ -216,7 +223,7 @@ def float_module(m):
         for a in values[::2]:
             for b in values[1::3]:
                 m.call(f, [w, w], [a, b], w, f"copysign {name} {a:#x} {b:#x}")
-        for intrinsic in ["minnum", "maxnum", "minimum", "maximum"]:
+        for intrinsic in ["minnum", "maxnum", "minimum", "maximum", "minimumnum", "maximumnum"]:
             # minnum/maxnum may return either operand when they compare equal, so the sign of a zero result is unspecified.
             zero_sign = [f"%r0 = call {name} @llvm.{intrinsic}.f{w}({name} %x, {name} %y)", f"%iszero = fcmp oeq {name} %r0, 0.0",
                          f"%r = select i1 %iszero, {name} 0.0, {name} %r0"] if intrinsic in ("minnum", "maxnum") else \

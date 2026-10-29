@@ -123,6 +123,26 @@ public static unsafe class Numeric
         return unchecked((long)(ulong)UInt128.Min(unsignedResult, limit));
     }
 
+    /// <summary>llvm.sshl.sat / llvm.ushl.sat on widths up to 64; the shift amount is below the width (larger is poison).</summary>
+    public static long ShiftSaturate(int signed, int width, long value, long amount)
+    {
+        int shift = (int)Math.Min((ulong)amount, (ulong)width - 1);
+        if (signed != 0)
+        {
+            Int128 exact = (Int128)value << shift;
+            Int128 minimum = -(Int128.One << (width - 1)), maximum = (Int128.One << (width - 1)) - 1;
+            return (long)Int128.Clamp(exact, minimum, maximum);
+        }
+        UInt128 unsignedExact = (UInt128)(ulong)value << shift;
+        UInt128 limit = (UInt128.One << width) - 1;
+        return unchecked((long)(ulong)UInt128.Min(unsignedExact, limit));
+    }
+
+    /// <summary>llvm.canonicalize: identity except that NaNs become quiet.</summary>
+    public static double Canonicalize(double value) => double.IsNaN(value) ? BitConverter.Int64BitsToDouble(BitConverter.DoubleToInt64Bits(value) | 0x0008000000000000) : value;
+    public static float CanonicalizeSingle(float value) => float.IsNaN(value) ? BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(value) | 0x00400000) : value;
+    public static long CycleCounter() => System.Diagnostics.Stopwatch.GetTimestamp();
+
     public static long FloatToIntegerSaturated(double value, int width, int signed)
     {
         if (double.IsNaN(value)) return 0;

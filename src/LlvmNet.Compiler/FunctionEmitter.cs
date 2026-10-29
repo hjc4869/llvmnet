@@ -1170,7 +1170,12 @@ internal sealed class FunctionEmitter : ValueEmitter
             return;
         if (name.StartsWith("llvm.lifetime.", StringComparison.Ordinal) || name.StartsWith("llvm.dbg.", StringComparison.Ordinal) || name.StartsWith("llvm.prefetch.", StringComparison.Ordinal) || name is "llvm.assume" or "llvm.experimental.noalias.scope.decl")
             return;
-        if (name is "llvm.trap" or "llvm.debugtrap")
+        if (name == "llvm.readcyclecounter")
+        {
+            Il.Emit(OpCodes.Call, typeof(Numeric).GetMethod(nameof(Numeric.CycleCounter))!);
+            return;
+        }
+        if (name is "llvm.trap" or "llvm.debugtrap" or "llvm.ubsantrap")
         {
             Il.Emit(OpCodes.Call, typeof(Memory).GetMethod(nameof(Memory.Unreachable))!);
             return;
@@ -1355,6 +1360,28 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Call, typeof(Numeric).GetMethod(nameof(Numeric.FloatToIntegerSaturated))!);
             if (width <= 32) Il.Emit(OpCodes.Conv_I4);
             Normalize(Llvm.LLVMTypeOf(instruction));
+            return;
+        }
+        if (operation is "sshl" or "ushl" && name.Contains(".sat.", StringComparison.Ordinal))
+        {
+            nint type = Llvm.LLVMTypeOf(instruction);
+            bool signed = operation[0] == 's';
+            Il.Emit(OpCodes.Ldc_I4, signed ? 1 : 0);
+            Il.Emit(OpCodes.Ldc_I4, width);
+            Load(Llvm.LLVMGetOperand(instruction, 0));
+            if (signed) SignExtend(type);
+            Il.Emit(signed ? OpCodes.Conv_I8 : OpCodes.Conv_U8);
+            Load(Llvm.LLVMGetOperand(instruction, 1));
+            Il.Emit(OpCodes.Conv_U8);
+            Il.Emit(OpCodes.Call, typeof(Numeric).GetMethod(nameof(Numeric.ShiftSaturate))!);
+            if (width <= 32) Il.Emit(OpCodes.Conv_I4);
+            Normalize(type);
+            return;
+        }
+        if (operation == "canonicalize" && TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) is 2 or 3)
+        {
+            Load(Llvm.LLVMGetOperand(instruction, 0));
+            Il.Emit(OpCodes.Call, typeof(Numeric).GetMethod(TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) == 2 ? nameof(Numeric.CanonicalizeSingle) : nameof(Numeric.Canonicalize))!);
             return;
         }
         if (operation is "sadd" or "uadd" or "ssub" or "usub" && name.Contains(".sat.", StringComparison.Ordinal))
@@ -1567,6 +1594,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             "tanh" => "Tanh",
             "exp" => "Exp",
             "exp2" => "Exp2",
+            "exp10" => "Exp10",
             "log" => "Log",
             "log2" => "Log2",
             "log10" => "Log10",
@@ -1579,6 +1607,9 @@ internal sealed class FunctionEmitter : ValueEmitter
             "copysign" => "CopySign",
             "minnum" => "MinNumber",
             "maxnum" => "MaxNumber",
+            // IEEE 754-2019 minimumNumber/maximumNumber: NaN-avoiding with -0 ordered below +0, as .NET implements.
+            "minimumnum" => "MinNumber",
+            "maximumnum" => "MaxNumber",
             "minimum" => "Min",
             "maximum" => "Max",
             _ => null
