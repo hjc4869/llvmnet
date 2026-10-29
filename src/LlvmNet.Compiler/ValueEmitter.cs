@@ -15,6 +15,13 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
         nint type = Llvm.LLVMTypeOf(value);
         if (Llvm.LLVMIsAGlobalAlias(value) != 0)
             Load(Llvm.LLVMAliasGetAliasee(value));
+        else if ((Llvm.LLVMIsAFunction(value) != 0 || Llvm.LLVMIsAGlobalVariable(value) != 0) && Compiler.IsUndefinedWeak(value))
+        {
+            Il.Emit(OpCodes.Ldc_I4_0);
+            Il.Emit(OpCodes.Conv_I);
+        }
+        else if (Llvm.LLVMIsAGlobalIFunc(value) != 0)
+            throw new NotSupportedException($"GNU indirect function (ifunc) {Llvm.Name(value)} is not supported; build without ifunc resolvers.");
         else if (Compiler.ThreadGlobals.TryGetValue(value, out MethodBuilder? accessor))
             Il.Emit(OpCodes.Call, accessor);
         else if (Compiler.Globals.TryGetValue(value, out FieldBuilder? global))

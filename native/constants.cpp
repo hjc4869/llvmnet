@@ -21,3 +21,11 @@ extern "C" unsigned llvmnet_constant_bits(LLVMValueRef value, uint8_t *destinati
         destination[index] = static_cast<uint8_t>(bits.extractBitsAsZExtValue(std::min(8u, bits.getBitWidth() - index * 8), index * 8));
     return size;
 }
+#include <llvm/Demangle/Demangle.h>
+#include <string>
+
+// Demangles an Itanium or Rust symbol for diagnostics; returns a message the caller frees with LLVMDisposeMessage.
+extern "C" char *llvmnet_demangle(const char *name)
+{
+    return LLVMCreateMessage(llvm::demangle(std::string(name)).c_str());
+}

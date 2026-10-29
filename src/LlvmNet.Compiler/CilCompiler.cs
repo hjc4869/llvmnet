@@ -27,7 +27,47 @@ internal sealed class CilCompiler(CompilerOptions options)
         .SelectMany(method => method.GetCustomAttributes<CExportAttribute>().Select(attribute => (attribute.Name, Method: method)))
         .ToDictionary(item => item.Name, item => item.Method, StringComparer.Ordinal);
 
+    private readonly Dictionary<nint, bool> undefinedWeak = [];
+
+    private static readonly Lazy<HashSet<string>> FrameworkAssemblyNames = new(() =>
+        ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string) ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Where(path => Path.GetDirectoryName(path) == Path.GetDirectoryName(typeof(object).Assembly.Location))
+            .Select(Path.GetFileNameWithoutExtension).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase));
+
     internal bool IsManagedImport(string name) => managedImports.Contains(name);
+
+    /// <summary>Follows global aliases to the global value or constant expression they name (opaque pointers need no casts).</summary>
+    internal static nint ResolveAlias(nint value)
+    {
+        for (int depth = 0; depth < 64 && Llvm.LLVMIsAGlobalAlias(value) != 0; depth++)
+            value = Llvm.LLVMAliasGetAliasee(value);
+        return value;
+    }
+
+    /// <summary>
+    /// True for an extern_weak declaration that nothing in the link, the runtime or (in system mode) the
+    /// native libraries defines. Its address is null, as with an undefined weak symbol in an ELF link.
+    /// </summary>
+    internal bool IsUndefinedWeak(nint value)
+    {
+        if (undefinedWeak.TryGetValue(value, out bool cached)) return cached;
+        bool result = false;
+        if (Llvm.LLVMIsDeclaration(value) != 0 && Llvm.LLVMGetLinkage(value) == Llvm.ExternalWeakLinkage)
+        {
+            string name = Llvm.Name(value);
+            bool function = Llvm.LLVMIsAFunction(value) != 0;
+            result = function
+                ? !options.NativeImports.ContainsKey(name) && !runtimeExports.ContainsKey(name) && (Host is null || HostInterop.Adapter(name) is null)
+                : !Stdio.HasGlobal(name) && !Cxx.HasGlobal(name);
+            if (result && Host is not null && !(function && !Host.IsSystem(value)))
+            {
+                try { Host.LibraryFor(name); result = false; }
+                catch (NotSupportedException) { }
+            }
+        }
+        undefinedWeak[value] = result;
+        return result;
+    }
 
     internal static bool IsSetJump(nint function) => Llvm.LLVMIsAFunction(function) != 0 && Llvm.LLVMIsDeclaration(function) != 0 &&
         Llvm.Name(function) is "setjmp" or "_setjmp" or "sigsetjmp" or "__sigsetjmp";
@@ -78,6 +118,33 @@ internal sealed class CilCompiler(CompilerOptions options)
         }
     }
 
+    /// <summary>
+    /// Replaces the random module version ID and the time-based PE timestamp with values derived from a
+    /// SHA-256 of the image (with those fields zeroed), so identical inputs produce identical assemblies.
+    /// </summary>
+    private static void MakeDeterministic(byte[] image)
+    {
+        int mvidOffset, stampOffset;
+        Guid mvid;
+        using (var stream = new MemoryStream(image, false))
+        using (var reader = new PEReader(stream))
+        {
+            MetadataReader metadata = reader.GetMetadataReader();
+            GuidHandle handle = metadata.GetModuleDefinition().Mvid;
+            mvid = metadata.GetGuid(handle);
+            mvidOffset = reader.PEHeaders.MetadataStartOffset + metadata.GetHeapMetadataOffset(HeapIndex.Guid) +
+                (MetadataTokens.GetHeapOffset(handle) - 1) * 16;
+            stampOffset = reader.PEHeaders.CoffHeaderStartOffset + 4;
+        }
+        if (!image.AsSpan(mvidOffset, 16).SequenceEqual(mvid.ToByteArray()))
+            throw new InvalidOperationException("Cannot locate the module version ID for deterministic output.");
+        image.AsSpan(mvidOffset, 16).Clear();
+        image.AsSpan(stampOffset, 4).Clear();
+        byte[] hash = System.Security.Cryptography.SHA256.HashData(image);
+        hash.AsSpan(0, 16).CopyTo(image.AsSpan(mvidOffset, 16));
+        BinaryPrimitives.WriteInt32LittleEndian(image.AsSpan(stampOffset, 4), BinaryPrimitives.ReadInt32LittleEndian(hash.AsSpan(16)) & int.MaxValue);
+    }
+
     internal MethodInfo ResolveFunction(nint function)
     {
         if (Methods.TryGetValue(function, out MethodInfo? method))
@@ -124,7 +191,10 @@ internal sealed class CilCompiler(CompilerOptions options)
 
     internal void Compile(nint module, string output)
     {
-        var assembly = new PersistedAssemblyBuilder(new AssemblyName(Path.GetFileNameWithoutExtension(output)), typeof(object).Assembly);
+        string assemblyName = Path.GetFileNameWithoutExtension(output);
+        if (FrameworkAssemblyNames.Value.Contains(assemblyName))
+            throw new ArgumentException($"Output name '{Path.GetFileName(output)}' would create assembly '{assemblyName}', which collides with the .NET framework assembly of the same name; choose another output name.");
+        var assembly = new PersistedAssemblyBuilder(new AssemblyName(assemblyName), typeof(object).Assembly);
         ModuleBuilder cilModule = assembly.DefineDynamicModule("program");
         Program = cilModule.DefineType("Program", TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
         using var types = new TypeSystem(module, cilModule, options.Simd128);
@@ -166,9 +236,19 @@ internal sealed class CilCompiler(CompilerOptions options)
             method.SetCustomAttribute(new CustomAttributeBuilder(typeof(CExportAttribute).GetConstructor([typeof(string)])!, [Llvm.Name(function)]));
             Methods[function] = method;
         }
+        for (nint alias = Llvm.LLVMGetFirstGlobalAlias(module); alias != 0; alias = Llvm.LLVMGetNextGlobalAlias(alias))
+        {
+            // Library builds export each public alias of a defined function under its own name too.
+            if (Methods.TryGetValue(ResolveAlias(alias), out MethodInfo? aliased) && aliased is MethodBuilder builder &&
+                Llvm.LLVMGetLinkage(alias) is not (8 or 9))
+                builder.SetCustomAttribute(new CustomAttributeBuilder(typeof(CExportAttribute).GetConstructor([typeof(string)])!, [Llvm.Name(alias)]));
+        }
+        for (nint ifunc = Llvm.LLVMGetFirstGlobalIFunc(module); ifunc != 0; ifunc = Llvm.LLVMGetNextGlobalIFunc(ifunc))
+            if (Llvm.LLVMGetFirstUse(ifunc) != 0)
+                throw new NotSupportedException($"GNU indirect function (ifunc) {Llvm.Name(ifunc)} is not supported; build without ifunc resolvers.");
         for (nint global = Llvm.LLVMGetFirstGlobal(module); global != 0; global = Llvm.LLVMGetNextGlobal(global))
         {
-            if (Llvm.Name(global).StartsWith("llvm.", StringComparison.Ordinal))
+            if (Llvm.Name(global).StartsWith("llvm.", StringComparison.Ordinal) || IsUndefinedWeak(global))
                 continue;
             bool threadLocal = Llvm.LLVMIsThreadLocal(global) != 0;
             if (threadLocal && Llvm.LLVMGetInitializer(global) == 0)
@@ -185,7 +265,10 @@ internal sealed class CilCompiler(CompilerOptions options)
             }
         }
         foreach ((nint function, MethodInfo method) in Methods.ToArray())
-            new FunctionEmitter(this, function, (MethodBuilder)method).Emit();
+        {
+            try { new FunctionEmitter(this, function, (MethodBuilder)method).Emit(); }
+            catch (Exception error) { throw CompilationError.InFunction(error, function); }
+        }
         EmitInitializer(module);
         MethodBuilder? main = Methods.Where(pair => Llvm.Name(pair.Key) == "main").Select(pair => pair.Value).OfType<MethodBuilder>().SingleOrDefault()
             ?? Methods.Where(pair => Llvm.Name(pair.Key) == "_QQmain").Select(pair => pair.Value).OfType<MethodBuilder>().SingleOrDefault();
@@ -202,6 +285,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         pe.Serialize(image);
         byte[] executable = image.ToArray();
         FinalizeIndirectCalls(executable, indirectFixups);
+        MakeDeterministic(executable);
         File.WriteAllBytes(output, executable);
         File.WriteAllText(Path.ChangeExtension(output, ".runtimeconfig.json"), JsonSerializer.Serialize(new
         {
@@ -324,7 +408,10 @@ internal sealed class CilCompiler(CompilerOptions options)
             Allocate(Llvm.LLVMTypeOf(value), field, 0);
         foreach ((nint global, FieldBuilder field) in Globals)
             if (Llvm.LLVMGetInitializer(global) != 0 && !ThreadGlobals.ContainsKey(global))
-                InitializeGlobal(il, Llvm.LLVMGetInitializer(global), field);
+            {
+                try { InitializeGlobal(il, Llvm.LLVMGetInitializer(global), field); }
+                catch (Exception error) { throw CompilationError.InGlobal(error, global); }
+            }
         foreach ((nint value, FieldBuilder field) in constants)
             InitializeGlobal(il, value, field);
         foreach (nint function in LifecycleFunctions("llvm.global_dtors"))

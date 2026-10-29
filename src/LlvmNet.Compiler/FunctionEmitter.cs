@@ -115,9 +115,9 @@ internal sealed class FunctionEmitter : ValueEmitter
                 {
                     Instruction(block, instruction);
                 }
-                catch (NotSupportedException error)
+                catch (Exception error)
                 {
-                    throw new NotSupportedException($"{Llvm.Name(function)}: {error.Message}\n  {Llvm.Print(instruction).Trim()}", error);
+                    throw CompilationError.InFunction(error, function, instruction);
                 }
             }
         }
@@ -781,7 +781,18 @@ internal sealed class FunctionEmitter : ValueEmitter
     private void Call(nint instruction)
     {
         nint target = Llvm.LLVMGetCalledValue(instruction);
+        if (Llvm.LLVMIsAGlobalAlias(target) != 0 && Llvm.LLVMIsAFunction(CilCompiler.ResolveAlias(target)) != 0)
+            target = CilCompiler.ResolveAlias(target);
         string name = Llvm.Name(target);
+        if (Llvm.LLVMIsAFunction(target) != 0 && Compiler.IsUndefinedWeak(target))
+        {
+            // Calling an undefined weak function is undefined behavior; trap with its name instead.
+            Il.Emit(OpCodes.Ldstr, $"Called undefined weak function {name}.");
+            Il.Emit(OpCodes.Newobj, typeof(InvalidOperationException).GetConstructor([typeof(string)])!);
+            Il.Emit(OpCodes.Throw);
+            if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0) Zero(Llvm.LLVMTypeOf(instruction));
+            return;
+        }
         if (Llvm.LLVMIsAInlineAsm(target) != 0)
         {
             nint text = Llvm.LLVMGetInlineAsmAsmString(target, out nuint length);

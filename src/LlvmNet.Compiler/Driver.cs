@@ -284,13 +284,25 @@ internal static class Driver
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);
             if (optimizeResult != 0)
                 return optimizeResult;
+            string linkedInput = linked;
             linked = lowered;
             using var module = new LlvmModule(linked);
             bool launcher = !nativeAot && !options.Library && !output.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
             string payloadDirectory = nativeAot ? Path.Combine(temporary, "payload") : launcher ? output + ".llvmnet" : Path.GetDirectoryName(output)!;
             Directory.CreateDirectory(payloadDirectory);
             string payload = nativeAot || launcher ? Path.Combine(payloadDirectory, "program.dll") : output;
-            new CilCompiler(options).Compile(module.Handle, payload);
+            try
+            {
+                new CilCompiler(options).Compile(module.Handle, payload);
+            }
+            catch (CompilationError error)
+            {
+                // Keep the linked IR so the failure can be reproduced with "llvmnet <file> -o ...".
+                string kept = output + ".failed.bc";
+                File.Copy(linkedInput, kept, true);
+                error.KeptIr = kept;
+                throw;
+            }
             if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, runtimeId, aotPreference, aotInstructionSet ?? "baseline", verbose, aotDebug, options.SystemLibraries);
             if (launcher) Toolchain.Launcher(output, payload);
             return 0;

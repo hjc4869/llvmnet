@@ -181,6 +181,43 @@ internal static unsafe class Llvm
         return Marshal.PtrToStringUTF8(pointer, checked((int)length)) ?? "";
     }
 
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_demangle")]
+    private static extern nint DemangleName([MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+    [DllImport(Library)] private static extern nint LLVMGetDebugLocFilename(nint value, out uint length);
+    [DllImport(Library)] private static extern nint LLVMGetDebugLocDirectory(nint value, out uint length);
+    [DllImport(Library)] private static extern uint LLVMGetDebugLocLine(nint value);
+    [DllImport(Library)] private static extern uint LLVMGetDebugLocColumn(nint value);
+    [DllImport(Library)] internal static extern int LLVMGetLinkage(nint global);
+    [DllImport(Library)] internal static extern nint LLVMGetFirstGlobalIFunc(nint module);
+    [DllImport(Library)] internal static extern nint LLVMGetNextGlobalIFunc(nint ifunc);
+    [DllImport(Library)] internal static extern nint LLVMIsAGlobalIFunc(nint value);
+    [DllImport(Library)] internal static extern nint LLVMIsAGlobalVariable(nint value);
+    internal const int ExternalWeakLinkage = 12;
+
+    /// <summary>Human-readable symbol name: demangled for C++ and Rust, unchanged otherwise.</summary>
+    internal static string Demangle(string name)
+    {
+        if (!name.StartsWith("_Z", StringComparison.Ordinal) && !name.StartsWith("_R", StringComparison.Ordinal)) return name;
+        nint message = DemangleName(name);
+        string text = Marshal.PtrToStringUTF8(message) ?? name;
+        LLVMDisposeMessage(message);
+        return text;
+    }
+
+    /// <summary>"file:line:col" from an instruction's DILocation or a function's DISubprogram; null without debug info.</summary>
+    internal static string? DebugLocation(nint value)
+    {
+        nint file = LLVMGetDebugLocFilename(value, out uint fileLength);
+        if (file == 0 || fileLength == 0) return null;
+        string name = Marshal.PtrToStringUTF8(file, checked((int)fileLength));
+        nint directory = LLVMGetDebugLocDirectory(value, out uint directoryLength);
+        if (!Path.IsPathRooted(name) && directory != 0 && directoryLength != 0)
+            name = Path.Combine(Marshal.PtrToStringUTF8(directory, checked((int)directoryLength)), name);
+        uint line = LLVMGetDebugLocLine(value);
+        uint column = LLVMIsAFunction(value) != 0 ? 0 : LLVMGetDebugLocColumn(value);
+        return line == 0 ? name : column == 0 ? $"{name}:{line}" : $"{name}:{line}:{column}";
+    }
+
     internal static string Print(nint value)
     {
         nint message = LLVMPrintValueToString(value);
