@@ -1,0 +1,7 @@
+artifacts/
+**/bin/
+**/obj/
+.vs/
+sysroot/dotnet64-v1/include/c++/
+sysroot/dotnet64-v1/share/libcxx/
+sysroot/dotnet64-v1/lib/

@@ -7,11 +7,13 @@ integration=0
 [[ "${1:-}" == --integration ]] && integration=1
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl gnupg git xz-utils file time
+apt-get install -y --no-install-recommends ca-certificates curl git xz-utils file time
 if [[ ! -f /etc/apt/sources.list.d/microsoft-prod.list ]]; then
-    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
-    echo 'deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/13/prod trixie main' \
-        >/etc/apt/sources.list.d/microsoft-prod.list
+    # The configuration package installs the repository together with Microsoft's current signing key;
+    # the older microsoft.asc key is rejected by trixie's apt signature policy.
+    curl -fsSL -o /tmp/packages-microsoft-prod.deb https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb
+    dpkg -i /tmp/packages-microsoft-prod.deb
+    rm /tmp/packages-microsoft-prod.deb
     apt-get update
 fi
 packages=(

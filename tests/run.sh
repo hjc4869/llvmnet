@@ -115,7 +115,7 @@ if [[ "$build" -eq 1 ]]; then
         exit 1
     fi
 fi
-export LLVMNET_SKIP_BUILD=1
+export LLVMNET_SKIP_BUILD=1 LLVMNET_TEST_RUNNER=1
 
 record() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >"$results/status/$1"; }
 run_one() {

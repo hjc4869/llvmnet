@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# tags: optional wasm
+# tags: optional wasm aot
 # requires: node wasm-ld
+# serial: 2
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/wasm-simd128"
@@ -21,7 +22,7 @@ DOTNET_EnableHWIntrinsic=0 dotnet "$checks" simd128-probe "$output/inputs.bin" \
     >"$output/software.txt" 2>"$output/software.log"
 grep -q '^Vector128.IsHardwareAccelerated=False$' "$output/software.log"
 diff -u "$output/wasm.txt" "$output/software.txt"
-dotnet publish "$root/tests/LlvmNet.Checks" -c Release -p:PublishAot=true -o "$output/aot" --nologo \
+dotnet publish "$root/tests/LlvmNet.Checks" -c Release -p:PublishAot=true --artifacts-path "$output/aot-build" -o "$output/aot" --nologo \
     >"$output/aot.log" 2>&1
 "$output/aot/LlvmNet.Checks" simd128-probe "$output/inputs.bin" >"$output/aot.txt" 2>"$output/aot-hardware.log"
 diff -u "$output/wasm.txt" "$output/aot.txt"

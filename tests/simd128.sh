@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # tags: integration wasm aot
 # requires: node wasm-ld
+# serial: 3
+# after: wasm-simd128
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/simd128"
@@ -16,7 +18,8 @@ for runtime in system portable; do
     "$output/simd-$runtime-aot"
 done
 oracle="$root/artifacts/tests/wasm-simd128"
-bash "$root/tests/wasm-simd128.sh"
+# Under the runner, wasm-simd128 runs first in the serial phase and leaves the oracle output.
+if [[ "${LLVMNET_TEST_RUNNER:-0}" != 1 || ! -f "$oracle/wasm.txt" ]]; then bash "$root/tests/wasm-simd128.sh"; fi
 for runtime in system portable; do
     "$root/bin/llvmnet" --runtime="$runtime" --simd128 -O2 "$root/tests/wasm/simd128.c" "$root/tests/wasm/simd128-main.c" \
         --keep-ir "$output/oracle-$runtime.bc" -o "$output/oracle-$runtime.dll"
