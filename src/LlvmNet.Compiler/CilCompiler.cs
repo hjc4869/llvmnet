@@ -134,11 +134,17 @@ internal sealed class CilCompiler(CompilerOptions options)
         if (options.Simd128)
             foreach (string name in runtimeExports.Keys.Where(name => name.StartsWith("__llvmnet_simd128_", StringComparison.Ordinal)))
                 managedImports.Add(name);
-        assembly.SetCustomAttribute(new CustomAttributeBuilder(typeof(AssemblyMetadataAttribute).GetConstructor([typeof(string), typeof(string)])!, ["llvmnet.abi", options.AbiTag]));
+        ConstructorInfo metadataAttribute = typeof(AssemblyMetadataAttribute).GetConstructor([typeof(string), typeof(string)])!;
+        assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.abi", options.AbiTag]));
+        assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.version", BuildInfo.Version]));
+        assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.llvm", Llvm.Version]));
         foreach (string reference in options.CilReferences)
         {
             Assembly library = Assembly.LoadFrom(reference);
             string? referenceAbi = library.GetCustomAttributes<AssemblyMetadataAttribute>().FirstOrDefault(attribute => attribute.Key == "llvmnet.abi")?.Value;
+            string? referenceVersion = library.GetCustomAttributes<AssemblyMetadataAttribute>().FirstOrDefault(attribute => attribute.Key == "llvmnet.version")?.Value;
+            if (referenceVersion is not null && !BuildInfo.Compatible(referenceVersion))
+                throw new InvalidOperationException($"Managed reference {reference} was compiled by llvmnet {referenceVersion}, which is incompatible with {BuildInfo.Version}; recompile it.");
             if (referenceAbi is not null && referenceAbi != options.AbiTag || options.Runtime == "portable" && referenceAbi is null)
                 throw new InvalidOperationException($"Managed reference ABI mismatch: {reference}. Portable references must declare the same llvmnet.abi assembly metadata.");
             foreach (Type type in library.GetExportedTypes())
@@ -291,7 +297,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         }
         ILGenerator il = Program.DefineTypeInitializer().GetILGenerator();
         il.Emit(OpCodes.Ldstr, options.AbiTag);
-        il.Emit(OpCodes.Call, typeof(AbiContract).GetMethod(nameof(AbiContract.Require))!);
+        il.Emit(OpCodes.Ldstr, BuildInfo.Version);
+        il.Emit(OpCodes.Call, typeof(AbiContract).GetMethod(nameof(AbiContract.Require), [typeof(string), typeof(string)])!);
         foreach ((nint global, FieldBuilder field) in Globals)
         {
             if (ThreadGlobals.ContainsKey(global)) continue;

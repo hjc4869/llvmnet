@@ -8,6 +8,16 @@ public static class AbiContract
     public static bool Portable => active == "dotnet64-v1";
     public static bool SystemCallbacks => active == "system-linux-x64-v1";
 
+    /// <summary>Called from every emitted image's type initializer before any translated code runs.</summary>
+    public static void Require(string contract, string compilerVersion)
+    {
+        if (!BuildInfo.Compatible(compilerVersion))
+            throw new InvalidOperationException(
+                $"This program was compiled by llvmnet {compilerVersion}, but the loaded LlvmNet.Runtime is {BuildInfo.Version}. " +
+                "Recompile the program, or ship the LlvmNet.Runtime.dll that the compiler copied next to it.");
+        Require(contract);
+    }
+
     public static void Require(string contract)
     {
         if (IntPtr.Size != 8 || !BitConverter.IsLittleEndian)

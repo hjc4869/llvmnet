@@ -100,6 +100,19 @@ try
             methods++;
         }
         Console.WriteLine($"IL-only: {methods} method bodies, {imports} explicit P/Invoke imports.");
+        foreach (CustomAttributeHandle attributeHandle in metadata.GetAssemblyDefinition().GetCustomAttributes())
+        {
+            CustomAttribute attribute = metadata.GetCustomAttribute(attributeHandle);
+            if (attribute.Constructor.Kind != HandleKind.MemberReference) continue;
+            MemberReference constructor = metadata.GetMemberReference((MemberReferenceHandle)attribute.Constructor);
+            if (constructor.Parent.Kind != HandleKind.TypeReference ||
+                metadata.GetString(metadata.GetTypeReference((TypeReferenceHandle)constructor.Parent).Name) != "AssemblyMetadataAttribute") continue;
+            BlobReader value = metadata.GetBlobReader(attribute.Value);
+            if (value.ReadUInt16() != 1) continue;
+            string? key = value.ReadSerializedString();
+            string? text = value.ReadSerializedString();
+            if (key?.StartsWith("llvmnet.", StringComparison.Ordinal) == true) Console.WriteLine($"{key}: {text}");
+        }
         return 0;
     }
     Console.Error.WriteLine("Usage: LlvmNet.Checks compare-numeric expected actual absolute-tolerance | inspect assembly.dll | inspect-methods assembly.dll name-filter | inspect-signatures assembly.dll | simd128-probe inputs.bin");

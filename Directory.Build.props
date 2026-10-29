@@ -6,5 +6,10 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
+    <VersionPrefix>0.3.0</VersionPrefix>
+    <VersionSuffix>dev</VersionSuffix>
+    <Authors>llvmnet contributors</Authors>
+    <Copyright>Copyright llvmnet contributors</Copyright>
+    <PackageLicenseExpression>Apache-2.0 WITH LLVM-exception</PackageLicenseExpression>
   </PropertyGroup>
 </Project>

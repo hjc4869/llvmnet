@@ -1,3 +1,5 @@
+using LlvmNet.Runtime;
+
 namespace LlvmNet;
 
 internal sealed record NativeImport(string Library, string EntryPoint);
@@ -25,7 +27,11 @@ internal static class Driver
         if (arguments.Length == 1 && (arguments[0] is "--version" or "-v" or "-dumpmachine" or "-dumpversion" or "-print-search-dirs" or "-print-resource-dir" || arguments[0].StartsWith("-print-file-name=", StringComparison.Ordinal)))
         {
             string executable = driver == "flang" ? Toolchain.Executable("flang-22", "LLVMNET_FLANG") : Toolchain.Executable(driver == "clang++" ? "clang++-22" : "clang-22", "LLVMNET_CLANG");
-            if (arguments[0] == "--version") Console.WriteLine("llvmnet 0.2.0 CIL toolchain; frontend follows:");
+            if (arguments[0] == "--version")
+            {
+                Console.WriteLine($"llvmnet {BuildInfo.Version} (LLVM {Llvm.Version}; ABIs system-linux-x64-v1, dotnet64-v1)");
+                Console.WriteLine("Frontend follows:");
+            }
             return Toolchain.Run(executable, arguments);
         }
         if (arguments.Length == 0 || arguments.Contains("--help"))

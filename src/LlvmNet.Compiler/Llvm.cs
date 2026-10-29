@@ -19,6 +19,17 @@ internal static unsafe class Llvm
     internal static extern void AddNativeThunk(nint shim, nint function, nint call, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
     [DllImport(Library)] internal static extern int LLVMWriteBitcodeToFile(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
     [DllImport(Library)] internal static extern nint LLVMGetTarget(nint module);
+    [DllImport(Library)] private static extern void LLVMGetVersion(out uint major, out uint minor, out uint patch);
+
+    /// <summary>Version of the LLVM library loaded into the compiler process.</summary>
+    internal static string Version
+    {
+        get
+        {
+            LLVMGetVersion(out uint major, out uint minor, out uint patch);
+            return $"{major}.{minor}.{patch}";
+        }
+    }
 
     internal static void StampAbi(string path, string abi, bool textual)
     {
