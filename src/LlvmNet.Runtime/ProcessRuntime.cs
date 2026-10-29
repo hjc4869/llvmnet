@@ -8,7 +8,7 @@ namespace LlvmNet.Runtime;
 public static unsafe class ProcessRuntime
 {
     private static readonly List<nint> argumentAllocations = [];
-    private static readonly Stack<nint> exitCallbacks = [];
+    private static int cleanedUp;
     private static readonly Dictionary<string, nint> environmentStrings = new(StringComparer.Ordinal);
     [ThreadStatic] private static nint errno;
     public static nint Arguments { get; private set; }
@@ -42,15 +42,10 @@ public static unsafe class ProcessRuntime
 
     public static void Cleanup()
     {
+        if (Interlocked.Exchange(ref cleanedUp, 1) != 0) return;
         ThreadStorage.RunDestructors();
-        Cxx.FinalizeModule(0);
-        while (exitCallbacks.TryPop(out nint callback))
-        {
-            nint managed = SystemAbi.ResolveCallback(callback);
-            if (managed != 0) ((delegate* managed<void>)managed)();
-            else if (AbiContract.SystemCallbacks) ((delegate* unmanaged[Cdecl]<void>)callback)();
-            else ((delegate* managed<void>)callback)();
-        }
+        ExitHandlers.Run(0);
+        ExitHandlers.RunFinalizers();
         foreach (nint pointer in argumentAllocations)
             NativeMemory.Free((void*)pointer);
         ThreadStorage.Release();
@@ -61,6 +56,7 @@ public static unsafe class ProcessRuntime
         Stdio.Flush(0);
         Console.Out.Flush();
         Console.Error.Flush();
+        if (AbiContract.SystemCallbacks) SystemAbi.Flush();
     }
 
     [CExport("__errno_location"), CExport("__llvmnet_errno_location")]
@@ -148,9 +144,12 @@ public static unsafe class ProcessRuntime
     [CExport("atexit")]
     public static int AtExit(nint callback)
     {
-        exitCallbacks.Push(callback);
+        ExitHandlers.Register(callback, 0, 0, false);
         return 0;
     }
+
+    /// <summary>Registers an llvm.global_dtors entry; emitted images call this in ascending priority order.</summary>
+    public static void AtFini(nint callback) => ExitHandlers.RegisterFinalizer(callback);
 
     [CExport("exit")]
     public static void Exit(int result)

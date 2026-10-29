@@ -55,6 +55,8 @@ internal sealed class HostInterop : IDisposable
         "longjmp" or "_longjmp" or "siglongjmp" or "__longjmp_chk" => typeof(NonLocalJumps).GetMethod(nameof(NonLocalJumps.Jump)),
         "__dynamic_cast" => typeof(Cxx).GetMethod(nameof(Cxx.DynamicCast)),
         "atexit" => typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.AtExit)),
+        // exit must run the managed handler list before the native exit, which never sees those handlers.
+        "exit" => typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.Exit)),
         _ => null
     };
 

@@ -48,7 +48,6 @@ public static unsafe class Cxx
     private static readonly ConcurrentDictionary<nint, object> guards = [];
     private static readonly ConcurrentDictionary<nint, CxxException> initializedExceptions = [];
     private static readonly Dictionary<nint, int> typeIds = [];
-    private static readonly Stack<(nint Callback, nint Argument, nint Module)> destructors = [];
     private static readonly nint defaultTerminate = SystemAbi.RegisterCallback((nint)(delegate* unmanaged[Cdecl]<void>)&NativeDefaultTerminate, (nint)(delegate* managed<void>)&DefaultTerminate);
     private static nint terminateHandler = defaultTerminate;
     [ThreadStatic] private static Stack<CxxException>? catches;
@@ -354,27 +353,11 @@ public static unsafe class Cxx
     [CExport("__cxa_atexit")]
     public static int AtExit(nint callback, nint argument, nint module)
     {
-        lock (destructors) destructors.Push((callback, argument, module));
+        ExitHandlers.Register(callback, argument, module, true);
         return 0;
     }
     [CExport("__cxa_finalize")]
-    public static void FinalizeModule(nint module)
-    {
-        List<(nint Callback, nint Argument, nint Module)> deferred = [];
-        while (true)
-        {
-            (nint Callback, nint Argument, nint Module) item;
-            lock (destructors)
-            {
-                if (!destructors.TryPop(out item)) break;
-            }
-            if (module == 0 || item.Module == module)
-                InvokeDestructor(item.Callback, item.Argument);
-            else deferred.Add(item);
-        }
-        lock (destructors)
-            for (int index = deferred.Count - 1; index >= 0; index--) destructors.Push(deferred[index]);
-    }
+    public static void FinalizeModule(nint module) => ExitHandlers.Run(module);
 
     private static void InvokeDestructor(nint callback, nint argument)
     {

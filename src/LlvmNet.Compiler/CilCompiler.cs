@@ -351,8 +351,6 @@ internal sealed class CilCompiler(CompilerOptions options)
         il.Emit(OpCodes.Stloc, result);
         il.Emit(OpCodes.Leave, done);
         il.BeginFinallyBlock();
-        if (Host is not null)
-            il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.Flush))!);
         il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.Cleanup))!);
         il.EndExceptionBlock();
         il.Emit(OpCodes.Ldloc, result);
@@ -418,8 +416,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         {
             MethodInfo destructor = ResolveFunction(function);
             il.Emit(OpCodes.Ldftn, Host is null ? destructor : Host.Callback(function, destructor));
-            il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.AtExit))!);
-            il.Emit(OpCodes.Pop);
+            il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.AtFini))!);
         }
         foreach (nint function in LifecycleFunctions("llvm.global_ctors"))
             il.Emit(OpCodes.Call, ResolveFunction(function));
