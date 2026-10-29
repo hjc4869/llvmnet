@@ -32,7 +32,7 @@ NativeAOT executables additionally embed the .NET runtime (MIT) and the native h
 
 ## Sources downloaded by build scripts
 
-`scripts/fetch-sources.sh` downloads these pinned tarballs into `artifacts/vendor/` for integration tests and runtime builds. They are not part of the llvmnet repository. Programs built from them carry their licenses.
+`scripts/fetch-sources.sh` downloads these pinned tarballs into `artifacts/vendor/` for integration tests, runtime builds and fuzzing tools. They are not part of the llvmnet repository. Programs built from them carry their licenses.
 
 | Source | Version | License |
 | --- | --- | --- |
@@ -42,6 +42,8 @@ NativeAOT executables additionally embed the .NET runtime (MIT) and the native h
 | dav1d | 1.5.4 | BSD-2-Clause |
 | libxml2 | 2.15.3 | MIT |
 | zlib | 1.3.2 | Zlib |
+| csmith (test tool, `scripts/build-fuzzers.sh`) | 2.4.0 at `0cdc710` | BSD-2-Clause |
+| YARPGen (test tool, `scripts/build-fuzzers.sh`) | 2.0 at `1adb290` | Apache-2.0 |
 
 ## MathNet.Numerics MIT notice
 

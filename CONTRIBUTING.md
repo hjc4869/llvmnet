@@ -18,6 +18,7 @@ dotnet build llvmnet.slnx -c Release
 tests/run.sh --tag core          # PR gate: compiler and runtime regressions, both ABIs, JIT and NativeAOT
 tests/run.sh --list              # every test with its tags and prerequisites
 tests/run.sh smoke driver        # selected tests by name
+FUZZ_SEEDS=500 tests/run.sh fuzz # csmith differential fuzzing (nightly; failures kept with a repro.sh)
 dotnet test tests/LlvmNet.UnitTests -c Release
 ```
 

@@ -20,7 +20,7 @@ packages=(
     dotnet-sdk-10.0
     clang-22 flang-22 llvm-22 llvm-22-dev llvm-22-tools libflang-22-dev
     build-essential zlib1g-dev libzstd-dev libxml2-dev libedit-dev libffi-dev
-    cmake ninja-build pkg-config perl python3 shellcheck
+    cmake ninja-build m4 pkg-config perl python3 shellcheck
 )
 if [[ "$integration" -eq 1 ]]; then packages+=(meson ffmpeg nodejs lld-22); fi
 apt-get install -y --no-install-recommends "${packages[@]}"

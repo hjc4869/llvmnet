@@ -90,9 +90,17 @@ jobs:
         run: dotnet test tests/LlvmNet.UnitTests -c Release --no-build
       - name: All tags
         run: tests/run.sh --no-build --tag core --tag toolchain --tag integration --tag optional -j 4 --timeout-scale 2
+      - name: Differential fuzzing (FD-16)
+        if: always()
+        # 500 new csmith seeds every night, starting from a seed derived from the date.
+        run: |
+          export FUZZ_SEEDS=500 FUZZ_FIRST_SEED=$(( $(date -u +%s) / 86400 * 1000 ))
+          tests/run.sh --no-build --tag fuzz --timeout-scale 2
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nightly-results
-          path: artifacts/tests/results
+          path: |
+            artifacts/tests/results
+            artifacts/tests/fuzz
           if-no-files-found: ignore

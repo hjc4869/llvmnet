@@ -15,6 +15,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - 128-bit atomics; 65- to 128-bit integer intrinsics; constrained floating-point intrinsics; masked memory intrinsics; `llvm.objectsize`, `exp10`, `canonicalize`, `minimumnum`/`maximumnum`, saturating shifts.
 - Global aliases, undefined weak symbols and alias exports from managed libraries (BE-07).
 - Experimental `--portable-libc` with musl, libc++/libc++abi and flang-rt (LC-01, LC-02, CX-01, FT-01).
+- Differential fuzzing test `tests/fuzz.sh` with pinned csmith and YARPGen, run nightly (FD-16).
 
 ### Changed
 
