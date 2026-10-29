@@ -281,10 +281,14 @@ internal static class Driver
             }
             string lowered = Path.Combine(temporary, "lowered.bc");
             using (var prepared = new LlvmModule(linked))
-                if (Llvm.WrapVectorInvokes(prepared.Handle) != 0 && Llvm.LLVMWriteBitcodeToFile(prepared.Handle, linked) != 0)
-                    throw new IOException("Cannot write vector-invoke legalization.");
+            {
+                Llvm.WrapVectorInvokes(prepared.Handle);
+                Llvm.RemoveTargetAttributes(prepared.Handle);
+                if (Llvm.LLVMWriteBitcodeToFile(prepared.Handle, linked) != 0)
+                    throw new IOException("Cannot write the legalized module.");
+            }
             string scalarizer = options.Simd128 ? "scalarizer" : "scalarizer<load-store>";
-            string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(expand-reductions,{scalarizer}),globaldce,verify";
+            string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(expand-reductions,scalarize-masked-mem-intrin,{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
             if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain");
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);

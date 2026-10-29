@@ -234,6 +234,19 @@ internal static unsafe class Llvm
         return text;
     }
 
+    [DllImport(Library)] private static extern void LLVMRemoveStringAttributeAtIndex(nint function, uint index, [MarshalAs(UnmanagedType.LPUTF8Str)] string key, uint length);
+
+    /// <summary>
+    /// Removes host CPU tuning (target-cpu, target-features, tune-cpu) from every function. It has no meaning for CIL,
+    /// and leaving it would make legalization passes treat AVX masked memory operations or vector reductions as legal.
+    /// </summary>
+    internal static void RemoveTargetAttributes(nint module)
+    {
+        foreach (nint function in Functions(module))
+            foreach (string key in new[] { "target-cpu", "target-features", "tune-cpu" })
+                LLVMRemoveStringAttributeAtIndex(function, uint.MaxValue, key, (uint)key.Length);
+    }
+
     internal static IEnumerable<nint> Functions(nint module)
     {
         for (nint function = LLVMGetFirstFunction(module); function != 0; function = LLVMGetNextFunction(function))
