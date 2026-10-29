@@ -79,9 +79,10 @@ Outputs without `.dll` are ordinary Unix executable launchers plus a payload dir
 ## Tests and Workloads
 
 ```sh
-bash tests/all.sh core
-bash tests/all.sh integration
-bash tests/toolchain-all.sh
+tests/run.sh --tag core                     # PR gate; tests/run.sh --list shows every test
+tests/run.sh --tag core --tag toolchain     # plus packaging and isolated deployment
+tests/run.sh --tag integration              # pinned ffmpeg and dependencies, fetched by scripts/fetch-sources.sh
+dotnet test tests/LlvmNet.UnitTests -c Release
 
 bash scripts/build-ffmpeg.sh
 bash tests/codecs.sh
@@ -105,6 +106,28 @@ Run `scripts/build-dependencies.sh` before the full ffmpeg build. Its defaults u
 The full ffmpeg profile enables pthreads. Select `LLVMNET_RUNTIME=system` or `LLVMNET_RUNTIME=portable` for both dependency and ffmpeg builds; their default outputs are isolated by ABI. Add `FFMPEG_SIMD128=1` to the ffmpeg build for HEVC SIMD128 through .NET vectors, with separate `-simd128` outputs. The decoder accepts `input [frame-limit] [video|audio] [threads:1-64] [auto|frame|slice] [hash|bench]`; `bench` skips hashing. See [docs/ffmpeg-threading.md](docs/ffmpeg-threading.md), [docs/simd128.md](docs/simd128.md), and [the six-video before/after measurements](docs/video-simd128-performance.md). JIT SIMD improves throughput; baseline NativeAOT SIMD currently regresses, while explicit host-targeted AOT improves it.
 
 Build outputs, generated media, and locally extracted SPEC materials stay under ignored `artifacts/`. The scripts do not modify the original source checkouts or mounted SPEC kits. SPEC development scripts stage only the relevant licensed benchmark archives. A standard harness runner and configuration are also available via [scripts/spec-harness.sh](scripts/spec-harness.sh). These checks are not full-suite SPEC-reportable runs or scores.
+
+The runner builds once, runs tests in parallel, and writes per-test logs, `summary.tsv` and JUnit `results.xml` under `artifacts/tests/results/`. `tests/all.sh` and `tests/toolchain-all.sh` remain as wrappers. A private local video gate runs when `FFMPEG_TEST_VIDEO` names a file.
+
+## Diagnostics and Debugging Options
+
+- Errors carry `file:line:col` when the input has debug information (`-g` or `-gline-tables-only`), the function name and the LLVM instruction; the linked IR is kept next to the output as `<output>.failed.bc`. Exit codes: 1 compilation error, 2 usage error, 3 internal compiler error.
+- `--diagnose-limits` reports per-function IL size and locals and flags functions the JIT will compile with minimal optimization.
+- `--check-indirect-calls` verifies every indirect call against its target's signature; see [docs/dev/calling-convention.md](docs/dev/calling-convention.md).
+- [docs/user/support-matrix.md](docs/user/support-matrix.md) lists which LLVM types, instructions and intrinsics are translated.
+
+## Experimental: Upstream C, C++ and Fortran Runtimes
+
+`--portable-libc <prefix>` compiles portable programs against unmodified musl 1.2.5, libc++/libc++abi and flang-rt 22.1.8 built for dotnet64-v1, instead of the hand-written runtime. See [docs/plan](docs/plan/README.md) (milestones M2 and M3) and [ports/musl](ports/musl/README.md).
+
+```sh
+bash scripts/build-portable-libc.sh artifacts/portable-libc
+bash scripts/build-portable-cxx.sh artifacts/portable-libc
+bash scripts/build-portable-flang-rt.sh artifacts/portable-libc
+bin/llvmnet --runtime=portable --portable-libc artifacts/portable-libc program.cpp -o program.dll
+```
+
+The musl headers differ from the default portable headers in a few layouts, so do not mix objects built with and without this option.
 
 ## Safety and Portability
 

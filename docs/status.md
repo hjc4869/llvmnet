@@ -2,6 +2,8 @@
 
 Initial bring-up on 2026-09-07: Linux x86-64, LLVM/Clang/Flang 22.1.8, .NET SDK 10.0.400, .NET runtime 10.0.11. This document records development evidence, not a claim of full language, emcc, or SPEC conformance.
 
+Later evidence: [evidence/2026-10-30-m0-m2.md](evidence/2026-10-30-m0-m2.md) records the M0 to M2 work (test runner, semantics audits, atomics, JIT limits, and the musl, libc++ and flang-rt spikes). The plan and its status board are in [plan/README.md](plan/README.md).
+
 ## Deployable Toolchain Update
 
 Implemented installed `llvmnet-clang`, `llvmnet-clang++`, `llvmnet-flang`, archiver/indexer/symbol utilities, response files, executable launchers, NativeAOT, a bundled versioned portable C/libc++ sysroot, and explicit system-library mode. The approximately 638 MiB uncompressed fully bundled Linux installation compiles portable C/C++/Fortran with no `dotnet` or LLVM commands on PATH. NativeAOT publishing still needs the .NET SDK and target native link tools.

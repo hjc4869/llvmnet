@@ -13,7 +13,15 @@ Related: [roadmap.md](../roadmap.md) (the earlier priority ordering), [status.md
 - **Review cadence**: once a week, update the status board below, tick items, and add new items with the next free number in their workstream. Never renumber. If an issue tracker is used, one issue per item with the ID in the title and a label per workstream and milestone.
 - **Evidence**: a claim that something works belongs in `docs/evidence/` (dated, produced by CI) or in a test, not in this plan.
 
-## Status snapshot (2026-10-30)
+## Progress (2026-10-30, M0 to M2)
+
+Work on the `m0-m2` branch completed the M1 and M2 exit items and every M0 item except running the PR gate on GitHub. Measurements are in [evidence/2026-10-30-m0-m2.md](../evidence/2026-10-30-m0-m2.md).
+
+- **M0 foundations.** License (Apache-2.0 WITH LLVM-exception), notices, versioning, pinned sources, a parallel test runner (77 tests, about 3 minutes with eight jobs), 61 unit tests, JIT validation of every emitted method, and a CI workflow whose PR gate passes in the matching container. Not yet: a first run on GitHub (FD-19) and fuzzing (FD-16).
+- **M1 backend hardening.** 44,762 IR semantics probes match native bit for bit; linkage, termination order, determinism, atomics, alignment, call-signature policy, vectorization and diagnostics are done; the support matrix is generated. Six behavior bugs and several missing features were found and fixed (listed in the evidence file). The fuzzing criterion is open because FD-16 has not started.
+- **M2 library spike.** Unmodified musl 1.2.5, upstream libc++/libc++abi and flang-rt 22.1.8 compile completely for dotnet64-v1 and match native output under JIT and NativeAOT, through `--portable-libc` and a host layer of four entry points. ADR-01, 02, 03 and 07 are accepted. New decisions needed before M3: the ABI tag of the musl sysroot (LC-26, ADR-09) and the Linux identity of portable programs (LC-27, ADR-14).
+
+## Status snapshot (2026-10-30, before M0)
 
 Verified on this host during the plan review (Linux x86-64, .NET SDK 10.0.403, runtime 10.0.14, LLVM/Clang/Flang 22.1.8):
 
@@ -21,7 +29,7 @@ Verified on this host during the plan review (Linux x86-64, .NET SDK 10.0.403, r
 | --- | --- |
 | `dotnet build llvmnet.slnx -c Release` | succeeded, 0 warnings |
 | `tests/smoke.sh`, `tests/driver.sh` | pass (2 s and 8 s) |
-| `tests/all.sh core` (53 scripts, JIT and NativeAOT, both ABIs) | pass, 151 checks, 376 s wall |
+| `tests/all.sh core` (53 scripts, JIT and NativeAOT, both ABIs) | pass, 151 checks, 376 s wall (sequential runner before FD-12) |
 | Integration, ffmpeg, SPEC tags | not rerun today; last evidence 2026-09-08 in [status.md](../status.md) |
 
 What exists and works, per the September evidence: C, C++ and Fortran compile through Clang/Flang 22 to CIL; three runtime modes (`managed-host`, `system`, `portable`); NativeAOT output; a relocatable toolchain package; the ffmpeg browser profile with threading and SIMD128 kernels matching native hashes on a 4K HDR file; every installed SPEC CPU 2017/2026 entry validated on test inputs in system mode, 20 of 101 in portable mode.
@@ -86,10 +94,10 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 
 | Milestone | Target version | Status | Open P0 | Last updated |
 | --- | --- | --- | ---: | --- |
-| M0 | 0.3 | not started | 10 | 2026-10-30 |
-| M1 | 0.3 | not started | 11 | 2026-10-30 |
-| M2 | 0.3 | not started | 5 | 2026-10-30 |
-| M3 | 0.4 | not started | 16 | 2026-10-30 |
+| M0 | 0.3 | exit items done except the first GitHub run of the PR gate | 1 (FD-19) | 2026-10-30 |
+| M1 | 0.3 | exit items done; two-week fuzzing criterion open (FD-16) | 0 | 2026-10-30 |
+| M2 | 0.3 | done; ADR-01, 02, 03, 07 accepted | 0 | 2026-10-30 |
+| M3 | 0.4 | spike host layer exists; LC-10 done | 16 (incl. LC-26) | 2026-10-30 |
 | M4 | 0.5 | not started | 7 | 2026-10-30 |
 | M5 | 0.5 | not started | 6 | 2026-10-30 |
 | M6 | 0.6 | not started | 4 | 2026-10-30 |
@@ -111,7 +119,7 @@ Exit: LC-01, LC-02, CX-01, FT-01 executed with written results; LC-03 recorded; 
 
 ### M3: Portable C library
 
-Exit: LC-04 through LC-10, LC-14 through LC-17, LC-19 through LC-23 done; portable ffmpeg profile, 31 fixtures and the 4K HDR gate pass; SPEC portable C entries at parity with system mode; `managed-host` removed. Details: [02-portable-c-library.md](02-portable-c-library.md). Decisions: ADR-04.
+Exit: LC-04 through LC-10, LC-14 through LC-17, LC-19 through LC-23 and LC-26 done; portable ffmpeg profile, 31 fixtures and the 4K HDR gate pass; SPEC portable C entries at parity with system mode; `managed-host` removed. Details: [02-portable-c-library.md](02-portable-c-library.md). Decisions: ADR-04.
 
 ### M4: Portable C++ runtime
 

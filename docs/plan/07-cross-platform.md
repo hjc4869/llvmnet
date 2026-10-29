@@ -16,7 +16,7 @@ Prefix `XP`. Owner: unassigned. Milestone: [M6](README.md#m6-cross-platform).
 - [ ] **XP-03** (L, P0) NativeAOT on `win-x64`, `osx-arm64` and `linux-arm64`: CI publishes and runs the portable C, C++ exception and thread fixtures; native toolchain requirements per platform are documented in TC-12.
 - [ ] **XP-04** (L, P1) Compiler on Windows and macOS hosts: CMake build for the LLVM bridge (FD-09), per-OS LLVM library names, process spawning and quoting, temp directories, `.cmd` launchers, per-host packaging, and sourcing LLVM 22 binaries from official releases. If this slips, 1.0 ships the compiler for Linux only with outputs running everywhere ([ADR-05](decisions.md#adr-05-supported-platforms-for-10)).
 - [ ] **XP-05** (M, P1) Cross-publishing NativeAOT from Linux to `linux-arm64` with a cross toolchain, documented.
-- [ ] **XP-06** (S, P0) Actionable startup errors on unsupported hosts (32-bit, big-endian, Mono, old runtimes) and a `llvmnet.runtimeconfig.json` that pins the framework band.
+- [ ] **XP-06** (S, P0) Actionable startup errors on unsupported hosts (32-bit, big-endian, Mono, old runtimes) and a `llvmnet.runtimeconfig.json` that pins the framework band. — **In progress** (`ad3d6b2`): The runtime rejects incompatible compiler versions; host checks are unchanged.
 - [ ] **XP-07** (M, P1) Portability audit of the runtime: no `Vector<T>`, no `IntPtr.Size` assumptions beyond the 64-bit check, no OS branching outside the host layer, no reliance on `Console` encodings.
 - [ ] **XP-08** (S, P1) Windows and macOS system-ABI modes are out of scope for 1.0; documented.
 

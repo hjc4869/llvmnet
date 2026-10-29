@@ -17,11 +17,11 @@ Compile upstream libc++ (`libcxx/src`) and libc++abi (`libcxxabi/src`) from the 
 
 ### Spike (M2)
 
-- [ ] **CX-01** (L, P0) Build libc++ and libc++abi 22.1.8 with `llvmnet-clang++ --runtime=portable` against the musl sysroot from LC-01, excluding libc++abi's unwinder-dependent files. Run smoke programs: `std::cout`, `std::string`, `std::map`, `std::sort`, `std::thread` with `std::mutex`, `std::regex`, `std::filesystem`, `std::to_string(long double)`. List every backend blocker as a BE item.
+- [x] **CX-01** (L, P0) Build libc++ and libc++abi 22.1.8 with `llvmnet-clang++ --runtime=portable` against the musl sysroot from LC-01, excluding libc++abi's unwinder-dependent files. Run smoke programs: `std::cout`, `std::string`, `std::map`, `std::sort`, `std::thread` with `std::mutex`, `std::regex`, `std::filesystem`, `std::to_string(long double)`. List every backend blocker as a BE item. — **Done** (`224d5be`): All 66 sources compile; smoke program and 11 fixtures match native (`tests/libcxx.sh`).
 
 ### Exception and RTTI bridge (M4)
 
-- [ ] **CX-02** (M, P0) Write the bridge contract in `docs/dev/cxx-eh-bridge.md`: which `__cxa_*` symbols stay managed, how the managed exception object maps to `__cxa_exception` fields libc++abi expects (so `std::current_exception`, `std::rethrow_exception`, `std::nested_exception` and `std::uncaught_exceptions` work unchanged), and how `std::terminate` is reached. Pass the libc++abi exception tests that do not depend on unwinding details.
+- [ ] **CX-02** (M, P0) Write the bridge contract in `docs/dev/cxx-eh-bridge.md`: which `__cxa_*` symbols stay managed, how the managed exception object maps to `__cxa_exception` fields libc++abi expects (so `std::current_exception`, `std::rethrow_exception`, `std::nested_exception` and `std::uncaught_exceptions` work unchanged), and how `std::terminate` is reached. Pass the libc++abi exception tests that do not depend on unwinding details. — **In progress** (`224d5be`): Bridge exports libc++abi's exception_ptr entry points; the written contract is still to do.
 - [ ] **CX-03** (M, P0) Replace the managed RTTI walk with libc++abi's `__dynamic_cast` and `type_info` comparison, and delete `Cxx.typeIds`. Keep type_info name comparison consistent with how llvmnet links (merged strings, `_LIBCPP_TYPEINFO_COMPARISON_IMPLEMENTATION`).
 - [ ] **CX-04** (M, P0) Static initialization: `__cxa_guard_*` from libc++abi (futex-based over LC-02), `__cxa_atexit` ordering with C `atexit` and `__cxa_thread_atexit_impl` from musl; tests for constructor order across translation units and thread-local destructors.
 
@@ -34,6 +34,8 @@ Compile upstream libc++ (`libcxx/src`) and libc++abi (`libcxxabi/src`) from the 
 - [ ] **CX-09** (S, P1) ABI details: sized and aligned deallocation, user replacement of `operator new` (weak symbol semantics from BE-07), `__cxa_pure_virtual`, `std::bad_alloc` on allocation failure from musl `malloc`.
 - [ ] **CX-10** (S, P1) System mode: keep the optional libstdc++ archive and its license notice; evaluate offering libc++ for system mode as well so both modes share one C++ library (P2).
 - [ ] **CX-11** (M, P1) SPEC C++ in portable mode after CX-07: deepsjeng, omnetpp, xalancbmk, povray, parest, blender, leela, cactuBSSN and the CPU 2026 C++ entries; every failure becomes a BE/LC/CX item.
+
+- [ ] **CX-12** (S, P1) glibc-compatible `thread_local` destructor order on the main thread: musl lacks `__cxa_thread_atexit_impl`, so libc++abi's fallback runs main-thread destructors at their `atexit` position. Provide the function in the musl port and run the registered destructors at the start of `exit`, as glibc does. Two existing fixtures depend on this order.
 
 ## Exit criteria for M4
 

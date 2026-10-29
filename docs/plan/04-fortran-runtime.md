@@ -16,7 +16,7 @@ Compile `flang-rt` (the LLVM 22 Fortran runtime, C++17) with llvmnet on top of m
 
 ### Spike (M2)
 
-- [ ] **FT-01** (L, P0) Build `flang-rt/lib/runtime` from the LLVM 22 source tarball with `llvmnet-clang++ --runtime=portable` against the musl + libc++ sysroot, excluding quadmath. Run `print *, "hello"`, formatted real output, an `ALLOCATE`/`DEALLOCATE` loop, a namelist read, and `exchange2`-style array code. Record blockers (long double formatting, `__float128` references, large static tables, `std::` features) as BE/LC/CX items.
+- [x] **FT-01** (L, P0) Build `flang-rt/lib/runtime` from the LLVM 22 source tarball with `llvmnet-clang++ --runtime=portable` against the musl + libc++ sysroot, excluding quadmath. Run `print *, "hello"`, formatted real output, an `ALLOCATE`/`DEALLOCATE` loop, a namelist read, and `exchange2`-style array code. Record blockers (long double formatting, `__float128` references, large static tables, `std::` features) as BE/LC/CX items. — **Done** (`a71ed1c`): All 67 sources compile; 34 fixtures match native Flang (`tests/flang-rt.sh`).
 
 ### Delivery (M5)
 
