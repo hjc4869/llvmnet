@@ -1144,13 +1144,13 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         string operation = name.Split('.')[1];
         int width = TypeSystem.Width(Llvm.LLVMTypeOf(instruction));
-                if (operation == "bswap" && width > 64 && width <= 128 && width % 16 == 0)
-                {
-                    Load(Llvm.LLVMGetOperand(instruction, 0));
-                    Il.Emit(OpCodes.Ldc_I4, width);
-                    Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.ByteSwap))!);
-                    return;
-                }
+        if (operation == "bswap" && width > 64 && width <= 128 && width % 16 == 0)
+        {
+            Load(Llvm.LLVMGetOperand(instruction, 0));
+            Il.Emit(OpCodes.Ldc_I4, width);
+            Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.ByteSwap))!);
+            return;
+        }
         if (width > 64 && operation is "ctpop" or "ctlz" or "cttz")
         {
             Load(Llvm.LLVMGetOperand(instruction, 0));
@@ -1462,14 +1462,35 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         string? mathName = operation switch
         {
-            "fabs" => "Abs", "sqrt" => "Sqrt", "sin" => "Sin", "cos" => "Cos", "atan" => "Atan", "atan2" => "Atan2",
-            "asin" => "Asin", "acos" => "Acos", "tan" => "Tan",
-            "sinh" => "Sinh", "cosh" => "Cosh", "tanh" => "Tanh",
-            "exp" => "Exp", "exp2" => "Exp2", "log" => "Log", "log2" => "Log2", "log10" => "Log10",
-            "pow" => "Pow", "floor" => "Floor", "ceil" => "Ceiling", "trunc" => "Truncate",
-            "roundeven" or "rint" or "nearbyint" => "Round", "fma" or "fmuladd" => "FusedMultiplyAdd",
-            "copysign" => "CopySign", "minnum" => "MinNumber", "maxnum" => "MaxNumber",
-            "minimum" => "Min", "maximum" => "Max", _ => null
+            "fabs" => "Abs",
+            "sqrt" => "Sqrt",
+            "sin" => "Sin",
+            "cos" => "Cos",
+            "atan" => "Atan",
+            "atan2" => "Atan2",
+            "asin" => "Asin",
+            "acos" => "Acos",
+            "tan" => "Tan",
+            "sinh" => "Sinh",
+            "cosh" => "Cosh",
+            "tanh" => "Tanh",
+            "exp" => "Exp",
+            "exp2" => "Exp2",
+            "log" => "Log",
+            "log2" => "Log2",
+            "log10" => "Log10",
+            "pow" => "Pow",
+            "floor" => "Floor",
+            "ceil" => "Ceiling",
+            "trunc" => "Truncate",
+            "roundeven" or "rint" or "nearbyint" => "Round",
+            "fma" or "fmuladd" => "FusedMultiplyAdd",
+            "copysign" => "CopySign",
+            "minnum" => "MinNumber",
+            "maxnum" => "MaxNumber",
+            "minimum" => "Min",
+            "maximum" => "Max",
+            _ => null
         };
         if (mathName is not null)
         {

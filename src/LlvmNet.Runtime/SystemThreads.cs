@@ -33,13 +33,13 @@ public static unsafe class SystemThreads
             nint result = ((delegate* unmanaged[Cdecl]<nint, nint>)state.Routine)(state.Argument);
             ThreadStorage.RunDestructors();
             for (int iteration = 0; iteration < 4; iteration++)
-            foreach ((int key, nint destructor) in destructors.ToArray())
-            {
-                nint value = ((delegate* unmanaged[Cdecl]<int, nint>)getSpecific)(key);
-                if (value == 0 || destructor == 0) continue;
-                ((delegate* unmanaged[Cdecl]<int, nint, int>)setSpecific)(key, 0);
-                ((delegate* unmanaged[Cdecl]<nint, void>)destructor)(value);
-            }
+                foreach ((int key, nint destructor) in destructors.ToArray())
+                {
+                    nint value = ((delegate* unmanaged[Cdecl]<int, nint>)getSpecific)(key);
+                    if (value == 0 || destructor == 0) continue;
+                    ((delegate* unmanaged[Cdecl]<int, nint, int>)setSpecific)(key, 0);
+                    ((delegate* unmanaged[Cdecl]<nint, void>)destructor)(value);
+                }
             ThreadStorage.Release();
             return result;
         }

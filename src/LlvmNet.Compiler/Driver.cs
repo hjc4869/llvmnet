@@ -130,10 +130,23 @@ internal static class Driver
                     break;
                 case "-L": searchPaths.Add(Next()); break;
                 case "-l": libraries.Add(Next()); break;
-                case "-I": case "-isystem": case "-iquote": case "-include": case "-imacros":
-                case "-D": case "-U": case "-x": case "-MF": case "-MT": case "-MQ":
-                case "--sysroot": case "-isysroot": case "-target": case "-Xclang":
-                case "-J": case "-module-dir":
+                case "-I":
+                case "-isystem":
+                case "-iquote":
+                case "-include":
+                case "-imacros":
+                case "-D":
+                case "-U":
+                case "-x":
+                case "-MF":
+                case "-MT":
+                case "-MQ":
+                case "--sysroot":
+                case "-isysroot":
+                case "-target":
+                case "-Xclang":
+                case "-J":
+                case "-module-dir":
                     frontend.Add(argument);
                     frontend.Add(Next());
                     break;

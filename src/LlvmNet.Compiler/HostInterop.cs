@@ -47,16 +47,16 @@ internal sealed class HostInterop : IDisposable
                 Adapter(name) is null && name is not ("pthread_exit" or "pthread_cancel");
     }
 
-            internal static MethodInfo? Adapter(string name) => name switch
-            {
-            "pthread_create" => typeof(SystemThreads).GetMethod(nameof(SystemThreads.Create)),
-            "pthread_key_create" => typeof(SystemThreads).GetMethod(nameof(SystemThreads.KeyCreate)),
-            "pthread_key_delete" => typeof(SystemThreads).GetMethod(nameof(SystemThreads.KeyDelete)),
-            "longjmp" or "_longjmp" or "siglongjmp" or "__longjmp_chk" => typeof(NonLocalJumps).GetMethod(nameof(NonLocalJumps.Jump)),
-            "__dynamic_cast" => typeof(Cxx).GetMethod(nameof(Cxx.DynamicCast)),
-            "atexit" => typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.AtExit)),
-            _ => null
-            };
+    internal static MethodInfo? Adapter(string name) => name switch
+    {
+        "pthread_create" => typeof(SystemThreads).GetMethod(nameof(SystemThreads.Create)),
+        "pthread_key_create" => typeof(SystemThreads).GetMethod(nameof(SystemThreads.KeyCreate)),
+        "pthread_key_delete" => typeof(SystemThreads).GetMethod(nameof(SystemThreads.KeyDelete)),
+        "longjmp" or "_longjmp" or "siglongjmp" or "__longjmp_chk" => typeof(NonLocalJumps).GetMethod(nameof(NonLocalJumps.Jump)),
+        "__dynamic_cast" => typeof(Cxx).GetMethod(nameof(Cxx.DynamicCast)),
+        "atexit" => typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.AtExit)),
+        _ => null
+    };
 
     internal string LibraryFor(string symbol)
     {

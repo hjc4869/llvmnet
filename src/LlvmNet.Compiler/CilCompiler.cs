@@ -148,13 +148,13 @@ internal sealed class CilCompiler(CompilerOptions options)
             if (referenceAbi is not null && referenceAbi != options.AbiTag || options.Runtime == "portable" && referenceAbi is null)
                 throw new InvalidOperationException($"Managed reference ABI mismatch: {reference}. Portable references must declare the same llvmnet.abi assembly metadata.");
             foreach (Type type in library.GetExportedTypes())
-            foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.Static))
-            foreach (CExportAttribute export in method.GetCustomAttributes<CExportAttribute>())
-            {
-                if (!runtimeExports.TryAdd(export.Name, method))
-                    throw new InvalidOperationException($"Duplicate managed export {export.Name} in {reference}");
-                managedImports.Add(export.Name);
-            }
+                foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                    foreach (CExportAttribute export in method.GetCustomAttributes<CExportAttribute>())
+                    {
+                        if (!runtimeExports.TryAdd(export.Name, method))
+                            throw new InvalidOperationException($"Duplicate managed export {export.Name} in {reference}");
+                        managedImports.Add(export.Name);
+                    }
         }
         foreach (nint function in Llvm.Functions(module))
         {
@@ -226,7 +226,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             if (Path.GetFullPath(reference) != Path.GetFullPath(destination))
                 File.Copy(reference, destination, true);
         }
-            Host?.Build();
+        Host?.Build();
     }
 
     internal FieldBuilder Constant(nint value)

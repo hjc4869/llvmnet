@@ -9,7 +9,8 @@ public static class CMath
         return getRounding() switch { 0 => 1, 0x400 => 3, 0x800 => 2, 0xc00 => 0, _ => -1 };
     }
 
-    [CExport("sqrt")] public static double Sqrt(double value)
+    [CExport("sqrt")]
+    public static double Sqrt(double value)
     {
         if (value < 0)
             ProcessRuntime.Error(33);
@@ -30,7 +31,8 @@ public static class CMath
     [CExport("cbrtf")] public static float CbrtF(float value) => MathF.Cbrt(value);
     [CExport("erf")] public static double Erf(double value) => MathNet.Numerics.SpecialFunctions.Erf(value);
     [CExport("erff")] public static float ErfF(float value) => (float)Erf(value);
-    [CExport("tgamma")] public static double Tgamma(double value)
+    [CExport("tgamma")]
+    public static double Tgamma(double value)
     {
         if (double.IsNaN(value) || double.IsPositiveInfinity(value)) return value;
         if (value == 0)
@@ -47,7 +49,8 @@ public static class CMath
         if (double.IsInfinity(result) || result == 0) ProcessRuntime.Error(34);
         return result;
     }
-    [CExport("tgammaf")] public static float TgammaF(float value)
+    [CExport("tgammaf")]
+    public static float TgammaF(float value)
     {
         double wide = Tgamma(value);
         float result = (float)wide;
@@ -90,12 +93,14 @@ public static class CMath
     [CExport("copysignf")] public static float CopySignF(float value, float sign) => MathF.CopySign(value, sign);
     [CExport("fmod")] public static double Fmod(double value, double divisor) => value % divisor;
     [CExport("fmodf")] public static float FmodF(float value, float divisor) => value % divisor;
-    [CExport("modf")] public static unsafe double Modf(double value, nint integral)
+    [CExport("modf")]
+    public static unsafe double Modf(double value, nint integral)
     {
         *(double*)integral = Math.Truncate(value);
         return Math.CopySign(double.IsInfinity(value) ? 0 : value - *(double*)integral, value);
     }
-    [CExport("modff")] public static unsafe float ModfF(float value, nint integral)
+    [CExport("modff")]
+    public static unsafe float ModfF(float value, nint integral)
     {
         *(float*)integral = MathF.Truncate(value);
         return MathF.CopySign(float.IsInfinity(value) ? 0 : value - *(float*)integral, value);
@@ -109,19 +114,22 @@ public static class CMath
     [CExport("sinh")] public static double Sinh(double value) => Math.Sinh(value);
     [CExport("cosh")] public static double Cosh(double value) => Math.Cosh(value);
     [CExport("tanh")] public static double Tanh(double value) => Math.Tanh(value);
-    [CExport("atanh")] public static double Atanh(double value)
+    [CExport("atanh")]
+    public static double Atanh(double value)
     {
         if (Math.Abs(value) > 1) ProcessRuntime.Error(33);
         else if (Math.Abs(value) == 1) ProcessRuntime.Error(34);
         return Math.Atanh(value);
     }
-    [CExport("atanhf")] public static float AtanhF(float value)
+    [CExport("atanhf")]
+    public static float AtanhF(float value)
     {
         if (MathF.Abs(value) > 1) ProcessRuntime.Error(33);
         else if (MathF.Abs(value) == 1) ProcessRuntime.Error(34);
         return MathF.Atanh(value);
     }
-    [CExport("frexp")] public static unsafe double Frexp(double value, nint exponent)
+    [CExport("frexp")]
+    public static unsafe double Frexp(double value, nint exponent)
     {
         if (value == 0 || !double.IsFinite(value)) { *(int*)exponent = 0; return value; }
         int power = Math.ILogB(value) + 1;

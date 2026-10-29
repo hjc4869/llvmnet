@@ -225,7 +225,8 @@ public static unsafe class Pthreads
                     ThreadStorage.Release();
                     if (state.Detached) threads.TryRemove(state.Thread.ManagedThreadId, out _);
                 }
-            }, stackSize) { IsBackground = true };
+            }, stackSize)
+            { IsBackground = true };
             long threadId = state.Thread.ManagedThreadId;
             threads[threadId] = state;
             *(long*)identifier = threadId;
@@ -283,12 +284,12 @@ public static unsafe class Pthreads
     {
         if (keyValues is null) return;
         for (int pass = 0; pass < 4; pass++)
-        foreach ((int key, nint value) in keyValues.ToArray())
-        {
-            if (value == 0 || !keyDestructors.TryGetValue(key, out nint destructor) || destructor == 0) continue;
-            keyValues[key] = 0;
-            ((delegate* managed<nint, void>)destructor)(value);
-        }
+            foreach ((int key, nint value) in keyValues.ToArray())
+            {
+                if (value == 0 || !keyDestructors.TryGetValue(key, out nint destructor) || destructor == 0) continue;
+                keyValues[key] = 0;
+                ((delegate* managed<nint, void>)destructor)(value);
+            }
     }
 
     [CExport("prctl")]

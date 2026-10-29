@@ -68,9 +68,16 @@ public static unsafe class WideInteger
         Int128 signedRight = unchecked((Int128)ExtendSign(right, width));
         bool result = predicate switch
         {
-            32 => left == right, 33 => left != right,
-            34 => left > right, 35 => left >= right, 36 => left < right, 37 => left <= right,
-            38 => signedLeft > signedRight, 39 => signedLeft >= signedRight, 40 => signedLeft < signedRight, 41 => signedLeft <= signedRight,
+            32 => left == right,
+            33 => left != right,
+            34 => left > right,
+            35 => left >= right,
+            36 => left < right,
+            37 => left <= right,
+            38 => signedLeft > signedRight,
+            39 => signedLeft >= signedRight,
+            40 => signedLeft < signedRight,
+            41 => signedLeft <= signedRight,
             _ => throw new NotSupportedException($"Wide integer comparison {predicate}")
         };
         return result ? 1 : 0;

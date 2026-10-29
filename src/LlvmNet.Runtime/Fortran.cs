@@ -15,7 +15,10 @@ public static unsafe class Fortran
     [CExport("_FortranASystemClockCountMax")]
     public static long SystemClockCountMax(int kind) => kind switch
     {
-        1 => sbyte.MaxValue, 2 => short.MaxValue, 4 => int.MaxValue, 8 or 16 => long.MaxValue,
+        1 => sbyte.MaxValue,
+        2 => short.MaxValue,
+        4 => int.MaxValue,
+        8 or 16 => long.MaxValue,
         _ => throw new NotSupportedException($"SYSTEM_CLOCK kind {kind} is not implemented.")
     };
     [CExport("_FortranACpuTime")]

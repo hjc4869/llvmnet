@@ -104,7 +104,10 @@ public static unsafe class FortranTransform
 
     private static long IntegerElement(FortranDescriptor array, long index) => array.ElementBytes switch
     {
-        1 => *(sbyte*)array.Address(index), 2 => *(short*)array.Address(index), 4 => *(int*)array.Address(index), 8 => *(long*)array.Address(index),
+        1 => *(sbyte*)array.Address(index),
+        2 => *(short*)array.Address(index),
+        4 => *(int*)array.Address(index),
+        8 => *(long*)array.Address(index),
         _ => throw new NotSupportedException("Fortran shape integer kind is not implemented.")
     };
 

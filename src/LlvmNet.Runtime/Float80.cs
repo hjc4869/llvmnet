@@ -214,12 +214,23 @@ public readonly struct Float80
         }
         bool result = predicate switch
         {
-            0 => false, 1 => !unordered && order == 0, 2 => !unordered && order > 0,
-            3 => !unordered && order >= 0, 4 => !unordered && order < 0, 5 => !unordered && order <= 0,
-            6 => !unordered && order != 0, 7 => !unordered, 8 => unordered,
-            9 => unordered || order == 0, 10 => unordered || order > 0, 11 => unordered || order >= 0,
-            12 => unordered || order < 0, 13 => unordered || order <= 0, 14 => unordered || order != 0,
-            15 => true, _ => throw new ArgumentOutOfRangeException(nameof(predicate))
+            0 => false,
+            1 => !unordered && order == 0,
+            2 => !unordered && order > 0,
+            3 => !unordered && order >= 0,
+            4 => !unordered && order < 0,
+            5 => !unordered && order <= 0,
+            6 => !unordered && order != 0,
+            7 => !unordered,
+            8 => unordered,
+            9 => unordered || order == 0,
+            10 => unordered || order > 0,
+            11 => unordered || order >= 0,
+            12 => unordered || order < 0,
+            13 => unordered || order <= 0,
+            14 => unordered || order != 0,
+            15 => true,
+            _ => throw new ArgumentOutOfRangeException(nameof(predicate))
         };
         return result ? 1 : 0;
     }
