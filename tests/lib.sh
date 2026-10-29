@@ -4,6 +4,7 @@
 # It sets strict mode, the repository root, common tool paths, and builds the solution once
 # unless the test runner (tests/run.sh) already did.
 set -euo pipefail
+ulimit -c 0 2>/dev/null || true  # tests that crash on purpose must not leave core files
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 llvmnet="$root/bin/llvmnet"
 compiler_dll="$root/src/LlvmNet.Compiler/bin/Release/net10.0/llvmnet.dll"

@@ -94,6 +94,14 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
 
     private void FunctionPointer(nint function, System.Reflection.MethodInfo target)
     {
+        if (Compiler.CheckIndirectCalls)
+        {
+            nint signature = Llvm.LLVMGlobalGetValueType(function);
+            Il.Emit(OpCodes.Ldftn, target);
+            Il.Emit(OpCodes.Ldstr, CilCompiler.CilSignature(Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature)));
+            Il.Emit(OpCodes.Ldstr, Llvm.Demangle(Llvm.Name(function)));
+            Il.Emit(OpCodes.Call, typeof(IndirectCalls).GetMethod(nameof(IndirectCalls.Register))!);
+        }
         Il.Emit(OpCodes.Ldftn, Compiler.Host is null ? target : Compiler.Host.Callback(function, target));
         Il.Emit(OpCodes.Ldftn, target);
         bool variadic = Llvm.LLVMIsFunctionVarArg(Llvm.LLVMGlobalGetValueType(function)) != 0;
@@ -174,6 +182,12 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
 
     internal void ReadMemory(nint type, bool isVolatile = false)
     {
+        if (TypeSystem.Kind(type) == 4)
+        {
+            Il.Emit(OpCodes.Call, typeof(Float80).GetMethod(nameof(Float80.Read))!);
+            if (isVolatile) Il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.MemoryBarrier))!);
+            return;
+        }
         int width = TypeSystem.Width(type);
         if (width > 64 || width > 0 && (width + 7) / 8 is not (1 or 2 or 4 or 8))
         {
@@ -206,6 +220,12 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
 
     internal void StoreMemory(nint type, bool isVolatile = false)
     {
+        if (TypeSystem.Kind(type) == 4)
+        {
+            if (isVolatile) Il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.MemoryBarrier))!);
+            Il.Emit(OpCodes.Call, typeof(Float80).GetMethod(nameof(Float80.Write))!);
+            return;
+        }
         int width = TypeSystem.Width(type);
         if (width > 64 || width > 0 && (width + 7) / 8 is not (1 or 2 or 4 or 8))
         {

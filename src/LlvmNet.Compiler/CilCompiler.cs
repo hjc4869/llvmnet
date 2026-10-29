@@ -19,6 +19,11 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal TypeBuilder Program { get; private set; } = null!;
     internal HostInterop? Host { get; private set; }
     internal bool TrapMissingArguments => options.TrapMissingArguments;
+    internal bool CheckIndirectCalls => options.CheckIndirectCalls;
+
+    /// <summary>CIL-level signature text used by --check-indirect-calls; calli compatibility is decided at this level.</summary>
+    internal static string CilSignature(Type returnType, IEnumerable<Type> parameters) =>
+        $"{returnType.Name}({string.Join(",", parameters.Select(parameter => parameter.Name))})";
     private readonly Dictionary<nint, FieldBuilder> constants = [];
     private readonly List<(MethodBuilder Method, int Offset, Type ReturnType, Type[] Parameters)> indirectCalls = [];
     private readonly HashSet<string> managedImports = new(StringComparer.Ordinal);
@@ -74,6 +79,11 @@ internal sealed class CilCompiler(CompilerOptions options)
 
     internal void ManagedCalli(ILGenerator il, MethodBuilder method, Type returnType, Type[] parameters)
     {
+        if (options.CheckIndirectCalls)
+        {
+            il.Emit(OpCodes.Ldstr, CilSignature(returnType, parameters));
+            il.Emit(OpCodes.Call, typeof(IndirectCalls).GetMethod(nameof(IndirectCalls.Check))!);
+        }
         if (NativeScalar(returnType) && parameters.All(NativeScalar))
         {
             il.EmitCalli(OpCodes.Calli, CallingConventions.Standard, returnType, parameters, null);
@@ -291,6 +301,9 @@ internal sealed class CilCompiler(CompilerOptions options)
         byte[] executable = image.ToArray();
         FinalizeIndirectCalls(executable, indirectFixups);
         MakeDeterministic(executable);
+        if (options.DiagnoseLimits)
+            LimitsReport.Write(executable, Methods.Where(pair => pair.Value is MethodBuilder).ToDictionary(pair => pair.Value.Name, pair =>
+                (Llvm.Blocks(pair.Key).Count(), Llvm.Blocks(pair.Key).Sum(block => Llvm.Instructions(block).Count()))), Console.Error);
         File.WriteAllBytes(output, executable);
         File.WriteAllText(Path.ChangeExtension(output, ".runtimeconfig.json"), JsonSerializer.Serialize(new
         {

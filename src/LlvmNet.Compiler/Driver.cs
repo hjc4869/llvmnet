@@ -12,6 +12,8 @@ internal sealed class CompilerOptions
     internal bool NativeAot { get; set; }
     internal bool Simd128 { get; set; }
     internal bool TrapMissingArguments { get; set; }
+    internal bool DiagnoseLimits { get; set; }
+    internal bool CheckIndirectCalls { get; set; }
     internal string AbiTag => Runtime switch { "system" => "system-linux-x64-v1", "portable" => "dotnet64-v1", _ => "managed-host-v1" };
     internal List<string> SystemLibraries { get; } = [];
     internal Dictionary<string, NativeImport> NativeImports { get; } = new(StringComparer.Ordinal);
@@ -53,6 +55,8 @@ internal static class Driver
                 "  --runtime <mode>         system, portable, or managed-host (legacy default)",
                 "  --simd128                Enable architecture-neutral SIMD128 helper calls",
                 "  --trap-missing-arguments Trap invalid void calls with missing arguments (system only)",
+                "  --diagnose-limits        Report per-function IL size, locals and JIT optimization thresholds",
+                "  --check-indirect-calls   Debug: verify each indirect call's CIL signature against its target",
                 "  --emit-llvm              Stop after LLVM linking",
                 "  --keep-ir <file>         Preserve linked LLVM bitcode",
                 "  --nativeaot              Publish a self-contained NativeAOT executable",
@@ -103,6 +107,8 @@ internal static class Driver
                 case "--nativeaot": nativeAot = true; break;
                 case "--simd128": options.Simd128 = true; break;
                 case "--trap-missing-arguments": options.TrapMissingArguments = true; break;
+                case "--diagnose-limits": options.DiagnoseLimits = true; break;
+                case "--check-indirect-calls": options.CheckIndirectCalls = true; break;
                 case "--aot-debug": aotDebug = true; break;
                 case "--runtime-id": runtimeId = Next(); break;
                 case "--aot-instruction-set":

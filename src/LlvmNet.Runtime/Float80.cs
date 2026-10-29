@@ -64,6 +64,18 @@ public readonly struct Float80
         return new Float80(unchecked((long)(ulong)significand), storedExponent | (negative ? 0x8000 : 0));
     }
 
+    /// <summary>Loads exactly the 10-byte store size of x86_fp80; the 6 padding bytes are not read.</summary>
+    public static unsafe Float80 Read(nint address) =>
+        new(unchecked((long)System.Runtime.CompilerServices.Unsafe.ReadUnaligned<ulong>((void*)address)),
+            System.Runtime.CompilerServices.Unsafe.ReadUnaligned<ushort>((void*)(address + 8)));
+
+    /// <summary>Stores exactly 10 bytes, as LLVM's store of x86_fp80 does; neighbouring bytes are untouched.</summary>
+    public static unsafe void Write(nint address, Float80 value)
+    {
+        System.Runtime.CompilerServices.Unsafe.WriteUnaligned((void*)address, value.Significand);
+        System.Runtime.CompilerServices.Unsafe.WriteUnaligned((void*)(address + 8), value.SignExponent);
+    }
+
     public static Float80 FromDouble(double value)
     {
         ulong bits = (ulong)BitConverter.DoubleToInt64Bits(value);
