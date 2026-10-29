@@ -9,4 +9,7 @@
   <Target Name="BuildLlvmBridge" AfterTargets="Build">
     <Exec Command="bash &quot;$(MSBuildProjectDirectory)/../../scripts/build-native.sh&quot; &quot;$(TargetDir)&quot;" />
   </Target>
+  <ItemGroup>
+    <InternalsVisibleTo Include="LlvmNet.UnitTests" />
+  </ItemGroup>
 </Project>
