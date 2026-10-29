@@ -7,6 +7,9 @@ internal static class PortableAbi
     /// <summary>Experimental (plan item LC-01): a musl prefix built by scripts/build-portable-libc.sh replaces the hand-written C headers and runtime.</summary>
     internal static string? Libc { get; set; }
 
+    /// <summary>True when the musl prefix also has flang-rt (FT-01); the C# Fortran runtime is then hidden.</summary>
+    internal static bool FlangRuntime => Libc is not null && File.Exists(Path.Combine(Libc, "lib", "libflang_rt.runtime.a"));
+
     internal static List<string> Arguments(IReadOnlyList<string> frontend, bool fortran, bool cpp)
     {
         foreach (string argument in frontend)

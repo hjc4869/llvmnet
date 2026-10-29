@@ -52,8 +52,10 @@ internal sealed class CilCompiler(CompilerOptions options)
     private bool MuslVisible(string name, MethodInfo method)
     {
         Type owner = method.DeclaringType!;
-        if (owner == typeof(HostSyscalls) || owner == typeof(NonLocalJumps) || owner == typeof(Simd128) || owner.Name.StartsWith("Fortran", StringComparison.Ordinal))
+        if (owner == typeof(HostSyscalls) || owner == typeof(NonLocalJumps) || owner == typeof(Simd128))
             return true;
+        if (owner.Name.StartsWith("Fortran", StringComparison.Ordinal))
+            return !PortableAbi.FlangRuntime;
         if (owner != typeof(Cxx)) return managedImports.Contains(name);
         return name is "_Unwind_Resume" or "__clang_call_terminate" or "__dynamic_cast" or "__cxa_call_unexpected" ||
             name.StartsWith("__cxa_", StringComparison.Ordinal) && name is not ("__cxa_atexit" or "__cxa_finalize" or "__cxa_thread_atexit" or

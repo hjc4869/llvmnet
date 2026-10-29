@@ -269,7 +269,7 @@ internal static class Driver
                 if (PortableAbi.Libc is not null)
                 {
                     if (!options.Library) bitcode.Add(Path.Combine(PortableAbi.Libc, "lib", "crt1.o"));
-                    foreach (string archive in new[] { "libc++.a", "libc++abi.a" })
+                    foreach (string archive in new[] { "libflang_rt.runtime.a", "libc++.a", "libc++abi.a" })
                         if (File.Exists(Path.Combine(PortableAbi.Libc, "lib", archive))) bitcode.Add(Path.Combine(PortableAbi.Libc, "lib", archive));
                     bitcode.Add(Path.Combine(PortableAbi.Libc, "lib", "libc.a"));
                 }
