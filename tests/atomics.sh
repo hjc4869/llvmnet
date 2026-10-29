@@ -27,3 +27,19 @@ for runtime in system portable; do
         printf 'PASS: %s floating atomic add/sub O%s and four-thread contention in JIT/NativeAOT\n' "$runtime" "$optimization"
     done
 done
+clang-22 -O2 -pthread "$root/tests/c/atomics-contention.c" -latomic -o "$output/contention-native"
+"$output/contention-native" >"$output/contention-native.txt"
+clang-22 -O1 "$root/tests/c/atomics-wide.c" -latomic -o "$output/wide-native"
+"$output/wide-native" >"$output/wide-native.txt"
+for runtime in system portable; do
+    for fixture in contention wide; do
+        source_file="$root/tests/c/atomics-$fixture.c"
+        "$root/bin/llvmnet" --runtime="$runtime" -O2 -pthread "$source_file" -o "$output/$fixture-$runtime.dll" 2>"$output/$fixture-$runtime.log"
+        timeout 60 dotnet "$output/$fixture-$runtime.dll" >"$output/$fixture-$runtime.txt"
+        diff -u "$output/$fixture-native.txt" "$output/$fixture-$runtime.txt"
+        "$root/bin/llvmnet" --runtime="$runtime" -O2 -pthread --nativeaot "$source_file" -o "$output/$fixture-$runtime-aot" >"$output/$fixture-$runtime-aot.log" 2>&1
+        timeout 60 "$output/$fixture-$runtime-aot" >"$output/$fixture-$runtime-aot.txt"
+        diff -u "$output/$fixture-native.txt" "$output/$fixture-$runtime-aot.txt"
+    done
+done
+printf 'PASS: eight-thread atomics on every width and operation, under-aligned and 128-bit atomics, both ABIs, JIT and NativeAOT\n'

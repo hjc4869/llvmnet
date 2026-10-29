@@ -462,7 +462,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         {
             if (opcode != 57) throw new NotSupportedException($"Floating atomic opcode {opcode}");
             int operation = Llvm.LLVMGetAtomicRMWBinOp(instruction);
-            if (operation is not (0 or 11 or 12)) throw new NotSupportedException($"Floating atomic RMW operation {operation}");
+            if (operation is not (0 or 11 or 12 or 13 or 14)) throw new NotSupportedException($"Floating atomic RMW operation {operation}");
             Load(Llvm.LLVMGetOperand(instruction, 0));
             Load(Llvm.LLVMGetOperand(instruction, 1));
             Il.Emit(OpCodes.Ldc_I4, operation);
@@ -470,6 +470,45 @@ internal sealed class FunctionEmitter : ValueEmitter
             return;
         }
         int width = TypeSystem.Kind(type) == 12 ? 64 : TypeSystem.Width(type);
+        if (width == 128 && TypeSystem.Kind(type) == 8)
+        {
+            Load(Llvm.LLVMGetOperand(instruction, opcode == 28 ? 1u : 0u));
+            if (opcode == 56)
+            {
+                Load(Llvm.LLVMGetOperand(instruction, 2));
+                Load(Llvm.LLVMGetOperand(instruction, 1));
+            }
+            else if (opcode != 27)
+                Load(Llvm.LLVMGetOperand(instruction, opcode == 28 ? 0u : 1u));
+            if (opcode == 57)
+            {
+                int operation = Llvm.LLVMGetAtomicRMWBinOp(instruction);
+                if (operation > 10) throw new NotSupportedException($"Atomic RMW operation {operation}");
+                Il.Emit(OpCodes.Ldc_I4, operation);
+            }
+            string wideHelper = opcode switch { 27 => nameof(Atomics.Load128), 28 => nameof(Atomics.Store128), 56 => nameof(Atomics.CompareExchange128), _ => nameof(Atomics.Modify128) };
+            Il.Emit(OpCodes.Call, typeof(Atomics).GetMethod(wideHelper)!);
+            if (opcode == 56)
+            {
+                LocalBuilder previous = Il.DeclareLocal(typeof(UInt128));
+                LocalBuilder pair = Il.DeclareLocal(Types.Map(Llvm.LLVMTypeOf(instruction)));
+                Il.Emit(OpCodes.Stloc, previous);
+                Il.Emit(OpCodes.Ldloca, pair);
+                Il.Emit(OpCodes.Ldloc, previous);
+                StoreMemory(type);
+                Il.Emit(OpCodes.Ldloca, pair);
+                Il.Emit(OpCodes.Conv_I);
+                Offset(Types.Offset(Llvm.LLVMTypeOf(instruction), 1));
+                Il.Emit(OpCodes.Ldloc, previous);
+                Load(Llvm.LLVMGetOperand(instruction, 1));
+                Il.Emit(OpCodes.Ldc_I4, 32);
+                Il.Emit(OpCodes.Ldc_I4, 128);
+                Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.Compare))!);
+                Il.Emit(OpCodes.Stind_I1);
+                Il.Emit(OpCodes.Ldloc, pair);
+            }
+            return;
+        }
         if (width is not (8 or 16 or 32 or 64))
             throw new NotSupportedException($"Atomic type: {Llvm.PrintType(type)}");
         Load(Llvm.LLVMGetOperand(instruction, opcode == 28 ? 1u : 0u));
