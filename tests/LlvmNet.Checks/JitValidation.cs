@@ -1,3 +1,6 @@
+// jit-all needs the JIT and loads arbitrary assemblies, so it is compiled only into the JIT-hosted
+// Checks build; the NativeAOT build (LLVMNET_AOT_PROBE) exists solely for the SIMD128 probe.
+#if !LLVMNET_AOT_PROBE
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
@@ -78,3 +81,4 @@ internal static class JitValidation
         return false;
     }
 }
+#endif

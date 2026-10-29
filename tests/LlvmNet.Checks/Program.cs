@@ -81,8 +81,10 @@ try
         }
         return 0;
     }
+#if !LLVMNET_AOT_PROBE
     if (args is ["jit-all", .. string[] roots] && roots.Length > 0)
         return JitValidation.Run(roots);
+#endif
     if (args is ["inspect", string assemblyPath])
     {
         using FileStream stream = File.OpenRead(assemblyPath);
