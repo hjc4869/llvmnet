@@ -38,7 +38,6 @@ jobs:
           path: |
             ~/.nuget/packages
             artifacts/vendor/downloads
-            artifacts/vendor/libcxx
           key: deps-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'scripts/sources.lock', 'scripts/install-libcxx-headers.sh') }}
       - name: Build
         run: bash scripts/ensure-built.sh
@@ -80,7 +79,6 @@ jobs:
           path: |
             ~/.nuget/packages
             artifacts/vendor/downloads
-            artifacts/vendor/libcxx
           key: deps-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'scripts/sources.lock', 'scripts/install-libcxx-headers.sh') }}
       - name: Fetch pinned sources
         run: scripts/fetch-sources.sh
