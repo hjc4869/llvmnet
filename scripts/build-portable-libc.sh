@@ -59,6 +59,7 @@ mkdir -p "$prefix/include/bits"
 cp arch/generic/bits/*.h "$prefix/include/bits/"
 cp arch/llvmnet/bits/*.h "$prefix/include/bits/"
 cp obj/include/bits/alltypes.h obj/include/bits/syscall.h "$prefix/include/bits/"
+cp -a "$root/ports/musl/include/." "$prefix/include/"
 cp COPYRIGHT "$prefix/COPYRIGHT"
 printf 'musl for dotnet64-v1: %d of %d sources compiled; failures in %s\n' \
     "$(wc -l <"$build/objects.txt")" "${#sources[@]}" "$build/failures.tsv"

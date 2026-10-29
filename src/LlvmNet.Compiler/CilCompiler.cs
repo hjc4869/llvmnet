@@ -44,6 +44,24 @@ internal sealed class CilCompiler(CompilerOptions options)
 
     internal bool IsManagedImport(string name) => managedImports.Contains(name);
 
+    /// <summary>
+    /// With musl (--portable-libc) the hand-written C# C library must stay invisible; only the host interface,
+    /// the C++ exception bridge (the CLR unwinds), non-local jumps, SIMD128 helpers and, until flang-rt replaces
+    /// it, the Fortran runtime remain. A C library symbol musl lacks is then an error, not a silent fallback.
+    /// </summary>
+    private bool MuslVisible(string name, MethodInfo method)
+    {
+        Type owner = method.DeclaringType!;
+        if (owner == typeof(HostSyscalls) || owner == typeof(NonLocalJumps) || owner == typeof(Simd128) || owner.Name.StartsWith("Fortran", StringComparison.Ordinal))
+            return true;
+        if (owner != typeof(Cxx)) return managedImports.Contains(name);
+        return name is "_Unwind_Resume" or "__clang_call_terminate" or "__dynamic_cast" or "__cxa_call_unexpected" ||
+            name.StartsWith("__cxa_", StringComparison.Ordinal) && name is not ("__cxa_atexit" or "__cxa_finalize" or "__cxa_thread_atexit" or
+                "__cxa_thread_atexit_impl" or "__cxa_guard_acquire" or "__cxa_guard_release" or "__cxa_guard_abort") ||
+            name.Contains("terminate", StringComparison.Ordinal) || name.Contains("uncaught_exception", StringComparison.Ordinal) ||
+            name.Contains("new_handler", StringComparison.Ordinal);
+    }
+
     /// <summary>Follows global aliases to the global value or constant expression they name (opaque pointers need no casts).</summary>
     internal static nint ResolveAlias(nint value)
     {
@@ -65,7 +83,8 @@ internal sealed class CilCompiler(CompilerOptions options)
             string name = Llvm.Name(value);
             bool function = Llvm.LLVMIsAFunction(value) != 0;
             result = function
-                ? !options.NativeImports.ContainsKey(name) && !runtimeExports.ContainsKey(name) && (Host is null || HostInterop.Adapter(name) is null)
+                ? !options.NativeImports.ContainsKey(name) && !(runtimeExports.TryGetValue(name, out MethodInfo? export) && (PortableAbi.Libc is null || MuslVisible(name, export))) &&
+                    (Host is null || HostInterop.Adapter(name) is null)
                 : !Stdio.HasGlobal(name) && !Cxx.HasGlobal(name);
             if (result && Host is not null && !(function && !Host.IsSystem(value)))
             {
@@ -193,7 +212,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         }
         if (name == "__llvmnet_run_constructors")
             return Methods[function] = constructors;
-        if (!runtimeExports.TryGetValue(name, out method))
+        if (!runtimeExports.TryGetValue(name, out method) || PortableAbi.Libc is not null && !MuslVisible(name, method))
             throw new NotSupportedException($"Unresolved function: {name}");
         if (Types.Map(Llvm.LLVMGetReturnType(signature)) != method.ReturnType ||
             !Types.Parameters(signature).SequenceEqual(method.GetParameters().Select(parameter => parameter.ParameterType)))

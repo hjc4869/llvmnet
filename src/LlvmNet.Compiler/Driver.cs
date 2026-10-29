@@ -269,6 +269,8 @@ internal static class Driver
                 if (PortableAbi.Libc is not null)
                 {
                     if (!options.Library) bitcode.Add(Path.Combine(PortableAbi.Libc, "lib", "crt1.o"));
+                    foreach (string archive in new[] { "libc++.a", "libc++abi.a" })
+                        if (File.Exists(Path.Combine(PortableAbi.Libc, "lib", archive))) bitcode.Add(Path.Combine(PortableAbi.Libc, "lib", archive));
                     bitcode.Add(Path.Combine(PortableAbi.Libc, "lib", "libc.a"));
                 }
                 else if (File.Exists(cppRuntime)) bitcode.Add(cppRuntime);
@@ -298,7 +300,7 @@ internal static class Driver
             string scalarizer = options.Simd128 ? "scalarizer" : "scalarizer<load-store>";
             string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,expand-reductions,scalarize-masked-mem-intrin,{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
-            if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (PortableAbi.Libc is null ? "" : ",__llvmnet_libc_main"));
+            if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (PortableAbi.Libc is null ? "" : ",__llvmnet_libc_main,__llvmnet_register_finalizer"));
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);
             if (optimizeResult != 0)
                 return optimizeResult;

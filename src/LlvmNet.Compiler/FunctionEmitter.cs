@@ -896,6 +896,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         nint signature = Llvm.LLVMGetCalledFunctionType(instruction);
         bool discardReturn = false;
         bool truncateBooleanReturn = false;
+        Type? convertReturn = null;
         if (Llvm.LLVMIsAFunction(target) != 0 && signature != Llvm.LLVMGlobalGetValueType(target))
         {
             nint definition = Llvm.LLVMGlobalGetValueType(target);
@@ -918,8 +919,14 @@ internal sealed class FunctionEmitter : ValueEmitter
                 TypeSystem.Kind(Llvm.LLVMGetReturnType(signature)) == 8 && TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) == 8 &&
                 (TypeSystem.Width(Llvm.LLVMGetReturnType(signature)) == 1 && TypeSystem.Width(Llvm.LLVMGetReturnType(definition)) == 8 ||
                     TypeSystem.Width(Llvm.LLVMGetReturnType(signature)) == 8 && TypeSystem.Width(Llvm.LLVMGetReturnType(definition)) == 1);
+            // Pointers and i64 share one 64-bit representation in both ABIs (musl's pthread_t is unsigned long in C++
+            // but a pointer in C), so a return of one may be received as the other with an exact conversion.
+            nint siteReturn = Llvm.LLVMGetReturnType(signature), definedReturn = Llvm.LLVMGetReturnType(definition);
+            bool pointerReturn = TypeSystem.Kind(siteReturn) == 12 && TypeSystem.Kind(definedReturn) == 8 && TypeSystem.Width(definedReturn) == 64 ||
+                TypeSystem.Kind(siteReturn) == 8 && TypeSystem.Width(siteReturn) == 64 && TypeSystem.Kind(definedReturn) == 12;
+            if (pointerReturn) convertReturn = Types.Map(siteReturn);
             if (Llvm.LLVMIsFunctionVarArg(definition) != 0 || parameters > arguments ||
-                !discardReturn && !unusedVoidReturn && !truncateBooleanReturn && Llvm.LLVMGetReturnType(definition) != Llvm.LLVMGetReturnType(signature) ||
+                !discardReturn && !unusedVoidReturn && !truncateBooleanReturn && !pointerReturn && Llvm.LLVMGetReturnType(definition) != Llvm.LLVMGetReturnType(signature) ||
                 Enumerable.Range(0, checked((int)parameters)).Any(index => Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, (uint)index)) != Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index)) &&
                     !SystemIntegerArgumentCompatible(instruction, target, (uint)index)))
                 throw new NotSupportedException($"Incompatible direct call signature for {name}: {Llvm.PrintType(signature)} versus {Llvm.PrintType(definition)}");
@@ -1023,6 +1030,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         if (legacyComplete is Label completeLegacy) Il.MarkLabel(completeLegacy);
         if (discardReturn) Il.Emit(OpCodes.Pop);
         if (truncateBooleanReturn) Normalize(Llvm.LLVMTypeOf(instruction));
+        if (convertReturn is not null) Il.Emit(convertReturn == typeof(nint) ? OpCodes.Conv_I : OpCodes.Conv_I8);
     }
 
     private void ManagedCalli(Type returnType, Type[] parameters)
@@ -1040,7 +1048,8 @@ internal sealed class FunctionEmitter : ValueEmitter
             (TypeSystem.Width(source) == 1 && TypeSystem.Width(destination) == 8 || TypeSystem.Width(source) == 8 && TypeSystem.Width(destination) == 1);
         bool pointerBits = TypeSystem.Kind(source) == 12 && TypeSystem.Kind(destination) == 8 && TypeSystem.Width(destination) == 64 ||
             TypeSystem.Kind(source) == 8 && TypeSystem.Width(source) == 64 && TypeSystem.Kind(destination) == 12;
-        if (Compiler.Host is null || Llvm.LLVMGetInstructionCallConv(instruction) != 0 || Llvm.LLVMGetFunctionCallConv(target) != 0 ||
+        // pointer/i64 interchange is exact in both ABIs; the other register-slot equivalences are system-only.
+        if (Compiler.Host is null && !pointerBits || Llvm.LLVMGetInstructionCallConv(instruction) != 0 || Llvm.LLVMGetFunctionCallConv(target) != 0 ||
             !(integerWidths || booleanWidths || pointerBits) || integerWidths && TypeSystem.Width(source) == 32 && index >= 6 ||
             TypeSystem.Kind(Llvm.LLVMGetReturnType(Llvm.LLVMGlobalGetValueType(target))) is 10 or 11)
             return false;

@@ -187,6 +187,48 @@ public static unsafe class Cxx
     [CExport("_ZdlPvmSt11align_val_t"), CExport("_ZdaPvmSt11align_val_t")]
     public static void AlignedSizedDelete(nint pointer, long size, long alignment) => AlignedDelete(pointer, alignment);
 
+    // libc++abi exception_ptr ABI (used by upstream libc++, CX-01): exception_ptr holds the thrown object pointer.
+    private static readonly ConcurrentDictionary<nint, CxxException> primaries = new();
+    private static nint newHandler;
+
+    private static CxxException Primary(nint value)
+    {
+        if (primaries.TryGetValue(value, out CxxException? primary)) return primary;
+        if (initializedExceptions.TryRemove(value, out CxxException? initialized)) return primaries.GetOrAdd(value, initialized);
+        throw new InvalidOperationException("Unknown C++ exception object in exception_ptr.");
+    }
+
+    [CExport("__cxa_uncaught_exceptions")]
+    public static int UncaughtExceptionCount() => uncaughtExceptions;
+    [CExport("__cxa_current_primary_exception")]
+    public static nint CurrentPrimaryException()
+    {
+        CxxException? exception = catches is not null && catches.TryPeek(out CxxException? current) ? current.Primary : null;
+        if (exception is null) return 0;
+        Interlocked.Increment(ref exception.References);
+        primaries.TryAdd(exception.Object, exception);
+        return exception.Object;
+    }
+    [CExport("__cxa_increment_exception_refcount")]
+    public static void IncrementExceptionReference(nint value)
+    {
+        if (value != 0) Interlocked.Increment(ref Primary(value).References);
+    }
+    [CExport("__cxa_decrement_exception_refcount")]
+    public static void DecrementExceptionReference(nint value)
+    {
+        if (value != 0) ReleaseException(Primary(value));
+    }
+    [CExport("__cxa_rethrow_primary_exception")]
+    public static void RethrowPrimaryException(nint value)
+    {
+        if (value != 0) throw new CxxException(Primary(value));
+    }
+    [CExport("_ZSt15set_new_handlerPFvvE")]
+    public static nint SetNewHandler(nint handler) => Interlocked.Exchange(ref newHandler, handler);
+    [CExport("_ZSt15get_new_handlerv")]
+    public static nint GetNewHandler() => Volatile.Read(ref newHandler);
+
     [CExport("__cxa_allocate_exception")]
     public static nint AllocateException(long size)
     {
@@ -269,6 +311,7 @@ public static unsafe class Cxx
     {
         CxxException primary = exception.Primary;
         if (Interlocked.Decrement(ref primary.References) != 0) return;
+        primaries.TryRemove(primary.Object, out _);
         if (primary.Destructor != 0) InvokeDestructor(primary.Destructor, primary.Object);
         FreeException(primary.Object);
         GCHandle.FromIntPtr(primary.Handle).Free();

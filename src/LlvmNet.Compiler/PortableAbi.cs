@@ -20,10 +20,15 @@ internal static class PortableAbi
         result.AddRange(["-nostdinc", "-U__x86_64__", "-U__amd64__", "-U__amd64", "-U__SSE__", "-U__SSE2__"]);
         if (cpp)
         {
-            string cppInclude = Path.Combine(Toolchain.Root, "sysroot", "dotnet64-v1", "include", "c++", "v1");
+            string cppInclude = Libc is not null && Directory.Exists(Path.Combine(Libc, "include", "c++", "v1"))
+                ? Path.Combine(Libc, "include", "c++", "v1") : Path.Combine(Toolchain.Root, "sysroot", "dotnet64-v1", "include", "c++", "v1");
             if (!Directory.Exists(cppInclude))
                 throw new DirectoryNotFoundException("Portable C++ requires the bundled libc++ headers; run scripts/install-libcxx-headers.sh before packaging the toolchain.");
-            result.AddRange(["-nostdinc++", "-isystem", Path.Combine(Toolchain.Root, "sysroot", "dotnet64-v1", "cxx-config"), "-isystem", cppInclude]);
+            // clang++ defines _GNU_SOURCE on Linux targets and libc++ relies on it; the portable target is freestanding.
+            if (Libc is not null && cppInclude.StartsWith(Libc, StringComparison.Ordinal))
+                result.AddRange(["-D_GNU_SOURCE", "-nostdinc++", "-isystem", cppInclude]);
+            else
+                result.AddRange(["-nostdinc++", "-isystem", Path.Combine(Toolchain.Root, "sysroot", "dotnet64-v1", "cxx-config"), "-isystem", cppInclude]);
         }
         result.AddRange(["-isystem", include]);
         string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");

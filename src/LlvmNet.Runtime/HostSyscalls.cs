@@ -207,9 +207,53 @@ public static unsafe class HostSyscalls
         return total;
     }
 
+    /// <summary>A byte source for /dev/urandom and /dev/random backed by the operating system's random generator.</summary>
+    private sealed class RandomStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set { } }
+        public override int Read(byte[] buffer, int offset, int count) { RandomNumberGenerator.Fill(buffer.AsSpan(offset, count)); return count; }
+        public override int Read(Span<byte> buffer) { RandomNumberGenerator.Fill(buffer); return buffer.Length; }
+        public override void Write(byte[] buffer, int offset, int count) { }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
+    /// <summary>Device paths every host provides, independent of the host's own /dev: random sources, null, zero and the standard streams.</summary>
+    private static Stream? Device(string path) => path switch
+    {
+        "/dev/urandom" or "/dev/random" => new RandomStream(),
+        "/dev/null" => Stream.Null,
+        "/dev/zero" => new ZeroStream(),
+        "/dev/stdin" => Console.OpenStandardInput(),
+        "/dev/stdout" or "/dev/tty" => Console.OpenStandardOutput(),
+        "/dev/stderr" => Console.OpenStandardError(),
+        _ => null
+    };
+
+    private sealed class ZeroStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set { } }
+        public override int Read(byte[] buffer, int offset, int count) { buffer.AsSpan(offset, count).Clear(); return count; }
+        public override int Read(Span<byte> buffer) { buffer.Clear(); return buffer.Length; }
+        public override void Write(byte[] buffer, int offset, int count) { }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
     private static long Open(int directory, nint pathPointer, int flags, int mode)
     {
         string path = Resolve(directory, pathPointer);
+        if (Device(path) is Stream device) return Install(new OpenFile(device, null, flags, false));
         bool create = (flags & 64) != 0, exclusive = (flags & 128) != 0, truncate = (flags & 512) != 0;
         if ((flags & 65536) != 0 || Directory.Exists(path) && !create)
         {
