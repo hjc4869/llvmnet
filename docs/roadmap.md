@@ -1,5 +1,7 @@
 # Roadmap
 
+The detailed production-readiness plan, with tracked items, milestones and the architecture decisions it depends on, is in [plan/README.md](plan/README.md). The ordering below predates it and is kept as the original priority statement.
+
 The ordering follows feature correctness first, ffmpeg before SPEC, and performance last.
 
 1. Harden C semantics: remaining memory/calling-convention corners, external native TLS and foreign-thread cleanup, cross-native nonlocal jumps, computed gotos, full scalar intrinsic coverage, and C runtime conformance tests. Defined TLS globals, scoped stack restoration, and translated returns-twice/nonlocal jumps have focused JIT/NativeAOT tests.
