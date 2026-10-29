@@ -16,6 +16,19 @@ public static unsafe class Memory
         return (nint)pointer;
     }
 
+    // Storage for a global variable, which lives as long as the process and is never freed. calloc leaves
+    // large blocks to the operating system's lazily zeroed pages, as an ELF .bss would, so a large
+    // zero-initialized array costs no memory or startup time until it is touched.
+    public static nint AllocateGlobal(long size, int alignment)
+    {
+        nuint actualAlignment = (nuint)Math.Max(alignment, 16);
+        nuint actualSize = checked((nuint)Math.Max(size, 1) + actualAlignment - 1);
+        void* pointer = NativeMemory.AllocZeroed(actualSize);
+        if (pointer is null)
+            throw new OutOfMemoryException();
+        return (nint)(((nuint)pointer + actualAlignment - 1) & ~(actualAlignment - 1));
+    }
+
     public static nint Copy(nint destination, nint source, long count)
     {
         NativeMemory.Copy((void*)source, (void*)destination, checked((nuint)count));

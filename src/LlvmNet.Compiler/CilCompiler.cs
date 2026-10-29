@@ -523,7 +523,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         {
             il.Emit(OpCodes.Ldc_I8, Types.Size(type));
             il.Emit(OpCodes.Ldc_I4, Math.Max(alignment, Types.Alignment(type)));
-            il.Emit(OpCodes.Call, typeof(Memory).GetMethod(nameof(Memory.Allocate))!);
+            il.Emit(OpCodes.Call, typeof(Memory).GetMethod(nameof(Memory.AllocateGlobal))!);
             il.Emit(OpCodes.Stsfld, field);
         }
     }
@@ -532,12 +532,10 @@ internal sealed class CilCompiler(CompilerOptions options)
     {
         var emitter = new ValueEmitter(this, il);
         var data = new ConstantData(Types, value);
-        const int chunkSize = 1 << 20;
-        for (int offset = 0; offset < data.Bytes.Length; offset += chunkSize)
+        foreach ((long index, byte[] bytes) in data.Chunks)
         {
-            ReadOnlySpan<byte> bytes = data.Bytes.AsSpan(offset, Math.Min(chunkSize, data.Bytes.Length - offset));
-            if (!bytes.ContainsAnyExcept((byte)0)) continue;
-            FieldBuilder blob = Program.DefineInitializedData($"__data{field.Name}_{offset}", bytes.ToArray(), FieldAttributes.Private | FieldAttributes.Static);
+            long offset = index * ConstantData.ChunkSize;
+            FieldBuilder blob = Program.DefineInitializedData($"__data{field.Name}_{offset}", bytes, FieldAttributes.Private | FieldAttributes.Static);
             il.Emit(OpCodes.Ldsfld, field);
             emitter.Offset(offset);
             il.Emit(OpCodes.Ldsflda, blob);

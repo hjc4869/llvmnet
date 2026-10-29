@@ -1,17 +1,20 @@
-using System.Buffers.Binary;
-
 namespace LlvmNet;
 
 internal sealed class ConstantData
 {
-    internal byte[] Bytes { get; }
+    internal const int ChunkSize = 1 << 20;
+
+    internal long Size { get; }
+    // Only chunks that receive a nonzero byte are stored, keyed by chunk index, so zero-filled parts of
+    // large globals cost nothing and globals beyond 2 GB do not need a single array.
+    internal SortedDictionary<long, byte[]> Chunks { get; } = [];
     internal List<(long Offset, nint Value)> Relocations { get; } = [];
     private readonly TypeSystem types;
 
     internal ConstantData(TypeSystem types, nint value)
     {
         this.types = types;
-        Bytes = new byte[checked((int)Math.Max(1, types.Size(Llvm.LLVMTypeOf(value))))];
+        Size = Math.Max(1, types.Size(Llvm.LLVMTypeOf(value)));
         Write(value, 0);
     }
 
@@ -34,7 +37,7 @@ internal sealed class ConstantData
                     for (int bit = 0; bit < width; bit++)
                     {
                         long position = checked((long)index * width + bit);
-                        Bytes[checked(offset + position / 8)] |= (byte)(((bits[bit / 8] >> (bit % 8)) & 1) << (int)(position % 8));
+                        Or(checked(offset + position / 8), (byte)(((bits[bit / 8] >> (bit % 8)) & 1) << (int)(position % 8)));
                     }
                 }
                 return;
@@ -46,12 +49,40 @@ internal sealed class ConstantData
             }
             return;
         }
-        Span<byte> destination = Bytes.AsSpan(checked((int)offset));
         if (Llvm.LLVMIsAConstantInt(value) != 0 || Llvm.LLVMIsAConstantFP(value) != 0)
         {
-            Llvm.Bits(value).CopyTo(destination);
+            Copy(offset, Llvm.Bits(value));
             return;
         }
         Relocations.Add((offset, value));
+    }
+
+    private byte[] Chunk(long offset)
+    {
+        long index = offset / ChunkSize;
+        if (!Chunks.TryGetValue(index, out byte[]? chunk))
+            Chunks[index] = chunk = new byte[Math.Min(ChunkSize, Size - index * ChunkSize)];
+        return chunk;
+    }
+
+    private void Or(long offset, byte bits)
+    {
+        if (bits != 0)
+            Chunk(offset)[offset % ChunkSize] |= bits;
+    }
+
+    private void Copy(long offset, ReadOnlySpan<byte> bytes)
+    {
+        if (!bytes.ContainsAnyExcept((byte)0))
+            return;
+        while (!bytes.IsEmpty)
+        {
+            byte[] chunk = Chunk(offset);
+            int start = (int)(offset % ChunkSize);
+            int count = Math.Min(bytes.Length, chunk.Length - start);
+            bytes[..count].CopyTo(chunk.AsSpan(start));
+            offset += count;
+            bytes = bytes[count..];
+        }
     }
 }
