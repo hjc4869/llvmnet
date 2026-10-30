@@ -258,6 +258,15 @@ static void filesystem(void)
     chmod("list", 0755);
     CHECK("opendir a file", opendir("moved") ? 0 : -1);
     CHECK("opendir missing", opendir("missing") ? 0 : -1);
+    /* A trailing slash names a directory and repeated slashes act as one (cppcheck's plist output directory). */
+    CHECK("mkdir with a trailing slash", mkdir("slashed/", 0755));
+    CHECK("mkdir it again", mkdir("slashed/", 0755));
+    CHECK("stat directory with a trailing slash", stat("slashed/", &metadata));
+    CHECK("stat file with a trailing slash", stat("moved/", &metadata));
+    CHECK("open file with a trailing slash", open("moved/", O_RDONLY));
+    CHECK("mkdir with repeated slashes", mkdir("slashed//inner//", 0755));
+    CHECK("rmdir with trailing slashes", rmdir("slashed//inner/"));
+    CHECK("rmdir with a trailing slash", rmdir("slashed/"));
 }
 
 static void memory(void)

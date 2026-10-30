@@ -180,6 +180,11 @@ public static unsafe partial class HostSyscalls
         string path = Text(pathPointer);
         if (path.Length == 0) throw new FileNotFoundException(path);
         if (path.Length >= 4096) throw new PathTooLongException();
+        // Repeated slashes act as one, and a trailing slash names a directory: it is dropped, and the path must then be a
+        // directory if it exists (mkdir("dir/") creates "dir"; stat("file/") is ENOTDIR).
+        while (path.Contains("//", StringComparison.Ordinal)) path = path.Replace("//", "/", StringComparison.Ordinal);
+        bool directoryOnly = path.Length > 1 && path.EndsWith('/');
+        if (directoryOnly) path = path[..^1];
         if (!Path.IsPathRooted(path))
         {
             string start = Directory.GetCurrentDirectory();
@@ -192,7 +197,9 @@ public static unsafe partial class HostSyscalls
             path = Path.Combine(start, path);
         }
         // Path.GetFullPath removes ".." textually; the kernel resolves the components before it first.
-        return path.Split('/').Contains("..") ? ResolveParents(path, 0) : Path.GetFullPath(path);
+        string resolved = path.Split('/').Contains("..") ? ResolveParents(path, 0) : Path.GetFullPath(path);
+        if (directoryOnly && !Directory.Exists(resolved) && File.Exists(resolved)) throw new HostException(ENOTDIR);
+        return resolved;
     }
 
     /// <summary>
