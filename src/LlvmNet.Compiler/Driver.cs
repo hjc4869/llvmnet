@@ -84,6 +84,7 @@ internal static class Driver
         bool preprocess = false;
         bool emitLlvm = false;
         bool dependencyOnly = false;
+        bool syntaxOnly = false;
         bool relocatable = false;
         bool nativeAot = false;
         bool aotDebug = false;
@@ -105,6 +106,7 @@ internal static class Driver
                 case "-Wl,--version": linkerVersion = true; break;
                 case "-r": relocatable = true; emitLlvm = true; break;
                 case "-M": case "-MM": dependencyOnly = true; frontend.Add(argument); break;
+                case "-fsyntax-only": syntaxOnly = true; frontend.Add(argument); break;
                 case "-pipe": case "-fuse-ld=lld": case "-flto": case "-flto=full": case "-flto=thin": break;
                 case "--runtime": options.Runtime = Next(); break;
                 case "--system-library": options.SystemLibraries.Add(Next()); break;
@@ -181,7 +183,7 @@ internal static class Driver
                     break;
             }
         }
-        if (nativeAot && (compileOnly || preprocess || dependencyOnly || emitLlvm || options.Library))
+        if (nativeAot && (compileOnly || preprocess || dependencyOnly || syntaxOnly || emitLlvm || options.Library))
             throw new ArgumentException("--nativeaot requires an executable link, not -c, -E, -S, --emit-llvm or -shared.");
         if (!nativeAot && (runtimeId is not null || aotDebug || aotPreference != "Balanced" || aotInstructionSet is not null))
             throw new ArgumentException("NativeAOT output settings require --nativeaot.");
@@ -207,7 +209,8 @@ internal static class Driver
         if (options.Simd128)
             frontend.InsertRange(0, ["-D__LLVMNET_SIMD128__=1", "-I", Path.Combine(Toolchain.Root, "sysroot", "simd128", "include")]);
         string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");
-        if (preprocess || dependencyOnly)
+        // Preprocessing, dependency generation and -fsyntax-only run the frontend alone, with the mode's headers.
+        if (preprocess || dependencyOnly || syntaxOnly)
         {
             List<string> preprocessing = [.. frontend];
             if (preprocess) preprocessing.Add("-E");

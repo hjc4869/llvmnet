@@ -39,11 +39,16 @@ for archive in libdav1d.a libxml2.a libz.a; do
     fi
 done
 bash "$root/scripts/ensure-built.sh"
+# Objects built against another portable sysroot carry an incompatible ABI, and not every object depends on
+# config.h, so a changed sysroot means a fresh build directory.
+abi_stamp="$runtime"
+[[ "$runtime" == portable ]] && abi_stamp+=" $(cat "$root/sysroot/dotnet64-v2/.llvmnet-headers")"
+if [[ -d "$build_dir" && "$(cat "$build_dir/llvmnet-abi" 2>/dev/null)" != "$abi_stamp" ]]; then rm -rf "${build_dir:?}"; fi
 mkdir -p "$build_dir"
+printf '%s\n' "$abi_stamp" >"$build_dir/llvmnet-abi"
 export PKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig"
 export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
-if [[ ! -f "$build_dir/ffbuild/config.mak" || "$(cat "$build_dir/llvmnet-source" 2>/dev/null)" != "$source_dir" || "$root/config/ffmpeg-browser.sh" -nt "$build_dir/ffbuild/config.mak" || "${BASH_SOURCE[0]}" -nt "$build_dir/ffbuild/config.mak" || "$root/config/ffmpeg-configure.patch" -nt "$build_dir/ffbuild/config.mak" ]] ||
-    { [[ "$runtime" == portable ]] && [[ "$root/sysroot/dotnet64-v2/.llvmnet-inputs" -nt "$build_dir/ffbuild/config.mak" ]]; }; then
+if [[ ! -f "$build_dir/ffbuild/config.mak" || "$(cat "$build_dir/llvmnet-source" 2>/dev/null)" != "$source_dir" || "$root/config/ffmpeg-browser.sh" -nt "$build_dir/ffbuild/config.mak" || "${BASH_SOURCE[0]}" -nt "$build_dir/ffbuild/config.mak" || "$root/config/ffmpeg-configure.patch" -nt "$build_dir/ffbuild/config.mak" ]]; then
     configure="$source_dir/configure"
     if [[ "$simd128" == 1 && "$runtime" == portable ]]; then
         mkdir -p "$build_dir/ffbuild"

@@ -29,6 +29,23 @@ verify() {
     [[ "$actual" == "$expected" ]]
 }
 
+# A source without release archives is pinned to a commit: its archive column reads <name>.tar@<commit>, the URL is
+# the repository, and the hash is that of `git archive --format=tar` of the commit, which is deterministic.
+download() {
+    local url="$1" archive="$2" destination="$3" commit clone
+    if [[ "$archive" != *.tar@* ]]; then
+        curl -sSfL --retry 2 --connect-timeout 20 -o "$destination" "$url"
+        return
+    fi
+    commit="${archive#*.tar@}"
+    clone="$(mktemp -d "$downloads/.clone.XXXXXXXX")"
+    git clone --quiet --no-checkout "$url" "$clone" &&
+        git -C "$clone" archive --format=tar --prefix=source/ "$commit" >"$destination"
+    local status=$?
+    rm -rf "$clone"
+    return "$status"
+}
+
 fetch() {
     local name="$1" version hash archive urls url target stamp temporary
     IFS=$'\t' read -r name version hash archive urls < <(entry "$name")
@@ -47,8 +64,7 @@ fetch() {
         rm -f "$downloads/$archive"
         for url in $urls; do
             printf 'Downloading %s\n' "$url" >&2
-            if curl -sSfL --retry 2 --connect-timeout 20 -o "$downloads/$archive.part" "$url" &&
-                verify "$downloads/$archive.part" "$hash"; then
+            if download "$url" "$archive" "$downloads/$archive.part" && verify "$downloads/$archive.part" "$hash"; then
                 mv "$downloads/$archive.part" "$downloads/$archive"
                 break
             fi

@@ -1,5 +1,6 @@
 # Pinned upstream sources fetched by scripts/fetch-sources.sh.
 # Columns (tab separated): name, version, sha256, archive file name, download URLs (space separated, tried in order).
+# An archive named <file>.tar@<commit> is a git commit: the URL is the repository (see download in fetch-sources.sh).
 # Every URL must serve a byte-identical archive. Update a row only together with the code that depends on it.
 musl	1.2.5	a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4	musl-1.2.5.tar.gz	https://musl.libc.org/releases/musl-1.2.5.tar.gz https://deb.debian.org/debian/pool/main/m/musl/musl_1.2.5.orig.tar.gz
 llvm-project	22.1.8	922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888	llvm-project-22.1.8.src.tar.xz	https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/llvm-project-22.1.8.src.tar.xz
@@ -9,3 +10,5 @@ libxml2	2.15.3	78262a6e7ac170d6528ebfe2efccdf220191a5af6a6cd61ea4a9a9a5042c7a07	
 zlib	1.3.2	bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16	zlib-1.3.2.tar.gz	https://zlib.net/zlib-1.3.2.tar.gz https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz
 csmith	2.4.0-0cdc710	d4d34820a910e7ab8a5e5978cc4ccf1c7687f6bc4ed1e3731a7338e38e0ba9a5	csmith-0cdc710315cfee9035e22ef4363ca479270d1934.tar.gz	https://github.com/csmith-project/csmith/archive/0cdc710315cfee9035e22ef4363ca479270d1934.tar.gz
 yarpgen	2.0-1adb290	0712452267453b2147675111e2da76fb3b3642adf8834ce3bdbd03ce36dcbd8c	yarpgen-1adb290f453505838f3aa33dc571f292b0c1810f.tar.gz	https://github.com/intel/yarpgen/archive/1adb290f453505838f3aa33dc571f292b0c1810f.tar.gz
+llvm-test-suite	22.1.8	0f17599f27adc2cce9366914af798e0b47cb2732771e616217302f09cd8ea4d2	test-suite-22.1.8.src.tar.xz	https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/test-suite-22.1.8.src.tar.xz
+libc-test	0-7b95dfa	880f0c410a8b575db48292bc3c0c866fabacd3504772ad248284b2dcab1cc748	libc-test-7b95dfa.tar@7b95dfa5f5d5ca4d949221e0228ccc290bacc14e	https://repo.or.cz/libc-test.git git://repo.or.cz/libc-test.git https://repo.or.cz/libc-test.git

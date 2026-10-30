@@ -55,6 +55,8 @@ cp "$llvm/libcxxabi/LICENSE.TXT" "$stage/share/licenses/libcxxabi.LICENSE.TXT"
 cp "$llvm/flang-rt/LICENSE.TXT" "$stage/share/licenses/flang-rt.LICENSE.TXT" 2>/dev/null ||
     cp "$llvm/flang/LICENSE.TXT" "$stage/share/licenses/flang-rt.LICENSE.TXT"
 printf '%s\n' "$inputs" >"$stage/.llvmnet-inputs"
+# Objects compiled against the sysroot depend only on its headers: builds of other projects key on this hash.
+(cd "$stage/include" && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1) >"$stage/.llvmnet-headers"
 rm -rf "${sysroot:?}.old"
 [[ -d "$sysroot" ]] && mv "$sysroot" "$sysroot.old"
 mv "$stage" "$sysroot"
