@@ -6,6 +6,7 @@ This directory holds the llvmnet port of musl 1.2.5 (plan items LC-01, LC-02). `
 - `arch/llvmnet/atomic_arch.h` replaces inline assembly with compiler atomics.
 - `arch/llvmnet/pthread_arch.h` keeps the thread pointer in a per-thread host slot.
 - `arch/llvmnet/crt_arch.h` and `reloc.h` drop the ELF entry point and the dynamic linker.
+- `src/process/llvmnet/posix_spawn.c` starts host processes through `__llvmnet_spawn` instead of `clone` and `execve`, so `posix_spawn`, `system` and `popen` work without `fork` (plan item LC-08).
 - `src/exit/llvmnet/exit.c` and `src/thread/llvmnet/__cxa_thread_atexit_impl.c` add the C++ `thread_local` destructor registry that glibc has and musl lacks, run at thread exit and at the start of `exit()` (plan item CX-12).
 - The x86-64 `bits/` headers are used as they are (LP64, signed `char`, 32-bit `wchar_t`, 80-bit `long double`), except `bits/stdint.h`: the fast 16- and 32-bit integer types are 64-bit as in glibc.
 

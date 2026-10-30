@@ -1,20 +1,52 @@
-# Host interface for musl (spike state)
+# Host interface of the portable ABI
 
-With `--portable-libc`, translated programs reach the host only through the functions below, implemented in C# by `src/LlvmNet.Runtime/HostSyscalls.cs` (plan items LC-04 to LC-11). This page describes the interface as the M2 spike built it; it becomes a versioned contract when the musl sysroot becomes the default (LC-26).
+Portable programs (`dotnet64-v2`) contain musl, libc++ and flang-rt compiled to CIL. They reach the operating system only through the host interface on this page, implemented in C# in `src/LlvmNet.Runtime/Host/` (plan items LC-04 to LC-12). This page is the contract between the sysroot (`sysroot/dotnet64-v2`, built from `ports/musl`) and `LlvmNet.Runtime`.
+
+## Rules
+
+- **Linux system-call semantics.** The host implements a subset of the Linux x86-64 system-call interface: the same numbers, argument order, structure layouts and flag values as musl's `arch/x86_64` headers. musl therefore runs unmodified, and the behavior is the same on every .NET host operating system.
+- **Results.** Every call returns a non-negative result or `-errno`, as the kernel does; musl turns that into `errno`. A number the host does not implement returns `-ENOSYS`.
+- **Constants.** Numbers, flags and layouts are named in `Host/Linux.cs`; no other C# file uses a raw Linux constant.
+- **Errors from .NET.** `HostSyscalls.Errno` is the single mapping from .NET exceptions to errno values. On Linux, an `IOException` carrying the kernel's errno keeps it; elsewhere unknown I/O errors become `EIO`.
+- **Imports are scalar.** Every entry point takes and returns integers and pointers only, so its CIL signature cannot change with the C type system.
+
+## Entry points
 
 | Symbol | C signature | Purpose |
 | --- | --- | --- |
-| `__llvmnet_syscall` | `long (long number, long a1, ..., long a6)` | Every musl system call. Numbers, argument layouts, structure layouts and `-errno` results follow Linux x86-64. Unimplemented calls return `-ENOSYS`. |
-| `__llvmnet_get_tp` | `uintptr_t (void)` | The calling thread's thread pointer, set by `set_thread_area` (205) or `arch_prctl(ARCH_SET_FS)`. |
-| `__llvmnet_clone` | `int (int (*)(void *), void *, int flags, int *ptid, void *tls, int *ctid)` | Thread creation for musl's `__clone`, on a managed thread; honors `CLONE_SETTLS`, `CLONE_PARENT_SETTID` and `CLONE_CHILD_CLEARTID`. |
-| `__llvmnet_run_constructors` | `void (void)` | Supplied by the compiler: runs `llvm.global_ctors` and registers `llvm.global_dtors` with musl's `atexit`. |
+| `__llvmnet_syscall` | `long (long number, long a1, ..., long a6)` | Every musl system call (`arch/llvmnet/syscall_arch.h`). |
+| `__llvmnet_get_tp` | `uintptr_t (void)` | The calling thread's thread pointer, set by `set_thread_area` or `arch_prctl(ARCH_SET_FS)` (`arch/llvmnet/pthread_arch.h`). |
+| `__llvmnet_clone` | `int (int (*)(void *), void *, int flags, int *ptid, void *tls, int *ctid)` | musl's `__clone` for `pthread_create`, on a managed thread; honors `CLONE_SETTLS`, `CLONE_PARENT_SETTID` and `CLONE_CHILD_CLEARTID`. |
+| `__llvmnet_spawn` | `int (pid_t *pid, const char *path, int search, char *const argv[], char *const envp[], const int streams[3], const char *directory)` | musl's `posix_spawn` (`src/process/llvmnet/posix_spawn.c`): starts a host process. `streams` names the descriptors that become the child's standard input, output and error after the file actions, or -1 for closed; `search` asks for a `PATH` search. Returns 0 or an errno value. |
+| `__llvmnet_run_constructors` | `void (void)` | Supplied by the compiler in every image: runs `llvm.global_ctors` and registers `llvm.global_dtors` with musl's `atexit`. |
 
-`setjmp` and `longjmp` are handled by the compiler and `NonLocalJumps`. C++ exception handling stays in the managed bridge (`Cxx.cs`) because the CLR unwinds.
+`setjmp` and `longjmp` are handled by the compiler and `NonLocalJumps`. C++ exceptions stay in the managed bridge (`Cxx.cs`) because the CLR unwinds the stack.
+
+The entry points and their semantics are versioned with the ABI tag. Implementing an additional system call is compatible. Changing an entry point's signature, or the meaning of an implemented call in a way musl depends on, requires a new ABI tag (ADR-09).
+
+## System calls
+
+| Area | Implemented | Not available |
+| --- | --- | --- |
+| Descriptors (LC-05) | `read`, `write`, `readv`, `writev`, `pread64`, `pwrite64`, `preadv`, `pwritev`, `open`, `openat`, `close`, `lseek` (including `SEEK_DATA`, `SEEK_HOLE`), `dup`, `dup2`, `dup3`, `fcntl` (`F_DUPFD`, `F_DUPFD_CLOEXEC`, `F_GETFD`, `F_SETFD`, `F_GETFL`, `F_SETFL`, locks), `flock`, `fsync`, `fdatasync`, `ftruncate`, `fallocate` (mode 0), `ioctl` (`TIOCGWINSZ`, `TCGETS`, `TCSETS*`, `FIONREAD`, `FIONBIO`), `pipe`, `pipe2`, `poll`, `ppoll`, `select`, `pselect6` | sockets (`-ENOSYS`, LC-13), `epoll`, `eventfd`, `inotify` |
+| File system (LC-06) | `stat`, `fstat`, `lstat`, `newfstatat`, `access`, `faccessat`, `faccessat2`, `getdents64`, `mkdir`, `mkdirat`, `rmdir`, `unlink`, `unlinkat`, `rename`, `renameat`, `renameat2` (`RENAME_NOREPLACE`), `symlink`, `symlinkat`, `readlink`, `readlinkat`, `chmod`, `fchmod`, `fchmodat`, `chown` family, `truncate`, `getcwd`, `chdir`, `fchdir`, `utimes`, `utimensat`, `umask`, `statfs`, `fstatfs` | hard links (`link`, `linkat`: `-EPERM`), device files and named pipes (`mknod`: `-EPERM`) |
+| Memory (LC-07) | `mmap` (anonymous, private and shared file mappings), `munmap` (also partial), `mremap`, `msync`, `madvise` (`MADV_DONTNEED` restores private pages), `mprotect` and `mlock` family as no-ops, `brk` (reports no heap) | memory protection, `MAP_FIXED` outside an existing mapping |
+| Processes (LC-08) | `exit`, `exit_group`, `getpid`, `getppid`, `gettid`, `kill`, `tkill`, `tgkill` (to this process), `rt_sigaction`, `rt_sigprocmask`, `rt_sigpending`, `sigaltstack`, `wait4`, `uname`, `prlimit64`, `getrusage`, `sysinfo`, `times`, `sched_getaffinity`, `sched_yield`, `prctl`; child processes through `__llvmnet_spawn` | `fork`, `vfork`, `execve` (`-ENOSYS`), process groups and sessions (`-EPERM`) |
+| Identity (LC-12) | `getuid`, `geteuid`, `getgid`, `getegid` (all 1000), `getgroups`, `setuid` and `setgid` to the same ids | other ids (`-EPERM`) |
+| Time (LC-09) | `clock_gettime`, `clock_getres`, `clock_nanosleep`, `nanosleep`, `gettimeofday`, `time` | |
+| Threads (LC-02) | `futex` (wait, wake, bitset variants, requeue as wake-all), `set_thread_area`, `set_tid_address`, `membarrier`, `exit` of a thread | |
+| Entropy (LC-11) | `getrandom` | |
 
 ## Behavior that differs from a Linux kernel
 
-- Signals are synchronous: `kill`, `tkill` and `tgkill` aimed at this process run the handler on the calling thread, ignore the signal, or end the process with status 128+signal. Nothing is delivered asynchronously.
-- `brk` reports no heap, so musl's allocator uses `mmap`. `MAP_FIXED` is rejected, file mappings are private copies, and partial `munmap` keeps the memory until the whole region is unmapped.
-- `/dev/urandom`, `/dev/random`, `/dev/null`, `/dev/zero`, `/dev/stdin`, `/dev/stdout`, `/dev/stderr` and `/dev/tty` are provided by the host on every operating system.
-- There are no symbolic links, `fork`, `exec`, pipes or `poll` yet; user and group ids are reported as 1000 (LC-12, LC-28).
-- The process start vector carries `AT_PAGESZ`, `AT_RANDOM` and equal real and effective ids; there are no ELF program headers, so musl's TLS setup uses its built-in thread block.
+- **Signals** raised inside the process (`raise`, `kill`, `abort`, `SIGPIPE` from a pipe write) are delivered synchronously on the raising thread, honoring the thread's signal mask, `SA_RESETHAND`, `SA_NODEFER` and `SA_SIGINFO` (with a minimal `siginfo_t` and an empty `ucontext_t`). `SIGINT`, `SIGTERM`, `SIGHUP` and `SIGQUIT` sent from outside reach an installed handler on a .NET signal thread, through `PosixSignalRegistration`. Faults such as `SIGSEGV` and `SIGFPE` are not delivered; the CLR reports them. A default action that ends the process prints `Aborted` or `Terminated by signal N` and exits with 128 + N.
+- **Child processes** are host processes. Only the standard input, output and error descriptors are passed on; pipes and files are connected by copying threads, and spawn attributes are ignored. `system` and `popen` need `/bin/sh` on the host.
+- **Memory mappings** of files are copies: shared writable mappings reach the file at `msync` and `munmap`, and other processes do not see the pages. There is no memory protection.
+- **Identity.** The process runs as user and group 1000 on every host, owns every file it can see (`access` and `stat` use the owner permission bits), and reads synthetic `/etc/passwd` and `/etc/group` files naming the current .NET user.
+- **Devices.** `/dev/null`, `/dev/zero`, `/dev/urandom`, `/dev/random`, `/dev/stdin`, `/dev/stdout`, `/dev/stderr` and `/dev/tty` are provided by the host on every operating system. `readlink("/proc/self/exe")` names the host executable.
+- **Metadata.** Inode numbers are hashes of the full path, every file is on device 1 with one link, and the change time is the modification time. `statfs` reports the .NET drive's sizes and file-system type 0.
+- **CPU clocks.** `CLOCK_THREAD_CPUTIME_ID` reports the process CPU time, because .NET has no per-thread CPU clock.
+- **Time zones** come from `TZ` and the zoneinfo files musl reads (`/etc/localtime`, `/usr/share/zoneinfo`), which Linux and macOS hosts have. A host without them, such as Windows, gets UTC unless `TZ` holds a POSIX rule (LC-28).
+- **The process start vector** carries `AT_PAGESZ`, `AT_RANDOM` and equal real and effective ids. There are no ELF program headers, so musl's TLS setup uses its built-in thread block.
+
+The conformance test `tests/host.sh` (LC-14) runs `tests/c/host-errors.c` natively and in portable mode and requires identical output for every call above that has a native equivalent.
