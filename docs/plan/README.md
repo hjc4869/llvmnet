@@ -9,15 +9,19 @@ Related: [roadmap.md](../roadmap.md) (the earlier priority ordering), [status.md
 - **Items** live in the workstream files below. Each looks like `- [ ] **<prefix>-<number>** (size, priority) ...` with a done condition. Tick the box and append the PR or commit when done. Add `— blocked: <reason>` or `— descoped: <ADR>` rather than deleting an item.
 - **Sizes**: S about a day, M about a week, L several weeks, XL needs its own breakdown before it starts. **Priorities**: P0 blocks 1.0, P1 should ship in 1.0, P2 is a post-1.0 candidate.
 - **Milestones** (M0 to M9) have exit criteria that name the items they need. A milestone is done when its exit criteria hold on CI, not when the items are ticked.
-- **Decisions** (ADR-01 to ADR-13 in [decisions.md](decisions.md)) are Proposed until the project owner marks them Accepted. Items that depend on a decision say so.
+- **Decisions** (ADR-01 to ADR-14 in [decisions.md](decisions.md)) are Proposed until the project owner marks them Accepted. Items that depend on a decision say so.
 - **Review cadence**: once a week, update the status board below, tick items, and add new items with the next free number in their workstream. Never renumber. If an issue tracker is used, one issue per item with the ID in the title and a label per workstream and milestone.
 - **Evidence**: a claim that something works belongs in `docs/evidence/` (dated, produced by CI) or in a test, not in this plan.
+
+## Decisions (2026-10-31)
+
+The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`, and portable ABI restrictions). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
 ## Progress (2026-10-30, M3 to M5)
 
 Work on the `m3-m5` branch replaced the hand-written runtimes with the upstream ones in both modes. Measurements are in [evidence/2026-10-30-m3-m5.md](../evidence/2026-10-30-m3-m5.md).
 
-- **M3 portable C library.** Portable mode (the default, tag `dotnet64-v2`) compiles against and links unmodified musl 1.2.5 from `sysroot/dotnet64-v2`, built by `scripts/build-sysroot.sh`. The host layer implements Linux system-call semantics over .NET with a documented contract (`docs/dev/host-abi.md`, including every runtime call into translated code, LC-18) and a conformance test against native. `managed-host`, the hand-written C library and MathNet.Numerics are deleted (LC-17). libc-test passes 385 of 403 natively passing tests, every failure a documented limitation; printf/scanf/strtod (630 cases), libm (89 functions on random inputs, bit-identical to native musl wherever the C code is the same) and a 10,000-thread stress match native musl (LC-20 to LC-22). The ffmpeg portable build matches native on all 31 media fixtures and on all 1,150 frames of the private 4K HDR video. The SPEC audit (LC-23) passes 58 of 101 entries in portable mode, against 20 before; each of the other 43 has a cause. Open: the performance guard (LC-24: stdio and printf with `%f` are 1.2x to 1.6x slower than the hand-written runtime, malloc is faster), the time-zone fallback for hosts without zoneinfo (LC-09), host services .NET cannot express (LC-30), and the owner's confirmation of the ADR-09 tag and ADR-14, for which the SPEC audit adds evidence.
+- **M3 portable C library.** Portable mode (the default, tag `dotnet64-v2`) compiles against and links unmodified musl 1.2.5 from `sysroot/dotnet64-v2`, built by `scripts/build-sysroot.sh`. The host layer implements Linux system-call semantics over .NET with a documented contract (`docs/dev/host-abi.md`, including every runtime call into translated code, LC-18) and a conformance test against native. `managed-host`, the hand-written C library and MathNet.Numerics are deleted (LC-17). libc-test passes 385 of 403 natively passing tests, every failure a documented limitation; printf/scanf/strtod (630 cases), libm (89 functions on random inputs, bit-identical to native musl wherever the C code is the same) and a 10,000-thread stress match native musl (LC-20 to LC-22). The ffmpeg portable build matches native on all 31 media fixtures and on all 1,150 frames of the private 4K HDR video. The SPEC audit (LC-23) passes 58 of 101 entries in portable mode, against 20 before; each of the other 43 has a cause. Open: the performance guard (LC-24: stdio and printf with `%f` are 1.2x to 1.6x slower than the hand-written runtime, malloc is faster), the time-zone fallback for hosts without zoneinfo (LC-09), host services .NET cannot express (LC-30). The owner confirmed the ADR-09 tag and ADR-14 on 2026-10-31.
 - **M4 portable C++ runtime.** libc++ and libc++abi 22.1.8 from the sysroot, with type_info, `dynamic_cast` and catch matching from libc++abi (CX-03) and a documented exception bridge (CX-02). libc++'s lit suite passes 5,102 of 5,172 tests in the CX-08 directories (98.6%); localization is 85.8% because musl has only C and C.UTF-8 locale data. libc++abi's own suite passes 52 of 59 (CX-13); the 7 failures are the unwinder interface the CLR replaces, libc++abi's exception globals and unwinding before `std::terminate`. Its first run found four bridge bugs, fixed. The allocation ABI (CX-09) matches native; SPEC C++ is classified (CX-11). Open: named locales beyond C and C.UTF-8 (CX-06), the libc++ suite under NativeAOT.
 - **M5 Fortran runtime.** flang-rt serves both modes (FT-09), so the C# Fortran runtime is deleted. FCVS passes 172 of 172 and the gfortran run tests 2,682 of 2,687 (99.8%), after BE-39 and BE-40 made portable direct calls follow x86-64's register-slot rules. Every non-OpenMP SPEC Fortran rate entry passes except PALM (portable ABI) and cactuBSSN (glibc behavior); FT-07 is done. Open: portable OpenMP (FT-08), which 25 SPEC speed entries need.
 
@@ -66,7 +70,7 @@ Prototype-grade areas, in order of impact:
 | R4 | Platforms: the same portable image runs on Linux x64/ARM64, Windows x64 and macOS ARM64, JIT and NativeAOT. | XP-01..03 in CI |
 | R5 | Diagnosable: compiler errors carry file and line; runtime faults report the C call stack; `-g` yields source lines in stack traces. | BE-04, BE-28, BE-29 |
 | R6 | Distributable: signed, reproducible, versioned packages with a license and third-party notices; documented driver, ABI and limitations. | TC-11, TC-16, FD-01/02/05 |
-| R7 | Performance: published numbers against native on a fixed benchmark set, meeting the agreed target or explaining the gap. | PF-01, ADR-08 |
+| R7 | Performance: published numbers against native on a fixed benchmark set, with regressions guarded; no numeric target for 1.0 (ADR-08). | PF-01, ADR-08 |
 | R8 | Maintainable: PR gate under 30 minutes, unit tests, no file over about 600 lines in the compiler, support matrix generated from code, a contribution guide. | FD-12..15, BE-01/02 |
 
 ## Strategy
@@ -127,7 +131,7 @@ Exit: LC-01, LC-02, CX-01, FT-01 executed with written results; LC-03 recorded; 
 
 ### M3: Portable C library
 
-Exit: LC-04 through LC-10, LC-14 through LC-17, LC-19 through LC-23 and LC-26 done; portable ffmpeg profile, 31 fixtures and the 4K HDR gate pass; SPEC portable C entries at parity with system mode; `managed-host` removed. Details: [02-portable-c-library.md](02-portable-c-library.md). Decisions: ADR-04.
+Exit: LC-04 through LC-10, LC-14 through LC-17, LC-19 through LC-23 and LC-26 done; portable ffmpeg profile, 31 fixtures and the 4K HDR gate pass; SPEC portable C entries at parity with system mode as ADR-14 defines it; `managed-host` removed. Details: [02-portable-c-library.md](02-portable-c-library.md). Decisions: ADR-04.
 
 ### M4: Portable C++ runtime
 
@@ -143,11 +147,11 @@ Exit: XP-01, XP-02, XP-03, XP-06 done and green for two consecutive weeks. Detai
 
 ### M7: Toolchain and distribution
 
-Exit: TC-01 through TC-05, TC-11 through TC-13, TC-16, TC-17 done; SA-01 decided; signed packages produced by CI from a tag. Details: [06-driver-and-toolchain.md](06-driver-and-toolchain.md), [05-system-abi.md](05-system-abi.md). Decisions: ADR-09, ADR-11, ADR-12.
+Exit: TC-01 through TC-05, TC-11 through TC-13, TC-16, TC-17 done; SA-01 done (`--native-import` removed); signed packages produced by CI from a tag. Details: [06-driver-and-toolchain.md](06-driver-and-toolchain.md), [05-system-abi.md](05-system-abi.md). Decisions: ADR-09, ADR-11, ADR-12.
 
 ### M8: Performance
 
-Exit: PF-01 and PF-02 done; nightly benchmark table published; ADR-08 target met or the gap explained with numbers. Details: [08-performance.md](08-performance.md).
+Exit: PF-01 and PF-02 done; nightly benchmark table published; no numeric target for 1.0 (ADR-08). Details: [08-performance.md](08-performance.md).
 
 ### M9: Workload gates and 1.0
 
@@ -180,7 +184,7 @@ Exit: WG-01 through WG-06 at threshold on the release candidate for two consecut
 | LLVM major version churn (new release every six months) | Upgrade cost every cycle | ADR-06 pins one major per release; the IR corpus is the regression net |
 | Licensed SPEC kits cannot run in public CI | Release gate depends on a private runner | FD-21 documents the runner; WG-06 publishes summaries only |
 | Single maintainer | Throughput and bus factor | M0 makes the project contributable; the plan itself is the hand-over document |
-| Performance gap versus native discourages adoption | R7 missed | ADR-08 sets an explicit target; PF-01 publishes numbers early rather than late |
+| Performance gap versus native discourages adoption | R7 missed | ADR-08 defers a numeric target until the correctness gates pass; PF-01 publishes numbers early rather than late |
 
 ## Suggested first four weeks
 

@@ -7,17 +7,17 @@ Each decision is recorded in the style of an architecture decision record: conte
 | ADR-01 | Portable C library strategy | M2 → M3 | Accepted 2026-10-30 (spike evidence) |
 | ADR-02 | C++ runtime strategy | M2 → M4 | Accepted 2026-10-30 (spike evidence) |
 | ADR-03 | Fortran runtime strategy | M2 → M5 | Accepted 2026-10-30 (spike evidence) |
-| ADR-04 | Retire `managed-host` mode and the scalar `--native-import` path | M3 | Accepted 2026-10-30 for `managed-host` (implemented on `m3-m5`); `--native-import` stays for system mode until SA-01 |
-| ADR-05 | Supported platforms for 1.0 | M6 | Proposed |
-| ADR-06 | LLVM version policy | M1 | Proposed |
+| ADR-04 | Retire `managed-host` mode and the scalar `--native-import` path | M3 | Accepted 2026-10-30 for `managed-host` (implemented on `m3-m5`); accepted 2026-10-31 for `--native-import` (removal, SA-01) |
+| ADR-05 | Supported platforms for 1.0 | M6 | Accepted 2026-10-31 (owner) |
+| ADR-06 | LLVM version policy | M1 | Accepted 2026-10-31 (owner) |
 | ADR-07 | Portable threading model | M2 → M3 | Accepted 2026-10-30 (spike evidence) |
-| ADR-08 | Performance target | M8 | Proposed |
-| ADR-09 | Portable ABI evolution (`dotnet64-v1` freeze, managed library surface) | M3 (tag), M7 | Tag: working decision 2026-10-30 (`dotnet64-v2`), owner to confirm; freeze and library surface: Proposed |
-| ADR-10 | SIMD strategy | post-1.0 | Proposed |
-| ADR-11 | Driver defaults | M7 | Proposed |
-| ADR-12 | Debug information in 1.0 | M7 | Proposed |
+| ADR-08 | Performance target | M8 | Deferred 2026-10-31 (owner): no numeric target for 1.0 |
+| ADR-09 | Portable ABI evolution (`dotnet64-v1` freeze, managed library surface) | M3 (tag), M7 | Accepted 2026-10-31 (owner): `dotnet64-v2`, frozen at 1.0 with `-funsigned-char` allowed; scalar and pointer `CExport` surface |
+| ADR-10 | SIMD strategy | post-1.0 | Accepted 2026-10-31 (owner) |
+| ADR-11 | Driver defaults | M7 | Accepted 2026-10-31 (owner) |
+| ADR-12 | Debug information in 1.0 | M7 | Accepted 2026-10-31 (owner) |
 | ADR-13 | License | M0 | Accepted 2026-10-30 (owner) |
-| ADR-14 | Linux identity of the portable target | M3 | Working decision 2026-10-30 (option 3), owner to confirm |
+| ADR-14 | Linux identity of the portable target | M3 | Accepted 2026-10-31 (owner, option 3) |
 
 ## ADR-01: Portable C library strategy
 
@@ -70,11 +70,15 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Decision (2026-10-30).** Accepted and implemented for `managed-host` on the `m3-m5` branch, as part of the M3 work the owner asked for: `--runtime` defaults to `portable`, `--runtime=managed-host` fails with guidance, untagged link inputs are rejected (`llvmnet --runtime=<mode> -x ir -c` tags LLVM IR), and the tests that used the default now run in both remaining modes. The ffmpeg artifacts are rebuilt in system and portable mode. The remaining tags are `system-linux-x64-v1` and `dotnet64-v2` (ADR-09). `--native-import` stays as a system-mode escape hatch until SA-01.
 
+**Decision on `--native-import` (2026-10-31).** Accepted by the owner: the option is removed. `--system-library` generates bridges for every scalar signature `--native-import` handles, and for aggregates and callbacks as well, so one path remains to test and document. The option fails with guidance pointing at `--system-library` (SA-01).
+
 ## ADR-05: Supported platforms for 1.0
 
 **Context.** Portable images are designed for every little-endian 64-bit .NET host; only Linux x86-64 has executed them. Running the compiler itself on Windows and macOS requires more work than running its outputs there.
 
 **Recommendation.** Outputs: Linux x64 and ARM64, Windows x64, macOS ARM64, under JIT and NativeAOT, on .NET 10 (LTS). Compiler host: Linux x64 required for 1.0; Windows and macOS hosts are 1.x goals unless XP-04 lands in time. System ABI: Linux x64 only.
+
+**Decision (2026-10-31).** Accepted by the owner as recommended. Compiler hosts on Windows and macOS (XP-04) are 1.x goals; system-ABI modes on those hosts are out of scope (XP-08).
 
 **Consequences.** CI needs ARM64, Windows and macOS runners (FD-19, XP-01..03). Documentation states the matrix explicitly.
 
@@ -83,6 +87,8 @@ Each decision is recorded in the style of an architecture decision record: conte
 **Context.** The compiler binds to `libLLVM-22.so` and `-22` tool suffixes. LLVM releases a new major roughly every six months.
 
 **Recommendation.** Each llvmnet minor release pins exactly one LLVM major; the bundled toolchain variant removes the host dependency. Upgrades are a tracked task per LLVM major with the IR corpus (BE-11/12, WG-01) as the regression net. Supporting two majors at once is not a goal.
+
+**Decision (2026-10-31).** Accepted by the owner as recommended. llvmnet stays on LLVM 22 until an upgrade is planned as its own task.
 
 **Consequences.** BE-03 isolates the binding. The release notes state the LLVM version.
 
@@ -102,15 +108,21 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Recommendation.** 1.0 target: portable NativeAOT at or below 2.0x and JIT at or below 2.5x of native geomean on the free benchmark set defined by PF-01, with no correctness regressions. Missing the target does not block 1.0 if the numbers are published and the gap is explained.
 
+**Decision (2026-10-31).** Deferred by the owner: 1.0 has no numeric performance target, because correctness comes before optimization. The M8 items stay in the plan and are done without a numeric bar; PF-01 still publishes numbers against native and fails the nightly on regressions. R7 and RL-05 require published numbers, not a target. The target is revisited once the 1.0 correctness gates pass.
+
 ## ADR-09: Portable ABI evolution
 
 **Context.** `dotnet64-v1` is documented as fixed. The managed library surface (`--emit-library`, `CExport`) is explicitly not stable for aggregates. The software varargs layout mirrors SysV and is more complex than a managed target needs.
 
 **Measurement (2026-10-30).** The musl sysroot is layout-compatible with the hand-written v1 headers for 23 of 29 checked types (including `stat`, `tm`, `dirent`, `timespec` and the pthread types) but not for `int_fast16_t`, `int_fast32_t` and `uint_fast32_t` (8 versus 4 bytes), `jmp_buf` (144 versus 200), `fpos_t` (8 versus 16) and `BUFSIZ`; v1 also lacked `sigset_t`. The recommendation is therefore to tag the musl sysroot `dotnet64-v2` when it becomes the default (LC-17, LC-26), so v1 objects are rejected rather than mixed, and to freeze v2 at 1.0.
 
-**Working decision (2026-10-30), owner to confirm.** The musl sysroot is tagged `dotnet64-v2` (LC-26) and became the only portable sysroot; `dotnet64-v1` objects are rejected at link time and `__LLVMNET_ABI_VERSION` is 2. v2 is musl's x86-64 layout with one change that keeps glibc's (and v1's) choice: `int_fast16_t`, `int_fast32_t` and their unsigned forms are 64-bit, so programs whose results depend on them behave as native glibc builds do (flang-rt's `REAL(4)` random numbers did not). `jmp_buf`, `fpos_t` and `BUFSIZ` follow musl. The host interface (`docs/dev/host-abi.md`) is versioned with the tag.
+**Decision (2026-10-30, confirmed by the owner 2026-10-31).** The musl sysroot is tagged `dotnet64-v2` (LC-26) and became the only portable sysroot; `dotnet64-v1` objects are rejected at link time and `__LLVMNET_ABI_VERSION` is 2. v2 is musl's x86-64 layout with one change that keeps glibc's (and v1's) choice: `int_fast16_t`, `int_fast32_t` and their unsigned forms are 64-bit, so programs whose results depend on them behave as native glibc builds do (flang-rt's `REAL(4)` random numbers did not). `jmp_buf`, `fpos_t` and `BUFSIZ` follow musl. The host interface (`docs/dev/host-abi.md`) is versioned with the tag.
 
-**Recommendation.** Freeze `dotnet64-v1` at 1.0 exactly as documented, including the musl-derived header set and the host import table. Any incompatible change (varargs simplification, `wchar_t` width, struct layout) becomes `dotnet64-v2` with explicit mixed-mode rejection, no earlier than 1.x. The managed public surface for 1.0 is scalar and pointer `CExport` methods only, strong-named and versioned (TC-09).
+**Recommendation (before v2).** Freeze `dotnet64-v1` at 1.0 exactly as documented, including the musl-derived header set and the host import table. Any incompatible change (varargs simplification, `wchar_t` width, struct layout) becomes `dotnet64-v2` with explicit mixed-mode rejection, no earlier than 1.x. The managed public surface for 1.0 is scalar and pointer `CExport` methods only, strong-named and versioned (TC-09). Superseded by the v2 tag above and the freeze below.
+
+**Freeze (2026-10-31).** Accepted by the owner: `dotnet64-v2` is frozen at 1.0 as documented (header set, host import table, varargs layout, `long double`, struct layouts; RL-02). One change goes in before the freeze: `-funsigned-char` and `-fno-signed-char` are allowed in portable mode (BE-41). Char signedness changes no layout, only how `char` values are extended and the `CHAR_MIN`/`CHAR_MAX` macros, so objects compiled either way link together without a check, as they do natively; the sysroot stays built with signed `char`. The software varargs layout keeps mirroring SysV: the slot-array simplification (BE-19) and any other incompatible change wait for `dotnet64-v3` after 1.0.
+
+**Managed library surface (2026-10-31).** Accepted by the owner: the 1.0 public surface of `--emit-library` is scalar and pointer `CExport` methods only, strong-named and versioned, with a generated C header and a sample project (TC-09). Aggregate signatures stay unstable.
 
 ## ADR-10: SIMD strategy
 
@@ -118,11 +130,15 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Recommendation.** Keep the header path and scalarization for 1.0 (BE-31). General lowering of `<N x T>` to `Vector128`/`Vector256` (BE-32, PF-09) is post-1.0.
 
+**Decision (2026-10-31).** Accepted by the owner as recommended.
+
 ## ADR-11: Driver defaults
 
 **Context.** llvmnet defaults to `-O1` with vectorization disabled; Clang defaults to `-O0`. Build systems pass explicit levels in practice.
 
 **Recommendation.** Keep `-O1` scalar as the default because `-O0` IR is much larger for CIL and the output is slower to JIT; document the difference prominently and make sure `-O0` and `-O3` are both fully tested (TC-03).
+
+**Decision (2026-10-31).** Accepted by the owner: `-O1` without vectorization stays the default, and the driver reference states the difference from Clang's `-O0` (TC-03).
 
 ## ADR-12: Debug information in 1.0
 
@@ -130,13 +146,15 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Recommendation.** Sequence points and a portable PDB (BE-28) are a 1.0 P1 item because production users need `file:line` in crash reports; local variable debugging can follow in 1.x.
 
+**Decision (2026-10-31).** Accepted by the owner: BE-28 is P1, so it ships in 1.0 if ready and does not block the release. Local variables follow in 1.x.
+
 ## ADR-13: License
 
 **Context.** There is no license file; the project bundles Apache-2.0 (LLVM exception) components and will compile MIT (musl) and Apache-2.0 (libc++, flang-rt) sources into its sysroot.
 
-**Decision (2026-10-30).** Accepted by the owner: MIT (`LICENSE.TXT`, FD-01). This supersedes the earlier choice of Apache-2.0 WITH LLVM-exception, made the same day.
-
 **Recommendation.** MIT for the compiler and runtime: simple, permissive, and compatible with the bundled Apache-2.0 (LLVM exception) and MIT components. Decide before any external contribution or distribution (FD-01).
+
+**Decision (2026-10-30).** Accepted by the owner: MIT (`LICENSE.TXT`, FD-01). This supersedes the earlier choice of Apache-2.0 WITH LLVM-exception, made the same day.
 
 ## ADR-14: Linux identity of the portable target
 
@@ -146,6 +164,8 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Recommendation.** (3) for 1.0, revisited with the WG-07 ecosystem builds: programs keep a portable identity and do not depend on Linux-only interfaces the host may not provide on Windows or macOS, while the runtimes, which are tested against the host layer, use their Linux code paths.
 
-**Working decision (2026-10-30), owner to confirm.** Option 3 for user code, which sees neither macro (checked by `tests/c/portable.c`); C++ user code gets `_GNU_SOURCE`, as clang++ defines it on Linux targets. The libc++ conformance run (CX-08) showed that the runtimes must see the same macros as user code: libc++'s headers choose ABI details such as the atomic-wait contention type by `__linux__`, so a library built with it did not link with programs built without it. libc++, libc++abi and flang-rt are therefore built without `__linux__` and `__unix__`; only libc++abi's `cxa_thread_atexit.cpp`, which defines `__cxa_thread_atexit` solely under `__linux__` and exposes no header ABI, still gets it. libc++ then uses its portable atomic-wait table instead of futexes, and plain `read`/`write` for `copy_file`.
+**Decision (2026-10-30, confirmed by the owner 2026-10-31).** Option 3 for user code, which sees neither macro (checked by `tests/c/portable.c`); C++ user code gets `_GNU_SOURCE`, as clang++ defines it on Linux targets. The libc++ conformance run (CX-08) showed that the runtimes must see the same macros as user code: libc++'s headers choose ABI details such as the atomic-wait contention type by `__linux__`, so a library built with it did not link with programs built without it. libc++, libc++abi and flang-rt are therefore built without `__linux__` and `__unix__`; only libc++abi's `cxa_thread_atexit.cpp`, which defines `__cxa_thread_atexit` solely under `__linux__` and exposes no header ABI, still gets it. libc++ then uses its portable atomic-wait table instead of futexes, and plain `read`/`write` for `copy_file`.
 
 **Evidence from the SPEC audit (LC-23, 2026-10-30).** With option 3, eight portable SPEC failures (four benchmarks, each in rate and speed) come only from platform detection that keys on `__linux__`: xalancbmk selects Xerces' Linux platform file only when it sees the macro, and otherwise has no platform; LLVM includes `<machine/endian.h>` instead of `<endian.h>`; gem5's libelf defines `roundup2` only for glibc or Linux; marian's path library stops with "Unsupported system". zstd detects POSIX through `__unix__` and passes with its documented `PLATFORM_POSIX_VERSION` override. Each would need the macro or a per-benchmark workaround; options 1 and 2 trade that for the Linux-only interfaces such code then expects. The owner's decision should weigh these against the portability argument above.
+
+**Owner's decision on this evidence (2026-10-31).** Option 3 stays. A program whose platform detection needs `__linux__` builds with a documented per-program flag (for example `-D__linux__` for xalancbmk, LLVM, gem5 and marian in `config/spec/llvmnet.cfg`) rather than a toolchain-wide identity; the flag makes that program, not llvmnet, responsible for the Linux-only interfaces it then uses (LC-31). This also defines SPEC portable parity for the M3, M4 and M5 exits: every entry passes in portable mode where it passes in system mode, with documented per-benchmark portability flags allowed, except listed exclusions. The exclusions are programs that need `fork` or `vfork`, which stay `ENOSYS` permanently because .NET cannot duplicate a process (perlbench rate and speed, cppcheck), and portable ABI restrictions (PALM's four-argument `open`).

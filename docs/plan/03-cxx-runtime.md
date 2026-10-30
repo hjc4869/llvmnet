@@ -41,4 +41,4 @@ Compile upstream libc++ (`libcxx/src`) and libc++abi (`libcxxabi/src`) from the 
 
 ## Exit criteria for M4
 
-CX-02 through CX-08 are done; the libc++ test directories listed in CX-08 pass at or above 98% with every failure classified; SPEC C++ portable results match system mode.
+CX-02 through CX-08 are done; the libc++ test directories listed in CX-08 pass at or above 98% with every failure classified; SPEC C++ portable results match system mode, with parity as [ADR-14](decisions.md#adr-14-linux-identity-of-the-portable-target) defines it.
