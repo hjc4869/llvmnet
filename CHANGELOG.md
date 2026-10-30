@@ -6,7 +6,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 
 ### Added
 
-- Apache-2.0 WITH LLVM-exception license, third-party notices, contribution guide and this changelog (FD-01 to FD-04).
+- MIT license, third-party notices, contribution guide and this changelog (FD-01 to FD-04).
 - `--version` reports the build and LLVM versions; emitted assemblies record them and refuse an incompatible runtime (FD-05).
 - Pinned upstream sources through `scripts/fetch-sources.sh` (FD-06).
 - Parallel test runner `tests/run.sh`, unit tests, JIT validation of emitted assemblies, CI workflow and dev container (FD-11 to FD-15, FD-19).

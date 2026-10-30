@@ -127,4 +127,4 @@ Generated code is unsafe and is not a sandbox: invalid pointers or untrusted pro
 
 ## License
 
-llvmnet is licensed under the Apache License v2.0 with LLVM Exceptions, the same license as the LLVM project; see [LICENSE.TXT](LICENSE.TXT). Third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Contributions are accepted under the same license; see [CONTRIBUTING.md](CONTRIBUTING.md).
+llvmnet is licensed under the MIT License; see [LICENSE.TXT](LICENSE.TXT). Third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Contributions are accepted under the same license; see [CONTRIBUTING.md](CONTRIBUTING.md).

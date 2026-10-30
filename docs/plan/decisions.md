@@ -134,9 +134,9 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Context.** There is no license file; the project bundles Apache-2.0 (LLVM exception) components and will compile MIT (musl) and Apache-2.0 (libc++, flang-rt) sources into its sysroot.
 
-**Decision (2026-10-30).** Accepted by the owner: Apache-2.0 WITH LLVM-exception, the same license as LLVM (`LICENSE.TXT`, FD-01).
+**Decision (2026-10-30).** Accepted by the owner: MIT (`LICENSE.TXT`, FD-01). This supersedes the earlier choice of Apache-2.0 WITH LLVM-exception, made the same day.
 
-**Recommendation.** Apache-2.0 with LLVM exception for the compiler and runtime, which aligns with the bundled components and the runtime-library exception needed by translated programs; MIT is acceptable if simplicity is preferred. Decide before any external contribution or distribution (FD-01).
+**Recommendation.** MIT for the compiler and runtime: simple, permissive, and compatible with the bundled Apache-2.0 (LLVM exception) and MIT components. Decide before any external contribution or distribution (FD-01).
 
 ## ADR-14: Linux identity of the portable target
 

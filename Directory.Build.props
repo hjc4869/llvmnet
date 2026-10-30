@@ -10,6 +10,6 @@
     <VersionSuffix>dev</VersionSuffix>
     <Authors>llvmnet contributors</Authors>
     <Copyright>Copyright llvmnet contributors</Copyright>
-    <PackageLicenseExpression>Apache-2.0 WITH LLVM-exception</PackageLicenseExpression>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 </Project>

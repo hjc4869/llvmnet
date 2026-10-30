@@ -2,7 +2,7 @@
 
 ## License
 
-By contributing you agree that your contribution is licensed under the Apache License v2.0 with LLVM Exceptions, the license in [LICENSE.TXT](LICENSE.TXT).
+By contributing you agree that your contribution is licensed under the MIT License, the license in [LICENSE.TXT](LICENSE.TXT).
 
 ## Build
 
