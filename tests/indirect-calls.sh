@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tags: core
-# --check-indirect-calls (BE-18): compatible pointer casts run, an incompatible one fails with both
+# --check-indirect-calls: compatible pointer casts run, an incompatible one fails with both
 # signatures and the target's name instead of undefined behavior.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"

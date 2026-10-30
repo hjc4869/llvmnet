@@ -37,6 +37,11 @@ mkdir -p "$prefix/share/llvmnet/spec"
 cp "$root/config/spec/llvmnet.cfg" "$root/config/spec/llvmnet.xml" "$prefix/share/llvmnet/spec/"
 cp "$root/README.md" "$root/LICENSE.TXT" "$root/THIRD-PARTY-NOTICES.md" "$root/CHANGELOG.md" "$prefix/share/llvmnet/"
 mkdir -p "$prefix/share/llvmnet/licenses"
+if [[ "$self_contained" -eq 1 ]]; then
+    dotnet_root="$(dirname "$(readlink -f "$(command -v dotnet)")")"
+    cp "$dotnet_root/LICENSE.txt" "$prefix/share/llvmnet/licenses/dotnet.LICENSE.txt"
+    cp "$dotnet_root/ThirdPartyNotices.txt" "$prefix/share/llvmnet/licenses/dotnet.ThirdPartyNotices.txt"
+fi
 if [[ -d "$root/sysroot" ]]; then cp -a "$root/sysroot/." "$prefix/sysroot/"; fi
 if [[ "$bundle_llvm" -eq 1 ]]; then
     llvm_prefix="$prefix/libexec/llvm"

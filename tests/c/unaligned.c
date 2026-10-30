@@ -1,4 +1,4 @@
-/* Under-aligned and volatile memory access (BE-15): every scalar width at every offset 0..7, packed
+/* Under-aligned and volatile memory access: every scalar width at every offset 0..7, packed
  * structures, memcpy/memmove with overlap, and volatile accesses. Native clang is the oracle. */
 #include <stdint.h>
 #include <stdio.h>

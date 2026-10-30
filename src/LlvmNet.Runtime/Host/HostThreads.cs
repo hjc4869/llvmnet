@@ -3,7 +3,7 @@ using static LlvmNet.Runtime.Linux;
 
 namespace LlvmNet.Runtime;
 
-/// <summary>Threads for musl's pthreads (plan item LC-02, ADR-07): thread pointers, clone on managed threads and futexes.</summary>
+/// <summary>Threads for musl's pthreads (ADR-07): thread pointers, clone on managed threads, and futexes.</summary>
 public static unsafe partial class HostSyscalls
 {
     [ThreadStatic] private static nint threadPointer;
@@ -30,9 +30,8 @@ public static unsafe partial class HostSyscalls
     }
 
     /// <summary>
-    /// tkill and tgkill. A signal for the calling thread is raised; SIGCANCEL for another thread interrupts that thread's
-    /// blocking call, which returns -EINTR so its cancellation point acts (ports/musl/src/thread/llvmnet/pthread_cancel.c).
-    /// Other signals for other threads run their handler on the calling thread, as signals raised inside the process do.
+    /// tkill and tgkill. SIGCANCEL for another thread interrupts its blocking call, which returns -EINTR so its
+    /// cancellation point acts (ports/musl/src/thread/llvmnet/pthread_cancel.c); other signals are raised on the calling thread.
     /// </summary>
     private static long SendSignal(int thread, int signal)
     {
@@ -160,7 +159,7 @@ public static unsafe partial class HostSyscalls
     private sealed class ThreadExit : Exception;
 
     /// <summary>
-    /// musl's __clone for pthread_create (LC-02): runs <paramref name="function"/>(<paramref name="argument"/>) on a new
+    /// musl's __clone for pthread_create: runs <paramref name="function"/>(<paramref name="argument"/>) on a new
     /// managed thread with CLONE_SETTLS, CLONE_PARENT_SETTID and CLONE_CHILD_CLEARTID semantics. SYS_exit on that
     /// thread unwinds to here, then the child-tid word is cleared and its futex woken, as the kernel does.
     /// </summary>

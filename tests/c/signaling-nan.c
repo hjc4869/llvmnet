@@ -1,4 +1,4 @@
-// Signaling NaN constants and copies keep their bits (gfortran ieee/signaling_1). The .NET JIT keeps float constants
+// Signaling NaN constants and copies keep their bits. The .NET JIT keeps float constants
 // as doubles, and widening a signaling NaN quiets it, so llvmnet materializes such float constants from their bits.
 #include <stdio.h>
 #include <string.h>

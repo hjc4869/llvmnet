@@ -1,459 +1,92 @@
-# Portable SPEC Failure Audit
+# Portable SPEC limitations
 
-## Current state (2026-10-30, dotnet64-v2)
+In portable mode (`--runtime=portable`, ABI `dotnet64-v2`), SPEC CPU 2017 and CPU 2026 benchmarks compile against musl, libc++/libc++abi and flang-rt from the portable sysroot. This page lists the benchmarks that do not pass in portable mode and why, the settings the SPEC configuration applies for portable mode, and how to rerun the check. A check builds the benchmark at `-O3` with NativeAOT and runs it with test inputs; it passes when runcpu validates the output. [spec-coverage.md](spec-coverage.md) describes the SPEC tooling in general.
 
-Portable mode now compiles against musl 1.2.5, libc++/libc++abi and flang-rt 22.1.8 (milestones M3 to M5, `docs/evidence/2026-10-30-m3-m5.md`). This audit (plan item LC-23) reran all 101 distinct CPU 2017 and CPU 2026 entries of the ordered inventory with `scripts/spec-portable-check.sh`: test inputs, `-O3`, NativeAOT, one copy, four threads for speed entries, SPEC output validation. The retries are under `artifacts/spec-portable-audit-m3/`: CPU 2017 rate with the toolchain of `0ef8ad7`; five rate benchmarks rechecked after the fixes in `6d26cc8` and `5752323`; the other 78 entries with `df79747`; the fixes made after the run rechecked with `8bffee3` and `cb0e334`. `node scripts/spec-portable-audit.mjs artifacts/spec-portable-audit-m3` selects the latest result per benchmark (`artifacts/tests/portable-spec/current-m3.tsv`).
+| Cause | Benchmarks |
+| --- | --- |
+| [No portable OpenMP runtime](#openmp) | the speed benchmarks that use OpenMP |
+| [Platform code selected by `__linux__`](#linux-platform-detection) | 523.xalancbmk_r, 623.xalancbmk_s, 723.llvm_r, 823.llvm_s, 735.gem5_r, 835.gem5_s, 772.marian_r, 872.marian_s |
+| [glibc behavior that musl does not share](#glibc-behavior) | 507.cactuBSSN_r, 737.gmsh_r, 748.flightdm_r, 767.nest_r |
+| [`fork`](#fork) | 500.perlbench_r, 600.perlbench_s, 827.cppcheck_s |
+| [Portable ABI restrictions](#portable-abi-restrictions) | 526.blender_r, 722.palm_r |
+| [C++17 special math functions](#c17-special-math-functions) | 766.femflow_r |
 
-**54 of 101 pass**, against 20 in the September audit of the hand-written C library.
+All other CPU 2017 and CPU 2026 entries pass in portable mode.
 
-| Group | Entries | Pass | Not passing |
-| --- | ---: | ---: | ---: |
-| CPU 2017 rate | 23 | 19 | 4 |
-| CPU 2017 speed | 20 | 7 | 13 |
-| CPU 2026 rate | 26 | 18 | 8 |
-| CPU 2026 speed | 26 | 8 | 18 |
-| specrand variants (both suites) | 6 | 2 | 4 |
-| Total | 101 | 54 | 47 |
+## OpenMP
 
-### Causes of the remaining failures
+The portable sysroot has no OpenMP runtime (FT-08): `omp.h` is not found, and code compiled with `-fopenmp` calls `__kmpc_*` functions that do not resolve. `--system-library`, which links the native LLVM OpenMP runtime, requires `--runtime=system`. With more than one thread, the SPEC configuration builds the kits' OpenMP benchmarks with `-fopenmp -DSPEC_OPENMP` and lowers CPU 2026 Fortran `DO CONCURRENT` loops to OpenMP (`-fdo-concurrent-to-openmp=host`). These speed benchmarks therefore fail:
 
-| Cause | Benchmarks | Count | Nature |
-| --- | --- | ---: | --- |
-| No portable OpenMP runtime: `__kmpc_*` unresolved or `omp.h` missing (FT-08) | 603, 607, 619, 621, 627, 628, 638, 644, 649, 654, 657, 800, 803, 807, 809, 811, 816, 820, 822, 849, 854, 857, 865, 867, 881 (all speed) | 25 | implementation gap |
-| Platform code selected by `__linux__`, which portable code does not see (ADR-14) | xalancbmk 523/623 (`linux/limits.h`), LLVM 723/823 (`machine/endian.h`), gem5 735/835 (`roundup2`), marian 772/872 ("Unsupported system") | 8 | owner decision |
-| glibc behavior musl does not share; native musl fails the same way | 507.cactuBSSN_r (overlapping `sprintf` arguments), 737.gmsh_r (`NULL` assigned to `bool`), 748.flightdm_r (GNU `strerror_r`), 767.nest_r (`timeval` without `sys/time.h`) | 4 | program |
-| `fork`, which .NET cannot provide | 500.perlbench_r and 600.perlbench_s (the test workload runs each test through a piped `open`), 827.cppcheck_s (process executor) | 3 | host limit |
-| Portable ABI restriction | 526.blender_r (`-funsigned-char`), 722.palm_r (`open` declared with a fixed four-argument prototype) | 2 | by design |
-| libc++ lacks the C++17 special math functions | 766.femflow_r (`std::cyl_bessel_j`) | 1 | upstream |
-| runcpu cannot run these variants alone | 996.specrand_fs, 997.specrand_fr, 998.specrand_is, 999.specrand_ir | 4 | harness |
+603.bwaves_s, 607.cactuBSSN_s, 619.lbm_s, 621.wrf_s, 627.cam4_s, 628.pop2_s, 638.imagick_s, 644.nab_s, 649.fotonik3d_s, 654.roms_s, 657.xz_s, 800.pot3d_s, 803.sph_exa_s, 807.ntest_s, 809.cactus_s, 811.tealeaf_s, 816.nab_s, 820.cloverleaf_s, 822.palm_s, 849.fotonik3d_s, 854.graph500_s, 857.namd_s, 865.roms_s, 867.nest_s, 881.neutron_s.
 
-Only the OpenMP runtime is an implementation gap llvmnet can close (FT-08). The Linux platform detection group depends on the owner's decision on ADR-14: these programs choose their platform code by `__linux__`, which portable code does not see. The glibc group fails the same way with native musl: the programs rely on glibc behavior (overlapping `sprintf` arguments, GNU `strerror_r` under `_GNU_SOURCE`, `NULL` that converts to `bool`, `timeval` declared through other headers).
+Speed benchmarks that use C++ threads or pthreads instead of OpenMP run on musl's pthreads.
 
-### Fixes made during this audit
+## Linux platform detection
 
-| Benchmark | Cause | Fix |
+Portable code sees neither `__linux__` nor `__unix__` ([ADR-14](plan/decisions.md#adr-14-linux-identity-of-the-portable-target), awaiting the owner's decision). These programs choose their platform code by those macros:
+
+- **523.xalancbmk_r, 623.xalancbmk_s:** Xerces detects its platform through `__linux__`, and its Linux platform file, selected by `-DSPEC_LINUX`, includes the kernel header `linux/limits.h`, which the portable sysroot does not have.
+- **723.llvm_r, 823.llvm_s:** `SwapByteOrder.h` includes the BSD header `machine/endian.h` when it does not detect Linux.
+- **735.gem5_r, 835.gem5_s:** gem5's libelf defines `roundup2` only for the systems it recognizes, such as glibc and Linux.
+- **772.marian_r, 872.marian_s:** marian's path library stops with `#error Unsupported system.`
+
+Each would need the macros or a per-benchmark workaround.
+
+## glibc behavior
+
+These programs rely on glibc behavior; built natively against musl, they fail the same way.
+
+- **507.cactuBSSN_r** passes overlapping source and destination buffers to `sprintf`. Its output does not validate.
+- **737.gmsh_r** assigns `NULL` to a `bool`. musl defines `NULL` as `nullptr` in C++, which does not convert to `bool`.
+- **748.flightdm_r** expects the GNU `strerror_r`, which returns `char *` under `_GNU_SOURCE`. musl's returns `int`.
+- **767.nest_r** uses `struct timeval` without including `sys/time.h`, relying on glibc's other headers to declare it.
+
+## fork
+
+.NET cannot duplicate a running process, so `fork` and `vfork` fail with `ENOSYS`; `posix_spawn`, `system` and `popen` start host processes instead ([dev/host-abi.md](dev/host-abi.md)).
+
+- **500.perlbench_r, 600.perlbench_s:** the test workload runs tests through a piped `open`, which perl implements with `fork`. The output does not validate.
+- **827.cppcheck_s:** the speed workload checks files in child processes (`-j` with the thread count), which cppcheck creates with `fork`.
+
+## Portable ABI restrictions
+
+- **526.blender_r** requires `-funsigned-char`. Plain `char` is signed in `dotnet64-v2`, and the driver rejects the option: `-funsigned-char cannot change the versioned portable ABI`.
+- **722.palm_r** declares `open` with a fixed four-argument prototype, while the C library defines it as variadic. The compiler rejects the call (`Incompatible direct call signature for open`); see [dev/calling-convention.md](dev/calling-convention.md#direct-calls). 822.palm_s fails on OpenMP first.
+
+## C++17 special math functions
+
+**766.femflow_r** calls `std::cyl_bessel_j`. libc++ does not implement the C++17 special math functions.
+
+## Portable settings in the SPEC configuration
+
+[config/spec/llvmnet.cfg](../config/spec/llvmnet.cfg) adds these settings in portable mode only. The settings that apply in both modes are listed in [spec-coverage.md](spec-coverage.md#benchmark-settings).
+
+| Benchmarks | Setting | Reason |
 | --- | --- | --- |
-| 500.perlbench_r, 600.perlbench_s | `SPEC_LINUX_X64` reads glibc's private `FILE` fields and expects `sys/file.h` to include `fcntl.h` | perl's own switches in the portable configuration (`6d26cc8`); the test workload then needs `fork` |
-| 507.cactuBSSN_r, 521.wrf_r, 527.cam4_r | direct calls with register-width mismatches x86-64 tolerates | BE-39 (`45fb8f2`); WRF also selects `--trap-missing-arguments`, now available in portable mode (`5752323`) |
-| 520.omnetpp_r | `struct stat64` under `_GNU_SOURCE` | musl `features.h` overlay declaring the LFS64 names as glibc does (`6d26cc8`) |
-| 714.cpython_r | the old audit's pthread stub switch (R8) conflicts with musl's pthread types, and without it the stubs need the types glibc's `stdlib.h` declares | switch removed, `-include sys/types.h` (`5e5197f`, `cb0e334`) |
-| 710.omnetpp_r | musl has no `swapcontext` | omnetpp's `USE_PORTABLE_COROUTINES`; the model creates no coroutines (`5e5197f`) |
-| 727.cppcheck_r | `mkdir("dir/")` failed: trailing and repeated slashes | host path resolution (`64af35f`) |
-| 777.zstd_r | zstd detects POSIX through `__unix__` | its documented `PLATFORM_POSIX_VERSION` override (`d465e23`) |
+| 500.perlbench_r, 600.perlbench_s | `-DSPEC_NO_USE_STDIO_PTR -DSPEC_NO_USE_STDIO_BASE -DI_FCNTL` | With `SPEC_LINUX_X64`, perl reads glibc's private `FILE` fields and assumes that `sys/file.h` includes `fcntl.h`. musl's `FILE` is opaque; these are perl's own switches for both. |
+| 525.x264_r, 625.x264_s | `-include string.h -include stdlib.h` | x264's bundled `getopt.c` includes these headers only when it sees glibc's `__GNU_LIBRARY__`. |
+| 710.omnetpp_r | `-DUSE_PORTABLE_COROUTINES` | musl has no `swapcontext`. omnetpp's setjmp-based coroutines only need to link, because the model creates none. |
+| 714.cpython_r | `-include sys/types.h` | CPython's pthread stubs need the pthread types, which glibc's `stdlib.h` declares through `sys/types.h`. |
+| 777.zstd_r | `-DPLATFORM_POSIX_VERSION=200809L` | zstd detects POSIX through `__unix__`; this is its documented override. |
 
-The audit also led to llvmnet fixes outside SPEC's code paths: zero-size `alloca`, signaling NaN constants, `sendfile` and `copy_file_range` (std::filesystem::copy_file), and the C++ exception bridge (CX-13).
+## Reproducing the check
 
-### Reproduction
+The check needs the licensed kits installed as `artifacts/spec2017-harness` and `artifacts/spec2026-harness`, and a packaged toolchain. It runs through `scripts/spec-harness.sh`, whose requirements are listed in [spec-coverage.md](spec-coverage.md#scripts).
+
+`scripts/spec-portable-check.sh baseline.tsv toolchain [glob]` reruns, in portable mode and with a clean build, every entry of a baseline table whose result is not `PASS`, optionally only those matching a benchmark glob. Each run gets a new directory under `artifacts/spec-portable-audit/` (`SPEC_PORTABLE_OUTPUT` changes the root) with copies of the scripts and configuration, toolchain hashes, `results.tsv`, harness logs and the make logs. `SPEC_TIMEOUT` bounds each build and run (default 900 seconds). `scripts/spec-portable-audit.mjs directory` keeps the latest result per benchmark from all runs under a directory and adds each failure's first diagnostic; its output is the next baseline.
 
 ```sh
-bash scripts/package-toolchain.sh artifacts/spec-portable-next
-SPEC_TIMEOUT=1800 SPEC_PORTABLE_OUTPUT=artifacts/spec-portable-audit-m3 \
-    bash scripts/spec-portable-check.sh artifacts/spec-portable-audit-m3/retry.zM8iLlO6/baseline.tsv artifacts/spec-portable-next
-node scripts/spec-portable-audit.mjs artifacts/spec-portable-audit-m3 > artifacts/tests/portable-spec/current-m3.tsv
+bash scripts/package-toolchain.sh artifacts/spec-toolchain
+# A baseline with every installed benchmark, none of them passed yet:
+{ printf 'benchmark\tresult\n'
+  ls artifacts/spec2017-harness/benchspec/CPU artifacts/spec2026-harness/benchspec/CPU |
+      grep -E '^[0-9]{3}\.' | sort -u | sed 's/$/\tNEW/'; } > artifacts/spec-portable-baseline.tsv
+SPEC_TIMEOUT=1800 bash scripts/spec-portable-check.sh artifacts/spec-portable-baseline.tsv artifacts/spec-toolchain
+node scripts/spec-portable-audit.mjs artifacts/spec-portable-audit > artifacts/spec-portable-current.tsv
+# Retry the failures, here only 722.palm_r:
+bash scripts/spec-portable-check.sh artifacts/spec-portable-current.tsv artifacts/spec-toolchain '722.*'
 ```
 
-A benchmark glob as the last argument of `spec-portable-check.sh` (for example `'@(710|714|727|777|827).*'`) selects entries. Never repackage a toolchain or edit a runner while a retry uses it.
+Do not repackage the toolchain while a check uses it.
 
-## Historical audit (2026-09-08, dotnet64-v1)
-
-The rest of this page is the audit of the hand-written C library that musl, libc++ and flang-rt replaced. Most causes it catalogs (missing headers, streams, math and POSIX services) no longer exist; `tests/portable-spec-causes.sh` checks that those probes now build and run like native, and that the remaining ones (OpenMP, plain-char ABI, typed calls, headers outside the portable sysroot) are still rejected with their diagnostic.
-
-### Scope And Outcome
-
-On 2026-09-08, all **84 distinct portable failures** from the ordered CPU 2017/2026 inventory were rebuilt and attempted with SPEC output validation. The baseline contains 101 distinct benchmarks: 17 portable PASS and 84 FAIL. Shared CPU 2026 random checks are counted once here, not once per integer/FP group.
-
-After the repairs and focused retries: **3 PASS / 81 FAIL among those 84 previously failed benchmarks**. The new passes are **525.x264_r, 625.x264_s and 765.roms_r**. ROMS required no new implementation in this audit: its historical array-constructor failure was already fixed by the later system-led work, which also applies to portable execution. The other 17 previous passes were not rerun. Thus 20 distinct benchmarks have portable validation across the combined evidence, **not a clean 101-benchmark pass with one compiler**.
-
-These are scalar O3, NativeAOT, test-input, non-reportable checks. Rate uses one instance; speed retains the four-thread kit profile, including actual OpenMP activation and host DO CONCURRENT lowering where applicable. Configured thread counts do not prove workers exist in serial or multiprocess kit entries. No licensed source was changed, no benchmark was declared passed on compilation alone, and no system library was silently substituted into portable output.
-
-**Most failures are implementation gaps, not fundamental limits of CIL.** Incomplete libc++ localization/streams, C math, POSIX services and a missing OpenMP runtime could be implemented or ported. The architecture-related restrictions are narrower: the fixed dotnet64-v1 data contract, typed managed call signatures, and the prohibition on silently consuming native ABI libraries. Those distinctions are preserved below.
-
-### Evidence And Reproduction
-
-The baseline and retry audit retain one row per benchmark, the exact leading diagnostic, the result-table path, the make-log path, timestamp, threads and threading profile:
-
-- [Historical baseline](../artifacts/tests/portable-spec/baseline.tsv), generated from all ordered result tables using their recorded start times, not file modification times.
-- [Current audit](../artifacts/tests/portable-spec/current.tsv), selecting the latest retry per benchmark.
-- Initial fresh retries: [32 CPU 2017 entries](../artifacts/spec-portable-audit/retry.Vmyt3WpR/results.tsv), [24 CPU 2026 rate entries](../artifacts/spec-portable-audit/retry.h27Lx61b/results.tsv), [28 CPU 2026 speed/random entries](../artifacts/spec-portable-audit/retry.yaC9sHXJ/results.tsv).
-- Final focused retries: [x264 rate/speed](../artifacts/spec-portable-audit/retry.7h7wFoK9/results.tsv), [CPython](../artifacts/spec-portable-audit/retry.tpQHhnCY/results.tsv), [POV-Ray](../artifacts/spec-portable-audit/retry.w8MEt7oe/results.tsv).
-
-Each retry directory contains a frozen runner/configuration, completion record, compiler/runtime/native-helper/libc++ hashes, a sysroot hash inventory, harness logs and copied make logs. Most retries used `artifacts/spec-portable-toolchain-final`; the last POV-Ray retry used the separate `artifacts/spec-portable-toolchain-cwd` package after adding directory APIs. Configuration fixes were frozen separately for each retry. Earlier unsuccessful retries remain evidence and are not overwritten.
-
-From the repository root, with the licensed kits installed in their existing artifact locations:
-
-```sh
-node scripts/spec-portable-audit.mjs artifacts/spec-ordered > artifacts/tests/portable-spec/baseline.tsv
-bash scripts/package-toolchain.sh artifacts/spec-portable-next
-SPEC_TIMEOUT=900 bash scripts/spec-portable-check.sh artifacts/tests/portable-spec/baseline.tsv artifacts/spec-portable-next
-node scripts/spec-portable-audit.mjs artifacts/spec-portable-audit > artifacts/tests/portable-spec/current.tsv
-```
-
-An optional final argument such as `'722.*'` selects one benchmark. The retry runner executes only failed baseline entries, uses clean builds, and returns success when **inventory collection completes**, even if benchmarks fail; inspect `results.tsv` and `completion.txt`. TIMEOUT is incomplete evidence, not a semantic failure or a pass. Never rebuild a package or edit a runner in use. The existing full-video prerequisite in the SPEC harness is retained.
-
-### Repairs
-
-| ID | Repair | Benchmark Effect |
-| --- | --- | --- |
-| R1 | Add `strncat`, preserving destination identity, bounds and termination; declare existing `strcasecmp`/`strncasecmp` in portable `string.h`. | Removes x264's first failure and FLAC's first failure. FLAC then needs locale support. |
-| R2 | Add byte-order-only `netinet/in.h` and `arpa/inet.h`, with `htons`, `ntohs`, `htonl`, `ntohl` implemented by LLVM byte swaps. | x264's RTP decoder builds; Perl advances to `sys/ioctl.h`. These headers do not provide sockets, address parsing or a network stack. |
-| R3 | Portable x264 configuration explicitly includes `string.h` and `stdlib.h`. | Its bundled legacy getopt omits declarations without glibc's transitive headers and declares `getenv()` without a prototype. Correct standard declarations fix both problems; both x264 benchmarks pass SPEC validation. No fake `__GLIBC__` macro. |
-| R4 | Add `atanh`/`atanhf` and `tgamma`/`tgammaf` declarations and managed exports. | PALM gets past both missing symbols. Rate next reaches A2; speed reaches A3. Gamma uses the existing MathNet implementation; this is not a claim of correctly rounded libm conformance for every input. |
-| R5 | Add `ftruncate`, including checked descriptors, negative lengths, extension with zero bytes and unchanged file position after shrinking. | Gem5 advances to missing locale support. No native descriptor escape is added. |
-| R6 | Add libc++ `system_clock::now`, `steady_clock::now` and `time_t` conversions using portable `clock_gettime`. | XZ speed advances to missing libc++ thread lifecycle support. |
-| R7 | Add `difftime`, `getcwd` and `chdir`. `difftime` subtracts in Int128 before conversion; directory APIs use managed filesystem services. | POV-Ray advances through timing/directory errors and stops at `system`. Includes UTF-8 path bounds and allocated-buffer `getcwd(NULL, 0)`. |
-| R8 | Portable CPython enables the kit's `SPEC_PTHREAD_STUBS_NEED_PTHREAD_TYPES` switch. | Its serial pthread-stub header now declares the types it owns; compilation advances to missing `locale.h`. This does not enable actual CPython workers or claim POSIX threads conformance. |
-| R9 | Revalidate the current Fortran array-constructor implementation. | 765.roms_r passes clean portable SPEC execution/output checks; the old unresolved `_FortranAInitArrayConstructorVector` is stale. |
-
-Positive regression command: `bash tests/portable-spec.sh`. It compares repaired C functions against native Clang at O3 with `-fno-builtin`, in system/portable JIT and NativeAOT, and checks portable clock JIT/NativeAOT against a native clock fixture. Portable generated images report **zero explicit P/Invoke imports**. Gamma domain/pole/overflow cases, signed zero, string boundaries, time overflow/cancellation, truncation offsets and directory errors are exercised. This is focused compatibility evidence, not exhaustive POSIX/libm conformance.
-
-Minimal independent examples for the repaired causes follow. Compile each as C with `bin/llvmnet --runtime=portable -O0 -fno-builtin probe.c -o probe.dll`, then `dotnet probe.dll`; use a `.cpp` suffix for C++. The tracked [C regression](../tests/c/portable-spec-functions.c) and [clock regression](../tests/cpp/portable-spec-clock.cpp) execute these operations with additional checks.
-
-R1, bounded concatenation:
-
-```c
-#include <string.h>
-int main(void) { char text[4] = "a"; return strcmp(strncat(text, "bc", 1), "ab"); }
-```
-
-R1, the separate FLAC declaration gap:
-
-```c
-#include <string.h>
-int main(void) { return strncasecmp("A", "a", 1); }
-```
-
-R2, network byte order on little-endian dotnet64-v1:
-
-```c
-#include <netinet/in.h>
-int main(void) { return ntohl(0x01020304) != 0x04030201; }
-```
-
-R3, missing header/prototype configuration:
-
-```c
-extern char *getenv();
-int main(void) { return getenv("PATH") == 0; }
-```
-
-The fuller independent [legacy header probe](../tests/c/portable-spec-getopt-header.c) also calls `strcmp` with only `stdio.h` included. Compile it with `-include string.h -include stdlib.h`, matching the scoped SPEC flag. Do not enable glibc macros or suppress implicit-declaration diagnostics to hide the issue.
-
-R4, inverse hyperbolic and gamma exports (each call independently exposes its former missing symbol):
-
-```c
-#include <math.h>
-int main(void) { return fabs(atanh(0.5) - 0.5493061443340548) > 1e-12; }
-```
-
-```c
-#include <math.h>
-int main(void) { return fabs(tgamma(5.0) - 24.0) > 1e-12; }
-```
-
-R5, file truncation:
-
-```c
-#include <stdio.h>
-#include <unistd.h>
-int main(void) { FILE *file = fopen("probe.tmp", "w+"); if (!file) return 1;
-    int result = ftruncate(fileno(file), 2); fclose(file); remove("probe.tmp"); return result; }
-```
-
-R6, libc++ clock linkage:
-
-```cpp
-#include <chrono>
-int main() { return std::chrono::system_clock::now().time_since_epoch().count() == 0; }
-```
-
-R7, time and directory entry points:
-
-```c
-#include <time.h>
-int main(void) { return difftime(2, 1) != 1; }
-```
-
-```c
-#include <unistd.h>
-int main(void) { char path[4096]; return getcwd(path, sizeof(path)) == 0 || chdir(path); }
-```
-
-R8, a target-selected serial stub must supply its own types:
-
-```c
-#include <sys/types.h>
-#if !defined(SPEC) || defined(SPEC_PTHREAD_STUBS_NEED_PTHREAD_TYPES)
-typedef struct { void *storage; } pthread_mutex_t;
-#endif
-pthread_mutex_t mutex;
-int main(void) { return 0; }
-```
-
-This reduced example fails with `-DSPEC` and succeeds with `-DSPEC -DSPEC_PTHREAD_STUBS_NEED_PTHREAD_TYPES`. It models the kit's type-selection condition, not an absence of portable pthread support: including the portable `pthread.h` directly already supplies real managed-thread types. The test is available as `-DPROBE=7` in the [C cause fixture](../tests/c/portable-spec-missing.c).
-
-R9, the existing dynamic-constructor regression is [array-constructor.f90](../tests/fortran/array-constructor.f90). The reduced [nested constructor](../tests/fortran/portable-spec-constructor.f90) below is also checked in JIT/NativeAOT against native Flang. Its bitcode is inspected to require an actual call to `_FortranAInitArrayConstructorVector`; a simple fixed-trip constructor could bypass that helper:
-
-```fortran
-program constructor
-  integer, volatile :: count = 3
-  integer :: index, outer
-  integer, allocatable :: values(:)
-  values = [([(index, index=1,outer)], outer=1,count)]
-  if (any(values /= [1,1,2,1,2,3])) stop 1
-end program
-```
-
-### Remaining Cause Catalog
-
-Run `bash tests/portable-spec-causes.sh` to verify the current expected rejections. Every check matches its intended diagnostic; an unexpected success fails the check and means this document needs updating. Expected-rejection checks are **not** SPEC passes. The following standalone code is independent of licensed sources. The C/C++ forms also exist as numbered probes in [portable-spec-missing.c](../tests/c/portable-spec-missing.c) and [portable-spec-missing.cpp](../tests/cpp/portable-spec-missing.cpp).
-
-#### H: Missing Headers And Platform Services
-
-The smallest reproducer is a single include. A shared [header fixture](../tests/c/portable-spec-header.c) permits all variants without copying code:
-
-```sh
-bin/llvmnet --runtime=portable -c '-DPROBE_HEADER=<sys/ioctl.h>' tests/c/portable-spec-header.c -o /tmp/header.o
-```
-
-| ID | Substitute Header | Current Limitation |
-| --- | --- | --- |
-| H1 | `sys/ioctl.h` | Device/terminal request definitions and operations are absent. Native request numbers and layouts are not a portable implementation. |
-| H2 | `sys/param.h` | GCC's host-oriented platform constants/header contract is absent. Supplying selected constants may be small, but the failed include is not evidence that GCC's remaining POSIX requirements are satisfied. |
-| H3 | `complex.h` | No portable C complex-library header; complex arithmetic lowering alone does not supply the C complex library, including L6. |
-| H4 | `locale.h` | No portable C locale API. This also blocks building a complete libc++ locale/stream implementation; a dummy C-locale facade is not equivalent to that implementation. |
-| H5 | `malloc.h` | No host-specific allocation-extension header. Standard allocation exists in `stdlib.h`; host allocation inquiries are separate APIs. |
-| H6 | `linux/limits.h` | Xalan selected Linux-specific platform code, but portable mode intentionally does not expose a Linux sysroot. Platform selection and required services need a portable port, not unrestricted host includes. |
-| H7 | `sys/resource.h` | Resource-usage/limit structures and calls are absent. Native `rusage` layouts and process-limit policy need an explicit portable contract. |
-| H8 | `machine/endian.h` | LLVM's host-feature selection falls into an endian-header branch absent from the generic portable target. Byte order is known, but importing a host platform profile would also assert unrelated OS facilities. |
-| H9 | `omp.h` | No portable OpenMP headers/runtime. Supplying declarations alone only advances to A3. |
-
-These are implementation/porting gaps, not evidence that managed execution cannot support these benchmarks. The audit does not enumerate failures hidden behind them. Fake platform macros, empty success stubs, or host struct declarations would make the diagnostic disappear without establishing compatible behavior.
-
-#### L1-L3: Libc++ Streams
-
-The portable [libc++ configuration](../sysroot/dotnet64-v1/cxx-config/__config_site) sets `_LIBCPP_HAS_LOCALIZATION=0`. Stream definitions guarded by this setting are unavailable even though upstream headers are installed. Enabling the macro alone does not supply locale facets, globals, stream buffers, formatting, file adapters or their out-of-line implementations.
-
-L1, output/input streams, C++ probe 1:
-
-```cpp
-#include <iostream>
-int main() { std::cout << 1 << std::endl; }
-```
-
-L2, string streams, C++ probe 2:
-
-```cpp
-#include <sstream>
-int main() { std::istringstream input("1"); int value; input >> value; return value != 1; }
-```
-
-L3, file streams, C++ probe 3:
-
-```cpp
-#include <fstream>
-int main() { std::ifstream input("probe.txt"); return !input; }
-```
-
-Compile with `bin/llvmnet --runtime=portable -std=c++17 -O0 -DPROBE=1 tests/cpp/portable-spec-missing.cpp -o /tmp/probe.dll`, substituting 2/3 as needed. The expected errors are invalid stream operands/missing `endl` or undefined stream templates. This is a substantial **library implementation gap**, not a typed-CIL or threading prohibition. The system libstdc++ archive is built for a different ABI/library and cannot stand in for portable libc++.
-
-#### L4-L6: Extended And Complex Math
-
-L4, even a bare libc++ complex include references undeclared `atan2l` (C++ probe 4):
-
-```cpp
-#include <complex>
-int main() { return 0; }
-```
-
-L5, a direct extended-math call (C probe 4):
-
-```c
-#include <math.h>
-long double probe(long double value) { return hypotl(value, value); }
-int main(void) { return probe(1) < 1; }
-```
-
-Cactus also reports `powl`, `atan2l`, and other long-double operations; Gmsh additionally reports undeclared `fabsl`. Some frontend-lowered operations, including C++ `std::fabs(long double)`, already work. Do not describe all long-double operations as absent. dotnet64-v1 specifies Float80 long double in a 16-byte slot: implementing its transcendental library is work, but narrowing to `double` or forcing `-mlong-double-64` would violate the contract and lose precision/range.
-
-L6, bypass the missing C header to isolate the unresolved complex exponential (C probe 5):
-
-```c
-extern double _Complex cexp(double _Complex);
-int main(void) { return __real__ cexp(1.0) < 2.0; }
-```
-
-Use `-O0 -fno-builtin` to retain the call. This reproduces Fotonik3d's missing `cexp` export rather than H3. A portable implementation must preserve the complex calling convention and special values, signed zero, infinities and overflow; a naive `exp(real) * (cos(imag) + i*sin(imag))` is not a complete replacement. These math gaps are not inherent CIL impossibilities.
-
-#### L7: Libc++ Thread Lifecycle
-
-```cpp
-#include <thread>
-int main() { std::thread worker([] {}); worker.join(); }
-```
-
-C++ probe 5 at O0 reports unresolved `_ZNSt3__16thread4joinEv`; XZ's optimized constructor reaches `_ZNSt3__115__thread_structC1Ev` first. The common cause is missing libc++ out-of-line thread lifecycle/TLS support, not lack of managed workers. The existing portable pthread implementation and its tests are separate. A complete repair must handle joining, detaching, cleanup and thread-exit state, not just add one mangled symbol returning success.
-
-#### P1-P3: Process And File Services
-
-P1, shell execution (C probe 1):
-
-```c
-#include <stdlib.h>
-int main(void) { return system(0); }
-```
-
-`system` is undeclared and unimplemented. The no-command probe is enough to expose the API; benchmarks may call it with commands. Supporting it requires explicit shell selection/availability, quoting, exit-status and signal semantics across hosts. It is a platform-service gap, not permission to silently execute benchmark shellouts through a native libc import. Returning zero would falsely report command success.
-
-P2, descriptor replacement (C probe 2):
-
-```c
-#include <unistd.h>
-int main(void) { return dup2(1, 2); }
-```
-
-P3, replacing a stream (C probe 3):
-
-```c
-#include <stdio.h>
-int main(void) { return freopen("probe.txt", "w", stdout) == 0; }
-```
-
-These are missing APIs, not architectural impossibilities. Implementing them properly involves shared open-file descriptions, descriptor replacement, `FILE *` identity, buffering, ownership and standard streams. `fopen` plus `close`, or a new descriptor number, is not automatically equivalent. WRF also has the separately documented invalid missing-argument source call described in [SPEC coverage](spec-coverage.md); passing its present header blockers would not remove that boundary.
-
-#### A1: Fixed Plain-Char Contract
-
-```c
-int main(void) { return 0; }
-```
-
-Compile with `bin/llvmnet --runtime=portable -funsigned-char -DPROBE=0 tests/c/portable-spec-missing.c -o /tmp/char.dll`. The driver rejects the option before translation: it cannot change the versioned portable ABI. Blender requires unsigned plain char under the currently validated kit profile. Silently dropping the flag changes its behavior; accepting it changes a shared data contract. An explicit alternate ABI or source-compatible port is needed. This is a deliberate **dotnet64-v1 restriction**, not an intrinsic inability of CIL to represent unsigned bytes.
-
-#### A2: Typed Calls And Varargs
-
-PALM declares a fixed four-argument `open` boundary, including a trailing length, whereas the portable runtime implements the declared C variadic API. C probe 9 reproduces the exact LLVM shape:
-
-```c
-extern int open(const char *, int, int, long);
-int main(void) { return open("probe.txt", 0, 0, 9); }
-```
-
-With `--runtime=portable -O0 -fno-builtin`, this fails with `Runtime ABI mismatch for open: i32 (ptr, i32, i32, i64)`. Native SysV calls can happen to tolerate extra arguments and pass a mode in a register; a typed CIL call does not have that implicit ABI. The portable `open` implementation takes an explicit managed varargs frame. A correct bridge needs the actual prototype, argument packing and a justified treatment of the extra length; merely deleting arguments or reinterpreting an integer as a frame pointer is unsafe. This is a **boundary-contract restriction**, not proof PALM cannot run after an explicit ABI-correct adapter.
-
-#### A3: OpenMP Runtime Boundary
-
-A header-free OpenMP program isolates the runtime requirement (C probe 6):
-
-```c
-int main(void) {
-    int count = 0;
-    #pragma omp parallel reduction(+:count)
-    count += 1;
-    return count < 1;
-}
-```
-
-Compile with `--runtime=portable -O0 -fopenmp`; translation reports unresolved `__kmpc_fork_call`. Flang speed workloads often reach `__kmpc_global_thread_num` first. These are compiler runtime calls, not ordinary missing arithmetic operations.
-
-The smallest native-boundary probe is the empty A1 program with `--runtime=portable --system-library libomp.so.5`; the driver rejects it with `--system-library requires --runtime=system`. System OpenMP uses native worker callbacks, TLS and runtime structures which cannot be silently mixed with the portable ABI. A portable OpenMP runtime or deliberately specified managed adapter is required. CIL threads are not fundamentally incapable of OpenMP semantics. Disabling OpenMP or stubbing `__kmpc_*` would only create a different serial workload, not fix the speed benchmark.
-
-### CPU 2017, One Benchmark At A Time
-
-Every benchmark name links to its latest retained harness log; the corresponding result table and exact make-log path are in the [current audit](../artifacts/tests/portable-spec/current.tsv). Errors in parallel make output can appear in a different order, so a row lists the controlling cause family and corroborated adjacent blockers rather than claiming a unique total order of source diagnostics. A failed row is not a claim that all downstream causes are known.
-
-| Benchmark / Evidence | Result | Cause / Disposition |
-| --- | --- | --- |
-| [500.perlbench_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/500.perlbench_r-portable.log) | FAIL | R2 fixed; now H1 (`sys/ioctl.h`). |
-| [502.gcc_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/502.gcc_r-portable.log) | FAIL | H2 (`sys/param.h`). |
-| [507.cactuBSSN_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/507.cactuBSSN_r-portable.log) | FAIL | H3 and P3: complex header and `freopen`. |
-| [508.namd_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/508.namd_r-portable.log) | FAIL | L1: stream output operators. |
-| [510.parest_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/510.parest_r-portable.log) | FAIL | L4: libc++ complex header requires `atan2l`; existing C++03 portability setting retained. |
-| [511.povray_r](../artifacts/spec-portable-audit/retry.w8MEt7oe/511.povray_r-portable.log) | FAIL | R7 fixed; now P1 (`system`, surfaced through libc++ `cstdlib`). |
-| [520.omnetpp_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/520.omnetpp_r-portable.log) | FAIL | H4 and L1: locale and stream support. |
-| [521.wrf_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/521.wrf_r-portable.log) | FAIL | P2 and H5: `dup2`, `malloc.h`; later invalid-call restriction remains unvalidated in portable. |
-| [523.xalancbmk_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/523.xalancbmk_r-portable.log) | FAIL | H6: Linux platform header/selection mismatch. |
-| [525.x264_r](../artifacts/spec-portable-audit/retry.7h7wFoK9/525.x264_r-portable.log) | PASS | R1-R3; clean SPEC execution and output validation. |
-| [526.blender_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/526.blender_r-portable.log) | FAIL | A1: required unsigned-char profile conflicts with fixed portable ABI. |
-| [527.cam4_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/527.cam4_r-portable.log) | FAIL | H7: `sys/resource.h`. |
-| [538.imagick_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/538.imagick_r-portable.log) | FAIL | H4: locale API. |
-| [541.leela_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/541.leela_r-portable.log) | FAIL | L2/L1: string streams and output. |
-| [549.fotonik3d_r](../artifacts/spec-portable-audit/retry.Vmyt3WpR/549.fotonik3d_r-portable.log) | FAIL | L6: `cexp`. |
-| [600.perlbench_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/600.perlbench_s-portable.log) | FAIL | R2 fixed; now H1. |
-| [602.gcc_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/602.gcc_s-portable.log) | FAIL | H2; kit process concurrency does not fix missing headers. |
-| [603.bwaves_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/603.bwaves_s-portable.log) | FAIL | A3: `__kmpc_global_thread_num`. |
-| [607.cactuBSSN_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/607.cactuBSSN_s-portable.log) | FAIL | H3/P3 before OpenMP can be validated. |
-| [619.lbm_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/619.lbm_s-portable.log) | FAIL | H9/A3: OpenMP header/runtime. |
-| [620.omnetpp_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/620.omnetpp_s-portable.log) | FAIL | H4/L1. |
-| [621.wrf_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/621.wrf_s-portable.log) | FAIL | P2/H5; no portable OpenMP or invalid-call pass inferred. |
-| [623.xalancbmk_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/623.xalancbmk_s-portable.log) | FAIL | H6: Linux platform header/selection. |
-| [625.x264_s](../artifacts/spec-portable-audit/retry.7h7wFoK9/625.x264_s-portable.log) | PASS | R1-R3; clean SPEC output validation under the four-thread kit setting. |
-| [627.cam4_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/627.cam4_s-portable.log) | FAIL | H7 before parallel execution. |
-| [628.pop2_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/628.pop2_s-portable.log) | FAIL | H9/A3. |
-| [638.imagick_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/638.imagick_s-portable.log) | FAIL | H4. |
-| [641.leela_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/641.leela_s-portable.log) | FAIL | L2/L3: string/file streams. |
-| [644.nab_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/644.nab_s-portable.log) | FAIL | H9/A3. |
-| [649.fotonik3d_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/649.fotonik3d_s-portable.log) | FAIL | A3 first; L6 remains a shared-source requirement. |
-| [654.roms_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/654.roms_s-portable.log) | FAIL | A3. |
-| [657.xz_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/657.xz_s-portable.log) | FAIL | H9/A3; distinct from CPU 2026's C++-thread XZ variant. |
-
-### CPU 2026, One Benchmark At A Time
-
-| Benchmark / Evidence | Result | Cause / Disposition |
-| --- | --- | --- |
-| [706.stockfish_r](../artifacts/spec-portable-audit/retry.h27Lx61b/706.stockfish_r-portable.log) | FAIL | L1: incomplete input streams. |
-| [707.ntest_r](../artifacts/spec-portable-audit/retry.h27Lx61b/707.ntest_r-portable.log) | FAIL | L1. |
-| [708.sqlite_r](../artifacts/spec-portable-audit/retry.h27Lx61b/708.sqlite_r-portable.log) | FAIL | H1: `sys/ioctl.h`. |
-| [709.cactus_r](../artifacts/spec-portable-audit/retry.h27Lx61b/709.cactus_r-portable.log) | FAIL | L5: `hypotl`, `powl`, `atan2l` and related extended math. |
-| [710.omnetpp_r](../artifacts/spec-portable-audit/retry.h27Lx61b/710.omnetpp_r-portable.log) | FAIL | L1. |
-| [714.cpython_r](../artifacts/spec-portable-audit/retry.tpQHhnCY/714.cpython_r-portable.log) | FAIL | R8 fixed; now H4 in file utilities. |
-| [721.gcc_r](../artifacts/spec-portable-audit/retry.h27Lx61b/721.gcc_r-portable.log) | FAIL | H2. |
-| [722.palm_r](../artifacts/spec-portable-audit/retry.h27Lx61b/722.palm_r-portable.log) | FAIL | R4 fixed; now A2: fixed four-argument `open` versus portable varargs frame. |
-| [723.llvm_r](../artifacts/spec-portable-audit/retry.h27Lx61b/723.llvm_r-portable.log) | FAIL | H8: host endian-header selection. |
-| [727.cppcheck_r](../artifacts/spec-portable-audit/retry.h27Lx61b/727.cppcheck_r-portable.log) | FAIL | L1: `endl` and streams. |
-| [729.abc_r](../artifacts/spec-portable-audit/retry.h27Lx61b/729.abc_r-portable.log) | FAIL | P1: shell execution. |
-| [731.astcenc_r](../artifacts/spec-portable-audit/retry.h27Lx61b/731.astcenc_r-portable.log) | FAIL | L3/L1: file/input and output streams. |
-| [734.vpr_r](../artifacts/spec-portable-audit/retry.h27Lx61b/734.vpr_r-portable.log) | FAIL | L1. |
-| [735.gem5_r](../artifacts/spec-portable-audit/retry.h27Lx61b/735.gem5_r-portable.log) | FAIL | R5 fixed; now H4 in embedded CPython. |
-| [736.ocio_r](../artifacts/spec-portable-audit/retry.h27Lx61b/736.ocio_r-portable.log) | FAIL | L1. |
-| [737.gmsh_r](../artifacts/spec-portable-audit/retry.h27Lx61b/737.gmsh_r-portable.log) | FAIL | L4/L5 and L1: complex include, `fabsl`, streams. |
-| [748.flightdm_r](../artifacts/spec-portable-audit/retry.h27Lx61b/748.flightdm_r-portable.log) | FAIL | L2/L1. |
-| [749.fotonik3d_r](../artifacts/spec-portable-audit/retry.h27Lx61b/749.fotonik3d_r-portable.log) | FAIL | L6: `cexp`. |
-| [750.sealcrypto_r](../artifacts/spec-portable-audit/retry.h27Lx61b/750.sealcrypto_r-portable.log) | FAIL | L1: incomplete output stream/ios types. |
-| [753.ns3_r](../artifacts/spec-portable-audit/retry.h27Lx61b/753.ns3_r-portable.log) | FAIL | L1: input/output streams. |
-| [765.roms_r](../artifacts/spec-portable-audit/retry.h27Lx61b/765.roms_r-portable.log) | PASS | R9: stale constructor blocker; clean current portable output validation. |
-| [766.femflow_r](../artifacts/spec-portable-audit/retry.h27Lx61b/766.femflow_r-portable.log) | FAIL | L4/L1. |
-| [767.nest_r](../artifacts/spec-portable-audit/retry.h27Lx61b/767.nest_r-portable.log) | FAIL | L1: incomplete stream definitions cause ambiguous operators. |
-| [772.marian_r](../artifacts/spec-portable-audit/retry.h27Lx61b/772.marian_r-portable.log) | FAIL | L2: YAML string streams. |
-| [800.pot3d_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/800.pot3d_s-portable.log) | FAIL | A3: host DO CONCURRENT lowers to OpenMP runtime calls. |
-| [801.xz_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/801.xz_s-portable.log) | FAIL | R6 fixed; now L7: libc++ `__thread_struct` construction. |
-| [803.sph_exa_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/803.sph_exa_s-portable.log) | FAIL | H9/A3. |
-| [807.ntest_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/807.ntest_s-portable.log) | FAIL | L1 first; explicit OpenMP profile retained, not replaced by serial execution. |
-| [809.cactus_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/809.cactus_s-portable.log) | FAIL | L5 before parallel execution. |
-| [811.tealeaf_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/811.tealeaf_s-portable.log) | FAIL | H9/A3. |
-| [816.nab_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/816.nab_s-portable.log) | FAIL | H9/A3. |
-| [817.flac_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/817.flac_s-portable.log) | FAIL | R1 declaration fixed; now H4. |
-| [820.cloverleaf_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/820.cloverleaf_s-portable.log) | FAIL | A3: Fortran OpenMP runtime. |
-| [821.gcc_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/821.gcc_s-portable.log) | FAIL | H2; kit multiprocess execution does not remove library requirements. |
-| [822.palm_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/822.palm_s-portable.log) | FAIL | R4 fixed; now A3 before the rate variant's A2 boundary is validated. |
-| [823.llvm_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/823.llvm_s-portable.log) | FAIL | H8. |
-| [827.cppcheck_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/827.cppcheck_s-portable.log) | FAIL | L1; kit `-j 4` setting retained. |
-| [829.abc_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/829.abc_s-portable.log) | FAIL | P1. |
-| [834.vpr_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/834.vpr_s-portable.log) | FAIL | L1. |
-| [835.gem5_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/835.gem5_s-portable.log) | FAIL | R5 fixed; now H4. Kit still suppresses workers unconditionally. |
-| [838.diamond_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/838.diamond_s-portable.log) | FAIL | L1 before any later CPU-query restrictions are tested. |
-| [846.minizinc_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/846.minizinc_s-portable.log) | FAIL | L2: output string streams and formatting. |
-| [849.fotonik3d_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/849.fotonik3d_s-portable.log) | FAIL | A3 first; L6 remains a shared-source requirement. |
-| [853.ns3_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/853.ns3_s-portable.log) | FAIL | L1. |
-| [854.graph500_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/854.graph500_s-portable.log) | FAIL | H9/A3; system register-width concessions are not portable evidence. |
-| [857.namd_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/857.namd_s-portable.log) | FAIL | H9 and L1. |
-| [865.roms_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/865.roms_s-portable.log) | FAIL | A3, unlike the rate pass. |
-| [867.nest_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/867.nest_s-portable.log) | FAIL | L1. |
-| [872.marian_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/872.marian_s-portable.log) | FAIL | L2. |
-| [881.neutron_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/881.neutron_s-portable.log) | FAIL | H9/A3. |
-| [998.specrand_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/998.specrand_s-portable.log) | FAIL | L1; one distinct benchmark despite two group appearances. |
-| [999.specrand_r](../artifacts/spec-portable-audit/retry.yaC9sHXJ/999.specrand_r-portable.log) | FAIL | L1; one distinct benchmark despite two group appearances. |
-
-### Verification And Next Work
-
-The [positive repair gate](../artifacts/tests/portable-spec/functions.log), [expected-cause gate](../artifacts/tests/portable-spec/causes.log), and nearby [math](../artifacts/tests/portable-spec/math.log), [I/O](../artifacts/tests/portable-spec/regression-io.log), [POSIX](../artifacts/tests/portable-spec/regression-posix.log), [time](../artifacts/tests/portable-spec/regression-time.log) and [portable C++](../artifacts/tests/portable-spec/regression-portable-cpp.log) suites passed. The positive repair gate is registered in [toolchain-all.sh](../tests/toolchain-all.sh). The entire core/deployment/media gate was **not** rerun for this audit; earlier full-video/deployment evidence is not relabeled as using these changes.
-
-The largest remaining project is a real portable libc++ locale/stream runtime. Next are a deliberate POSIX compatibility profile, complex/Float80 math and portable OpenMP plus libc++ thread lifecycle support. Treat A1/A2 as explicit ABI design work. Continue requiring native-oracle tests, real worker evidence for parallel claims and SPEC output validation after each repair; do not turn the remaining 81 failures into passes by changing the workload, borrowing the host ABI, or providing success stubs.
+`bash tests/portable-spec-causes.sh` checks the causes with small probes and needs no SPEC kit. The `linux/limits.h`, `machine/endian.h` and `omp.h` headers, `-fopenmp`, `-funsigned-char`, the four-argument `open` and `--system-library` must fail in portable mode with their diagnostic. Probes of headers and library functions that SPEC programs use (`sys/ioctl.h`, `locale.h`, `complex.h`, `system`, `dup2`, `freopen`, `cexp`, iostreams, `std::thread` and others) must build and exit like their native builds.

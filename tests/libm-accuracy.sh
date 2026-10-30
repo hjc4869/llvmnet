@@ -2,8 +2,8 @@
 # tags: core libc
 # requires: python3
 # timeout: 1200
-# libm accuracy (LC-21): tests/c/libm-random.c evaluates 89 float, double and long double functions on 2,000
-# deterministic random inputs each. The portable build (musl's C libm translated to CIL) must equal native musl bit
+# libm accuracy: tests/c/libm-random.c evaluates float, double and long double functions on deterministic
+# random inputs. The portable build (musl's C libm translated to CIL) must equal native musl bit
 # for bit, except where native musl uses x86-64 assembly instead of the C code (the x87 long double functions and
 # sqrt) or the C code calls an inexact one (coshl calls expl, for example); those, and the host libm (glibc), are
 # reported as maximum ULP differences.

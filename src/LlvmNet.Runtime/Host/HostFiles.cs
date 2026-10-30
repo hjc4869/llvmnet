@@ -6,7 +6,7 @@ using static LlvmNet.Runtime.Linux;
 
 namespace LlvmNet.Runtime;
 
-/// <summary>File descriptors, open file descriptions, pipes, poll and select (plan item LC-05).</summary>
+/// <summary>File descriptors, open file descriptions, pipes, poll and select.</summary>
 public static unsafe partial class HostSyscalls
 {
     private enum FileKind { Regular, Directory, Pipe, Console, Device }
@@ -155,9 +155,8 @@ public static unsafe partial class HostSyscalls
     }
 
     /// <summary>
-    /// sendfile and copy_file_range, which std::filesystem::copy_file tries before streams: copies from a regular file
-    /// through a buffer, from its position or from *inputOffset (which then advances instead), to the output's position
-    /// or *outputOffset, at most 0x7ffff000 bytes per call as in Linux. Other input kinds are EINVAL, as for the kernel.
+    /// sendfile and copy_file_range: copies from a regular file through a buffer, from its position or from *inputOffset
+    /// (which then advances instead), to the output's position or *outputOffset, at most 0x7ffff000 bytes per call as in Linux.
     /// </summary>
     private static long CopyRange(int input, nint inputOffset, int output, nint outputOffset, long count)
     {
@@ -663,7 +662,6 @@ public static unsafe partial class HostSyscalls
                 }
                 if (ready > 0 || timeout == 0) return ready;
                 if (!WaitForIo(deadline)) return 0;
-                // Restore the requested sets before checking again.
                 for (int word = 0; word < words; word++)
                 {
                     if (read != null) read[word] = wantRead[word];

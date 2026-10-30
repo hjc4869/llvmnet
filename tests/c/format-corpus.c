@@ -1,4 +1,4 @@
-/* printf, scanf and strtod corpus (plan item LC-20): every conversion of the formatted I/O functions over edge-case
+/* printf, scanf and strtod corpus: every conversion of the formatted I/O functions over edge-case
  * values, including %a, %Lf and %La, %n, positional arguments, flags and wide strings, plus strtod/strtold and
  * sscanf round trips. The portable build must print exactly what the same program prints against native musl. */
 #include <float.h>

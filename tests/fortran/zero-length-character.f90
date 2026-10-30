@@ -1,5 +1,5 @@
 ! Zero-length character variables live at a non-null address, as on a native stack: flang-rt treats a null base
-! address as an unallocated variable (gfortran pr96486 and auto_char_dummy_array_1).
+! address as an unallocated variable.
 program zero_length_character
   implicit none
   character(0) :: value

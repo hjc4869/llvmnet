@@ -4,10 +4,10 @@ namespace LlvmNet;
 
 internal static class PortableAbi
 {
-    /// <summary>ABI tag of portable objects and images. v2 is the musl-based sysroot (ADR-09, LC-26); v1 objects are rejected.</summary>
+    /// <summary>ABI tag of portable objects and images, versioned with the musl-based sysroot.</summary>
     internal const string Tag = "dotnet64-v2";
 
-    /// <summary>A sysroot other than the toolchain's own (--portable-sysroot); scripts/build-sysroot.sh uses it while the sysroot is built.</summary>
+    /// <summary>A sysroot other than the toolchain's own (--portable-sysroot), used by the sysroot build scripts.</summary>
     internal static string? SysrootOverride { get; set; }
 
     /// <summary>musl, libc++/libc++abi and flang-rt as LLVM bitcode with their headers, built by scripts/build-sysroot.sh.</summary>
@@ -31,8 +31,8 @@ internal static class PortableAbi
         string include = Path.Combine(Sysroot, "include");
         List<string> result = ["--target=x86_64-unknown-none", "-D__LLVMNET__=1", "-D__LLVMNET_PORTABLE__=1", "-D__LLVMNET_ABI_VERSION=2"];
         if (fortran) return result;
-        // The fixed x86-64 data layout must not imply x86 instruction sets: portable code is scalar CIL. libc++, for
-        // one, sizes its SIMD helpers from these macros (with only __MMX__ left, 16-byte types got 0-wide vectors).
+        // The fixed x86-64 data layout must not imply x86 instruction sets: portable code is scalar CIL, and headers
+        // such as libc++'s size their SIMD helpers from these macros.
         result.AddRange(["-nostdinc", "-U__x86_64__", "-U__amd64__", "-U__amd64", "-U__SSE__", "-U__SSE2__", "-U__MMX__",
             "-U__SSE_MATH__", "-U__SSE2_MATH__", "-U__FXSR__"]);
         if (cpp)

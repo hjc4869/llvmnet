@@ -1,4 +1,4 @@
-/* Indirect-call signature policy (BE-18); see docs/dev/calling-convention.md. */
+/* Indirect-call signature policy; see docs/dev/calling-convention.md. */
 #include <string.h>
 typedef int (*int_function)(int);
 static long widen(long value) { return value + 1; }

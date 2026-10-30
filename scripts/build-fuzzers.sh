@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the pinned random program generators for differential fuzzing (plan item FD-16).
+# Build the pinned random program generators for differential fuzzing.
 #   scripts/build-fuzzers.sh [csmith|yarpgen]...     default: both
 # Installs artifacts/tools/<name>/bin/<name> and prints one prefix per tool; csmith also gets include/
 # (csmith.h and its safe-math runtime headers). Rebuilds only when the pinned source changes.

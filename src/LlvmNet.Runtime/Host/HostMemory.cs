@@ -4,12 +4,11 @@ using static LlvmNet.Runtime.Linux;
 namespace LlvmNet.Runtime;
 
 /// <summary>
-/// Memory mappings (plan item LC-07) over NativeMemory. New mappings come from calloc, which hands large blocks out as
-/// lazily zeroed pages, so a reservation costs no memory until it is touched, as with the kernel. File mappings are
-/// copies: private ones read the file once, shared writable ones write their pages back on msync and munmap. There is
-/// no memory protection, MAP_FIXED works only inside an existing mapping, and partially unmapped memory is freed once
-/// its last page is unmapped. All mappings together stay within the memory .NET reports as available, so exhausting
-/// the address space (as allocation-failure tests do) fails in mmap with ENOMEM while the runtime still has room.
+/// Memory mappings over NativeMemory. New mappings come from calloc, whose large blocks are lazily zeroed pages. File
+/// mappings are copies: private ones read the file once, shared writable ones write their pages back on msync and munmap.
+/// There is no memory protection, MAP_FIXED works only inside an existing private mapping, and a block is freed once its
+/// last page is unmapped. Mappings stay within the memory .NET reports as available, so exhausting the address space
+/// fails in mmap with ENOMEM while the runtime still has room.
 /// </summary>
 public static unsafe partial class HostSyscalls
 {
@@ -66,7 +65,6 @@ public static unsafe partial class HostSyscalls
     /// <summary>Page-aligned, lazily zeroed memory and the block to free later; 0 when calloc fails.</summary>
     private static nint AllocatePages(long size, out nint allocation)
     {
-        // NativeMemory reports failure with OutOfMemoryException, which mmap must turn into ENOMEM.
         try { allocation = (nint)NativeMemory.AllocZeroed((nuint)(size + PageSize)); }
         catch (OutOfMemoryException) { allocation = 0; }
         return allocation == 0 ? 0 : (allocation + (nint)PageSize - 1) & ~(nint)(PageSize - 1);

@@ -98,7 +98,7 @@ case "${1:-}" in
         while read -r name; do fetch "$name" >/dev/null; done < <(awk -F '\t' '!/^#/ && NF { print $1 }' "$lock")
         ;;
     -h|--help)
-        sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
         ;;
     *)
         names=("$@")

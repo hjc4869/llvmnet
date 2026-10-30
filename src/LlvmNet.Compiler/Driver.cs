@@ -293,7 +293,7 @@ internal static class Driver
                     foreach (string archive in new[] { "libflang_rt.runtime.a", "libc++.a", "libc++abi.a", "libc.a", "libclang_rt.builtins.a" })
                         if (File.Exists(PortableAbi.Library(archive))) bitcode.Add(PortableAbi.Library(archive));
             }
-            // System executables take the Fortran runtime from flang-rt built against glibc (FT-09); the C library is native.
+            // System executables take the Fortran runtime from flang-rt built against glibc; the C library is native.
             string systemFortran = Path.Combine(Toolchain.Root, "sysroot", "system-linux-x64-v1", "lib", "libflang_rt.runtime.a");
             if (options.Runtime == "system" && !options.Library && defaultLibraries && File.Exists(systemFortran))
                 bitcode.Add(systemFortran);

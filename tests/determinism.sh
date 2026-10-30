@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tags: core fortran cpp
 # requires: flang
-# Identical inputs and options must produce byte-identical assemblies and native bridges (BE-05).
+# Identical inputs and options must produce byte-identical assemblies and native bridges.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output/first" "$test_output/second"

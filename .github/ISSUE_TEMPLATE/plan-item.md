@@ -4,7 +4,7 @@ about: Track one item from docs/plan
 labels: plan
 ---
 
-<!-- Title: "<ID>: <short description>", for example "BE-16: lock-free atomics". -->
+<!-- Title: "<ID>: <short description>", for example "FT-08: portable OpenMP". -->
 
 Plan file: docs/plan/<file>.md
 

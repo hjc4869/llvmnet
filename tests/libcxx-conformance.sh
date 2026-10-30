@@ -2,11 +2,11 @@
 # tags: conformance cpp
 # requires: python3
 # timeout: 14400
-# libc++'s own lit test suite (CX-08) against the portable sysroot: every test is compiled with llvmnet-clang++
-# (portable mode) and run through dotnet. The default directories are the ones plan item CX-08 names.
+# libc++'s own lit test suite against the portable sysroot: every test is compiled with llvmnet-clang++
+# (portable mode) and run through dotnet.
 #   tests/libcxx-conformance.sh [std/<directory>...]       default: containers strings algorithms utilities thread
 #                                                           localization input.output
-#   tests/libcxx-conformance.sh libcxxabi                   libc++abi's own tests instead (CX-13), results in
+#   tests/libcxx-conformance.sh libcxxabi                   libc++abi's own tests instead, results in
 #                                                           artifacts/tests/libcxxabi-conformance
 #   LIBCXX_LIT_JOBS=16                                      parallel tests (default: nproc)
 # Results: artifacts/tests/libcxx-conformance/{summary.tsv,results.json,failures.txt}; the test fails if any

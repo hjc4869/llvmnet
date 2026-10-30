@@ -1,4 +1,4 @@
-; Linkage forms that musl and libc++ rely on (BE-07): aliases to functions and globals,
+; Linkage forms that musl and libc++ rely on: aliases to functions and globals,
 ; alias chains with offsets, weak definitions, and undefined extern_weak references that must be null.
 target triple = "x86_64-pc-linux-gnu"
 

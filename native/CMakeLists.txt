@@ -1,5 +1,5 @@
 # Native bridge between the llvmnet compiler and LLVM. scripts/build-native.sh compiles these sources
-# directly on Linux; this file describes the same build for hosts without llvm-config (plan item XP-04).
+# directly on Linux; this file describes the same build for hosts without llvm-config.
 cmake_minimum_required(VERSION 3.20)
 project(llvmnet_llvm LANGUAGES CXX)
 # LLVM's package version file only accepts exact versions, so check the major version explicitly.

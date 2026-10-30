@@ -1,4 +1,4 @@
-// libm on deterministic random inputs (LC-21): prints the bits of every result so tests/libm-accuracy.sh can compare
+// libm on deterministic random inputs: prints the bits of every result so tests/libm-accuracy.sh can compare
 // the portable build with native musl (same C code, so equal bits) and with the host libm (maximum ULP error).
 // Inputs cycle through four ranges: any bit pattern, exponents within 2^-30..2^30, [-4, 4) and [-1, 1).
 #include <math.h>

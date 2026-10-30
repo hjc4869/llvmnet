@@ -1,105 +1,44 @@
-# Verified Status
+# Status
 
-Initial bring-up on 2026-09-07: Linux x86-64, LLVM/Clang/Flang 22.1.8, .NET SDK 10.0.400, .NET runtime 10.0.11. This document records development evidence, not a claim of full language, emcc, or SPEC conformance.
+What llvmnet supports today and its known limitations. Open work and milestones are tracked in [plan/README.md](plan/README.md); measurements, with the commands that produced them, are in [evidence/](evidence/).
 
-Later evidence: [evidence/2026-10-30-m0-m2.md](evidence/2026-10-30-m0-m2.md) records the M0 to M2 work (test runner, semantics audits, atomics, JIT limits, and the musl, libc++ and flang-rt spikes). The plan and its status board are in [plan/README.md](plan/README.md).
+## Supported
 
-## Deployable Toolchain Update
+- C, C++ and Fortran through Clang and Flang 22, in portable and system mode, under the JIT and NativeAOT; a relocatable toolchain package ([toolchain.md](toolchain.md)).
+- Portable mode: musl, libc++/libc++abi and flang-rt compiled into the program, with Linux system-call semantics over .NET ([dev/host-abi.md](dev/host-abi.md)).
+- System mode: the host's glibc and native libraries through generated bridges, flang-rt, and optionally a libstdc++ bitcode archive and LLVM's OpenMP runtime.
+- The ffmpeg profile in [../config/ffmpeg-browser.sh](../config/ffmpeg-browser.sh): ffmpeg with dav1d, libxml2 and zlib, frame and slice threading, and SIMD128 HEVC kernels ([ffmpeg-threading.md](ffmpeg-threading.md), [simd128.md](simd128.md)). The integration tests compare decoded frame and audio hashes with native builds in both modes. Native assembly, hardware decoding, runtime CPU detection and networking are disabled, and the build produces a decode harness, not the `ffmpeg` command-line program.
+- SPEC CPU 2017 and 2026 through the standard harness ([spec-coverage.md](spec-coverage.md)); the causes of portable-mode failures are in [spec-portable-limitations.md](spec-portable-limitations.md).
+- Upstream conformance suites, run nightly: musl's libc-test, the libc++ and libc++abi suites, FCVS and the gfortran tests of llvm-test-suite (`tests/run.sh --tag conformance`).
 
-Implemented installed `llvmnet-clang`, `llvmnet-clang++`, `llvmnet-flang`, archiver/indexer/symbol utilities, response files, executable launchers, NativeAOT, a bundled versioned portable C/libc++ sysroot, and explicit system-library mode. The approximately 638 MiB uncompressed fully bundled Linux installation compiles portable C/C++/Fortran with no `dotnet` or LLVM commands on PATH. NativeAOT publishing still needs the .NET SDK and target native link tools.
+## Known Limitations
 
-System-mode tests exercise real native libc/stdio, native varargs, struct return/byval/sret, data exports, native qsort/pthread callbacks, and NativeAOT TLS teardown. Portable tests exercise fixed data layouts, allocation, C++ standard exceptions/containers/algorithms, managed threads, deterministic errno strings, and C/Fortran extended-precision interoperability. Portable outputs have no generated native ABI imports. Windows/macOS/ARM64 execution remains unverified.
+Compiler:
 
-Normal CPU 2017 `runcpu` configurations have successfully built, staged, run, and validated mcf, deepsjeng, and exchange2 test inputs in both system and portable NativeAOT modes. The system-mode mcf single-copy reference-rate workload also passed. CPU 2026 zstd and lbm test inputs passed the same ordinary system-mode NativeAOT harness workflow. These normal harness checks are distinct from the earlier manual development runners below; they are not complete reportable suite results. Details and exact commands are in [toolchain.md](toolchain.md).
+- The driver is not a complete Clang driver; native linker options are rejected.
+- Rejected LLVM constructs include computed goto (`indirectbr`), `callbr`, integers wider than 128 bits, `half`, `bfloat` and `fp128` (so Fortran `REAL(16)` and `__float128`), scalable vectors, several `x86_fp80` intrinsics, ifuncs and inline assembly with instructions; [user/support-matrix.md](user/support-matrix.md) has the full list.
+- Vector IR runs as scalar code, except through the opt-in SIMD128 header.
+- `longjmp` cannot cross native frames. External thread-local globals need a bitcode definition.
+- Functions with many aggregate values or `setjmp` sites can exceed CLR method limits, and very large functions may run without JIT optimization; `--diagnose-limits` reports both.
+- Emitted assemblies carry no debug information; `-g` adds source locations to compiler errors.
 
-The final dual-ABI toolchain gate passed, followed by all 31 existing ffmpeg media fixtures, DASH/HLS, scaling/resampling/library checks, and a ten-frame check on the supplied HDR video. Compiler/runtime/native-bridge editor diagnostics were clear. Windows/macOS/ARM64 portable execution and full reportable SPEC suites remain open release gates.
+Portable mode:
 
-## ffmpeg
+- Services .NET cannot provide are unavailable: `fork`, `exec`, sockets, hard links, FIFOs, SysV IPC, memory protection and asynchronous signals. [dev/host-abi.md](dev/host-abi.md) lists every difference from Linux.
+- No OpenMP runtime.
+- Only the C and C.UTF-8 locales.
+- The floating-point environment is fixed: round to nearest, no exception flags.
+- `__linux__` and the other host macros are not defined, so code that selects platform code by them needs a portable path.
+- Windows, macOS and ARM64 hosts are not tested yet.
 
-The component list from the supplied browser build is reproduced in [../config/ffmpeg-browser.sh](../config/ffmpeg-browser.sh). The full build enables pthreads in system, portable, and legacy managed-host modes. The optional `FFMPEG_SIMD128=1` profile selects upstream wasm HEVC C SIMD kernels backed by .NET `Vector128<T>` in both ABIs. Native assembly, hardware decoding, native CPU dispatch, and networking remain disabled. The build produces LLVM bitcode libraries and a CIL decode harness, whose default remains one thread. It does not yet package a drop-in managed ffmpeg command-line application.
+System mode:
 
-Verified:
+- Linux x86-64 only.
+- Native code cannot call translated variadic or aggregate callbacks. Thread cancellation, `pthread_exit`, signal handlers in translated code, external native TLS globals and callbacks on threads created by native libraries are incomplete.
+- No native C++ library interchange: C++ library code must be linked as bitcode.
+- OpenMP needs a staged LLVM OpenMP runtime on the loader path.
 
-- dav1d 1.5.4: generic C build, initialization/cleanup, and real AV1 decoding.
-- libxml2: single-threaded build, XML parsing, and DASH manifests.
-- zlib 1.3.2: compression/decompression round-trip and PNG decoding.
-- Seven initial fixtures: H.264, VP9, AV1, PNG, PCM, FLAC, AAC.
-- Twenty-four additional fixtures: MPEG-1/2/4, MSMPEG4 v2/v3, WMV1/2, VP8, Theora, ProRes, MJPEG, TIFF, WebP, ALAC, AC-3/E-AC-3, MP2/MP3, Opus, Vorbis, float PCM, 24-bit PCM, A-law and mu-law.
-- Local-file DASH and HLS playback with no networking.
-- swscale and swresample output hashes; avfilter graph allocation and avdevice registration with filters/devices disabled as requested.
-- All 1,150 frames of `/home/david/Videos/20260521_215039.mp4`: 3840x2160 HEVC Main 10, yuv420p10le, BT.2020/HLG, about 120 Mb/s. Native/CIL active-pixel hashes matched exactly.
+Workloads:
 
-Not every enabled legacy decoder has a fixture, and the full upstream FATE suite has not been run. libjxl is not validated.
-
-### Threading Update
-
-System and portable dependencies and ffmpeg now build in separate ABI-tagged directories. Portable dependency bring-up added missing public errno, descriptor-control, directory, and math declarations. System libxml2 required checked internal variadic callback dispatch; actual native invocation of a variadic callback still fails explicitly. Upstream sources remain unchanged.
-
-The [threaded media regression](../tests/ffmpeg-threads.sh) passed 96 managed cases: H.264 and 10-bit HEVC frame/slice modes, VP9 frame mode, and dav1d AV1 workers, at two/four threads, in both ABIs under JIT and NativeAOT. Each compares exact frame hashes with single-thread native output and also checks threaded native output. Full 24-frame draining and three-frame early teardown passed; ffmpeg-managed frame/slice activation is asserted. The portable decoder contains 7,202 CIL method bodies and zero generated P/Invoke imports.
-
-Four-thread decoding of the first ten frames of the supplied 4K HDR video matched single-thread native hashes in both ABIs under JIT and NativeAOT. All 31 existing media fixtures, local DASH/HLS, and scaling/resampling/library checks also passed on the newly threaded legacy profile. These runs do not constitute full threaded FATE coverage, cross-platform validation, or a threading performance result. libxml2 remains configured without threading. Build commands and scope are in [ffmpeg-threading.md](ffmpeg-threading.md).
-
-### SIMD128 Update
-
-The opt-in `--simd128` compiler/header path preserves SIMD helper values and vector memory operations using architecture-neutral `Vector128<T>`. The same 21-operation, 67-record C probe now matches real WebAssembly in emitted system/portable CIL under JIT, forced software fallback, baseline NativeAOT, and host-targeted NativeAOT. Upstream HEVC DSP dispatch is asserted; 512 IDCT and 144 SAO cases match scalar output, and real 8/10-bit frame/slice-threaded fixtures pass in both ABIs. The SIMD portable decoder has 7,216 IL method bodies and zero generated P/Invoke imports.
-
-All 2,829 decoded frames across the six supplied `/home/david/Videos/2026*.mp4` files match installed native ffmpeg hashes in both SIMD JIT ABIs. Three-run decode-only measurements show aggregate JIT throughput gains of 12.7% system / 12.9% portable; portable SIMD still takes 2.49x installed native elapsed time. Explicit host-targeted AOT gains about 15%, while baseline SIMD AOT regresses by about 2.2x versus scalar AOT. The baseline remains default; `--aot-instruction-set native` is an explicit, host-CPU-specific deployment choice. Full tables, fairness caveats, and commands are in [video-simd128-performance.md](video-simd128-performance.md).
-
-This is HEVC IDCT at 8/10 bits and SAO at 8 bits, not complete SIMD128, general auto-vectorized hardware lowering, or wasm32 module support. The supported source-header subset and remaining work are in [simd128.md](simd128.md).
-
-### Preliminary Video Measurement
-
-The earlier single-threaded complete-file validation also measured total wall time, including startup, JIT, file I/O and hashing:
-
-| Execution | Seconds | Maximum RSS KiB |
-| --- | ---: | ---: |
-| Native clang from the same linked bitcode | 190.53 | 251472 |
-| .NET CIL | 250.96 | 330528 |
-
-This is approximately 1.32x native elapsed time, not an optimized decoder benchmark. No native assembly acceleration is enabled in this comparison. There is no emcc/wasmtime comparison yet. Latest rerun measurements live under `artifacts/ffmpeg-browser/video-validation/` and may differ.
-
-The complete `tests/all.sh spec-test` rerun also passed: 186.84 seconds native and 253.26 seconds CIL, about 1.36x, with all 1,150 frame hashes equal. A separate fresh-configure build passed the HDR check and contained 7,137 CIL method bodies with zero P/Invoke imports. Its count differs slightly from the earlier cached configuration because additional frontend feature probes now succeed.
-
-## SPEC Development Runs
-
-The optimized benchmark-by-benchmark inventory and remaining failures are recorded in [spec-coverage.md](spec-coverage.md). It is distinct from the earlier selected manual runs below; attempted coverage is not full-suite success.
-
-The ordered follow-up completed all eight requested groups in system NativeAOT mode: 103 group entries covering all 101 distinct installed benchmarks. All rate runs use one copy; speed uses the four-thread harness setting with OpenMP or host DO CONCURRENT lowering where applicable. Kit-defined serial and multiprocess behavior is disclosed separately. Portable results remain 17 PASS / 86 FAIL across group entries, not complete portable compatibility. These are evolving-toolchain test-input results, not one final clean matrix, full parallel conformance, or SPEC scores. WRF explicitly traps an invalid missing-argument call path not exercised by the validated input. See the coverage document for counts, evidence and dependencies.
-
-These use one benchmark process, source/input archives from the supplied licensed media, and no reportable SPEC harness configuration. Original kits remain unchanged. No proprietary benchmark source or input is part of the tracked project.
-
-| Suite | Benchmark | Language | Validated Inputs |
-| --- | --- | --- | --- |
-| CPU 2017 | 505.mcf_r | C | test, train, refrate |
-| CPU 2017 | 531.deepsjeng_r | C++ | test, train |
-| CPU 2017 | 548.exchange2_r | Fortran | test, train |
-| CPU 2017 | 519.lbm_r | C, FP rate | test |
-| CPU 2026 | 777.zstd_r | C | test self-check workload |
-| CPU 2026 | 782.lbm_r | C, FP rate | test |
-
-mcf, deepsjeng, and exchange2 matched native and the supplied output artifacts. lbm matched native output exactly, with the native output checked against the benchmark's declared `1e-7` absolute tolerance. zstd completed its built-in compression/decompression verification; its timing text is not treated as deterministic reference output.
-
-Complete train/reference suites have not been validated. No SPEC performance scores are reported.
-
-## Compiler Regression Coverage
-
-The core runner covers scalar control flow, parallel PHIs, LLVM 22 switches, memory/global relocations, function pointers, large `byval`/`sret` structures, mixed SysV varargs, libc adapters, C11 atomics, pthread contention, C++ templates/RAII/RTTI/unwinding, Fortran descriptors/allocation/I/O, x87 extended precision, and 128-bit integer arithmetic. Tests generally compare native and CIL behavior, with direct IR cases where frontend optimization could remove the feature being tested.
-
-Optimized regressions additionally compare `-O3 -fvectorize -fslp-vectorize` C with native output in system and portable JIT, NativeAOT, and managed-library configurations. Direct IR tests cover vector arithmetic, reductions, masks, constants, lane operations, function boundaries, and scalar `llvm.frexp` with i32 exponent results. Fortran checks now include O3, scalar CHARACTER INDEX/REPEAT/ADJUSTL, pointer allocation/bounds/alias deallocation, and formatted BACKSPACE with beginning/end-of-file handling in both ABIs and both execution modes. Explicit managed library exports take precedence over native symbol lookup in system mode.
-
-Additional workload-driven checks cover legacy no-prototype calls, discarded return values and unused trailing arguments, scalar hyperbolic and integer-power intrinsics, 80/128-bit population/leading/trailing-zero counts, Fortran contiguity, temporary copy-in/copy-out and SPREAD, and portable basename/dirname, utime and strtok/strtok_r. Unimplemented pointer-derived-type lifecycle and unsupported filesystem operations still fail explicitly.
-
-## Known Limits
-
-- Not a complete compiler-driver replacement: unsupported native-linker flags and unresolved symbols are errors.
-- Direct `setjmp` and translated `longjmp`, including dynamic allocation restoration, now work within translated frames. Cross-native-frame jumps, portable signal-mask saving, and computed-goto lowering remain unsupported.
-- Defined LLVM TLS globals have per-thread initialization and destructor cleanup through managed/native pthread adapters. External native TLS globals and arbitrary foreign-thread teardown remain unsupported.
-- General fixed-vector operations supported by LLVM reduction expansion/scalarization retain a scalar fallback. The opt-in SIMD128 source-header/helper path accelerates the tested HEVC subset, not arbitrary vector IR. Scalable vectors, direct target-specific vector intrinsics, complete masked-memory handling, binary128, and several wide-integer intrinsic families remain unsupported. Auto-vectorization is disabled by default. Baseline NativeAOT SIMD performance and cross-platform execution remain open.
-- The C runtime is a tested subset, not complete glibc/POSIX. Locale, wide-character I/O, hexadecimal/long-double printf/scanf, full signal/process behavior, and some filesystem metadata are incomplete.
-- The optional system libstdc++ bitcode profile adds tested streams, locale facets, containers, threads, futures, OS-backed random_device, demangling and C++17 filesystem operations. System exception_ptr initialization, ownership and concurrent rethrows are tested; terminate-handler registration and invocation pass both ABIs. Portable libc++, access/ambiguity corner cases, and complete library ABI coverage remain incomplete; native invocation of translated aggregate/variadic callbacks is rejected.
-- Fortran default derived allocation/cleanup, restricted intrinsic assignment, namelist input/output, descriptor stacks, RECL/IOLENGTH, direct unformatted records, explicit exponent widths and array/model/environment inquiries are implemented and tested. Final procedures, defined I/O/assignment, general owned-component assignment, parameterized components, formatted direct access, segmented records, value stacks, quad operations and complete editing remain incomplete.
-- Large scalar methods and global initializers no longer require one CIL local or initialized-data field for every value. Aggregate-heavy and setjmp methods remain subject to CLR limits. Missing-argument calls are rejected by default; WRF's explicit trap mode provides no behavior for the invalid path.
-- An explicit system LLVM OpenMP dependency supports tested four-worker C regions and Flang host DO CONCURRENT lowering, with CPU 2017/2026 speed output validation. Portable OpenMP, full OpenMP/TLS lifetime conformance, offload, MPI and coarrays remain unsupported. Serial and kit-managed multiprocess entries are distinguished from worker-thread execution.
-- The explicit scalar P/Invoke option remains limited. System mode adds tested C aggregate/varargs/data/callback bridges, but native C++ linkage, arbitrary callback signatures, native TLS globals and full native-runtime lifecycle remain incomplete.
-
-Unsupported cases should remain visible diagnostics or explicit runtime errors, never silent native fallbacks or claims of successful emulation.
+- ffmpeg's FATE suite is not run, and not every enabled decoder has a test fixture.
+- SPEC runs use explicitly selected inputs and are not reportable results.

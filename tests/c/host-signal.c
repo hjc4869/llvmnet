@@ -1,4 +1,4 @@
-/* A signal sent from outside the process reaches its handler (plan item LC-08): the program reports that it is
+/* A signal sent from outside the process reaches its handler: the program reports that it is
  * ready, waits for SIGTERM and exits normally from the handler's flag; the default action would end it with 143. */
 #include <signal.h>
 #include <stdio.h>

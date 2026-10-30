@@ -2,10 +2,9 @@
 # tags: core libc cpp aot
 # requires: clang++
 # timeout: 2400
-# Upstream libc++/libc++abi 22.1.8 on the musl port (CX-01, CX-07): a broad smoke program under JIT and
-# NativeAOT plus the existing C++ fixtures whose output does not depend on glibc/libstdc++ specifics, compared
-# with native clang++. Not covered here: random-device (libstdc++ "default" token), terminate (exits on purpose;
-# see cpp-terminate.sh), thread-local and exit order (thread-local.sh, exit-order.sh run them in portable mode).
+# libc++ and libc++abi on musl in portable mode: a broad smoke program under JIT and NativeAOT plus the C++
+# fixtures whose output does not depend on glibc or libstdc++, compared with native clang++. terminate,
+# thread-local and exit-order have their own tests.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"

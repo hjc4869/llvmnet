@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build musl 1.2.5 for the dotnet64-v2 ABI as LLVM bitcode (plan items LC-01, LC-15); the first step of
-# scripts/build-sysroot.sh, which installs the result as the toolchain's portable sysroot.
+# Build musl 1.2.5 for the dotnet64-v2 ABI as LLVM bitcode; the first step of scripts/build-sysroot.sh, which
+# installs the result as the toolchain's portable sysroot.
 #   scripts/build-portable-libc.sh [prefix]     default artifacts/sysroot-build/dotnet64-v2
 # Produces <prefix>/include (musl headers), <prefix>/lib/libc.a (bitcode archive), <prefix>/lib/crt1.o and
 # <prefix>/build/failures.tsv (one row per source file llvmnet could not compile, with the first error).
-# Upstream sources are not modified: arch/x86_64 is copied to arch/llvmnet and ports/musl is overlaid.
+# The build works on a copy of upstream: arch/x86_64 is copied to arch/llvmnet and ports/musl is overlaid.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 prefix="$(realpath -m "${1:-$root/artifacts/sysroot-build/dotnet64-v2}")"
@@ -41,8 +41,8 @@ flags=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -std=c99 -ffreesta
     -I"$tree/arch/llvmnet" -I"$tree/arch/generic" -I"$tree/obj/src/internal" -I"$tree/src/include"
     -I"$tree/src/internal" -I"$tree/obj/include" -I"$tree/include"
     -fexcess-precision=standard -fno-strict-aliasing -Wno-everything)
-# musl normally adds -frounding-math. The port uses the generic fenv (round-to-nearest only, no exception
-# flags), so it is omitted; with it clang emits constrained floating-point intrinsics llvmnet does not lower yet.
+# musl's -frounding-math is omitted: the port supports round-to-nearest only (src/fenv/llvmnet/fenv.c), and with it
+# clang emits constrained floating-point intrinsics that llvmnet does not lower.
 printf '%s\n' "${flags[@]}" >"$build/flags.txt"
 export LLVMNET_SKIP_BUILD=1 tree build root
 compile() {

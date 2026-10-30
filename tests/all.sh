@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Compatibility wrapper for the earlier sequential gates; new work should call tests/run.sh directly.
+# Runs a named test gate (default: core); tests/run.sh selects tests directly.
 #   core         -> tests/run.sh --tag core
 #   integration  -> tests/run.sh --tag core --tag integration
-#   spec-test    -> integration, then the licensed SPEC development runners and the video benchmark
+#   spec-test    -> integration, then the licensed SPEC development runners, and the video benchmark when
+#                   FFMPEG_TEST_VIDEO is set
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 mode="${1:-core}"

@@ -26,7 +26,7 @@ cp "$root/tests/ir/system/legacy-register-width.ll" "$output/registers.input"
 dotnet "$output/registers.dll"
 "$root/bin/llvmnet" --runtime=system --nativeaot "$output/registers.bc" -o "$output/registers-aot"
 "$output/registers-aot"
-# Portable mode follows the same register-slot rules (BE-39).
+# Portable mode follows the same register-slot rules.
 "$root/bin/llvmnet" --runtime=portable -x ir -O0 -c "$output/registers.input" -o "$output/registers-portable.bc"
 "$root/bin/llvmnet" --runtime=portable "$output/registers-portable.bc" -o "$output/registers-portable.dll"
 dotnet "$output/registers-portable.dll"

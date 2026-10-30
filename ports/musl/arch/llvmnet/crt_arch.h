@@ -1,2 +1,2 @@
-/* llvmnet port of musl: there is no ELF entry point. The emitted .NET entry method calls
- * __init_libc, the program's constructors, main and exit directly. */
+/* llvmnet port of musl: there is no ELF entry point. The emitted .NET entry method starts the program
+ * through __llvmnet_libc_main in crt/llvmnet-start.c. */

@@ -9,8 +9,8 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends ca-certificates curl git xz-utils file time
 if [[ ! -f /etc/apt/sources.list.d/microsoft-prod.list ]]; then
-    # The configuration package installs the repository together with Microsoft's current signing key;
-    # the older microsoft.asc key is rejected by trixie's apt signature policy.
+    # The configuration package installs the repository with Microsoft's current signing key, which trixie's apt
+    # signature policy accepts.
     curl -fsSL -o /tmp/packages-microsoft-prod.deb https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb
     dpkg -i /tmp/packages-microsoft-prod.deb
     rm /tmp/packages-microsoft-prod.deb
@@ -27,4 +27,4 @@ apt-get install -y --no-install-recommends "${packages[@]}"
 # NativeAOT invokes "clang" as its native compiler and linker; use the pinned LLVM release.
 ln -sfn /usr/bin/clang-22 /usr/local/bin/clang
 ln -sfn /usr/bin/clang++-22 /usr/local/bin/clang++
-# Package lists stay in place: scripts/install-libcxx-headers.sh uses "apt-get download" without root.
+# Package lists stay in place: scripts/install-system-openmp.sh uses "apt-get download" without root.

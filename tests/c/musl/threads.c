@@ -1,4 +1,4 @@
-/* musl threads over the host clone/futex layer (LC-02): creation, join values, mutexes, condition
+/* musl threads over the host clone/futex layer: creation, join values, mutexes, condition
  * variables, once, keys with destructors, __thread, detached threads, semaphores, rwlocks and barriers. */
 #include <pthread.h>
 #include <semaphore.h>

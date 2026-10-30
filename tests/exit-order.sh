@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tags: core cpp aot
 # requires: clang++
-# Termination order (BE-08) against native glibc: thread_local destructors, then atexit and __cxa_atexit
+# Termination order against native glibc: thread_local destructors, then atexit and __cxa_atexit
 # handlers interleaved in reverse registration order (including ones registered while exiting), then
 # destructor attributes by descending priority, for both return from main and exit().
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"

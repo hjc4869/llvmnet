@@ -4,7 +4,7 @@ using static LlvmNet.Runtime.Linux;
 
 namespace LlvmNet.Runtime;
 
-/// <summary>Paths, metadata, directories and links (plan item LC-06). Hard links are not available through .NET (EPERM).</summary>
+/// <summary>Paths, metadata, directories and links.</summary>
 public static unsafe partial class HostSyscalls
 {
     private static int fileCreationMask = 0x12;        // umask 022
@@ -138,7 +138,7 @@ public static unsafe partial class HostSyscalls
         FileSystemInfo? info = Target(path);
         if (info is null) return Unreachable(path);
         uint permissions = PermissionsOf(info, info is DirectoryInfo);
-        // The process owns every file it can see (LC-12), so the owner bits decide.
+        // The process owns every file it can see, so the owner bits decide.
         if ((mode & R_OK) != 0 && (permissions & 0x100) == 0 || (mode & W_OK) != 0 && (permissions & 0x80) == 0 ||
             (mode & X_OK) != 0 && (permissions & 0x40) == 0)
             return -EACCES;
@@ -295,7 +295,7 @@ public static unsafe partial class HostSyscalls
         return 0;
     }
 
-    /// <summary>Ownership cannot change: every file belongs to the one user and group (LC-12).</summary>
+    /// <summary>Ownership cannot change: every file belongs to the one user and group.</summary>
     private static long ChangeOwner(int directory, nint pathPointer, int user, int group)
     {
         string? path = PathOf(directory, pathPointer, out long error);

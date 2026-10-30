@@ -1,31 +1,28 @@
 # llvmnet
 
-Clang/Flang 22 -> LLVM IR -> unsafe .NET 10 CIL.
+llvmnet compiles C, C++ and Fortran through Clang and Flang 22 to LLVM bitcode, then translates the linked bitcode to unsafe .NET 10 CIL: a .NET assembly, a Unix launcher for one, or a NativeAOT executable. C, C++ and Fortran share one CIL backend, and the translated code runs as ordinary .NET methods.
 
-This is a working experimental compiler, not an emscripten-equivalent finished toolchain. C, C++, and Fortran share a direct CIL backend. Generated programs execute translated methods on .NET; they do not invoke native ffmpeg, interpret LLVM IR, or embed a WebAssembly engine.
-
-The initial focus is feature correctness and single-process execution. The supplied software ffmpeg profile builds with dav1d, libxml2, and zlib. It has decoded all 1,150 frames of the supplied 4K HDR HEVC video with the same active-pixel hashes as native clang. Representative SPEC development workloads run after that ffmpeg gate. See [docs/status.md](docs/status.md) for precise coverage and limitations.
-
-A relocatable clang/flang-style distribution, two explicit ABI modes, NativeAOT output, and ordinary SPEC harness configuration are now implemented. See [docs/toolchain.md](docs/toolchain.md) for contracts, deployment requirements, and current limits.
+The project is experimental. [docs/status.md](docs/status.md) summarizes what works and the known limitations; [docs/plan/README.md](docs/plan/README.md) tracks the work towards 1.0.
 
 ## Build
 
-Requirements for the current Linux toolchain:
+Requirements (Linux x86-64):
 
-- .NET 10 SDK and runtime.
-- LLVM/Clang/Flang 22, development headers, `libLLVM-22.so`, `llvm-config-22`, `opt-22`, `llvm-ar-22`, and `llvm-ranlib-22`.
-- Bash and a C++ compiler (`clang++-22`) for the compile-time LLVM bridge.
-- For dependency integration: CMake, Ninja, Meson, pkg-config, and initialized source checkouts.
+- .NET 10 SDK.
+- LLVM, Clang and Flang 22 with development files: `clang-22`, `clang++-22`, `flang-22`, `opt-22`, `llvm-config-22`, `llvm-ar-22`, `llvm-ranlib-22`, `llvm-nm-22` and `libLLVM-22.so`. On Debian 13, `scripts/ci/install-packages.sh` (run as root) installs everything the build and tests use.
+- Network access for the first build: the portable sysroot is built from pinned musl and LLVM sources that `scripts/fetch-sources.sh` downloads into `artifacts/vendor/`.
+- For the ffmpeg integration: CMake, Ninja, Meson and pkg-config.
 
 ```sh
-dotnet build -c Release
+bash scripts/ensure-built.sh
+mkdir -p artifacts
 bin/llvmnet tests/c/runtime.c -o artifacts/example.dll
 dotnet artifacts/example.dll payload
 ```
 
-Create the output directory first if it does not exist. Keep the emitted assembly, its runtime configuration, and the copied runtime/dependency assemblies together. LLVM and the compiler's native bridge are needed at compile time, not to run the result.
+`scripts/ensure-built.sh` builds the solution, including the compiler's C++ bridge to LLVM, and runs `scripts/build-sysroot.sh`, which rebuilds the sysroots only when their inputs change. Keep an emitted assembly together with the files the compiler writes next to it: its `.runtimeconfig.json`, `LlvmNet.Runtime.dll` and, in system mode, the native bridge `lib<name>.llvmnet-host.so`. LLVM and the bridge are needed to compile, not to run the result.
 
-## Compiler Modes
+## Use
 
 ```sh
 bin/llvmnet -O1 -c source.c -o source.o
@@ -39,99 +36,95 @@ bin/llvmnet -S -emit-llvm source.c -o source.ll
 bin/llvmnet main.c libexample.a --emit-llvm -o program.bc
 ```
 
-Objects and archives contain LLVM bitcode, not native object code. Explicit object files are linked eagerly; archive members are selected to satisfy unresolved symbols, with rescanning for inter-archive dependencies. `-lc` and `-lm` select managed exports in managed modes and real system libraries in system mode.
+Objects and archives contain LLVM bitcode. Explicit object files are always linked; archive members are linked when they resolve undefined symbols, with rescanning for dependencies between archives. `-lc`, `-lm`, `-lpthread`, `-ldl` and `-lrt` need no archive in either mode; portable mode also provides `-lc++` and the Fortran runtime.
 
-`--keep-ir linked.bc` preserves linked IR for investigation. `LLVMNET_TRACE=1` enables compiler exception traces. `LLVMNET_CLANG` and `LLVMNET_FLANG` override frontend executables. Use `bin/llvmnet --help` for the supported driver interface; it is not yet a complete clang/emcc flag replacement.
+`bin/llvmnet --help` lists the driver options. `--keep-ir linked.bc` keeps the linked bitcode, `LLVMNET_TRACE=1` prints compiler stack traces, and `LLVMNET_CLANG`, `LLVMNET_FLANG` and `LLVMNET_OPT` select other frontend executables. The driver is not a complete Clang replacement; [docs/toolchain.md](docs/toolchain.md#driver-contract) describes what it accepts.
 
-## Managed Versus Native Linking
+## Runtime Modes
 
-These are deliberately different operations:
+| Mode | ABI tag | C, C++ and Fortran libraries |
+| --- | --- | --- |
+| `portable` (default) | `dotnet64-v2` | musl 1.2.5, libc++/libc++abi and flang-rt 22.1.8 from `sysroot/dotnet64-v2`, compiled into the program's CIL; system services come from a host layer in `LlvmNet.Runtime` ([docs/dev/host-abi.md](docs/dev/host-abi.md)) |
+| `system` | `system-linux-x64-v1` | the host's glibc and other native libraries through generated native bridges; flang-rt built against glibc from `sysroot/system-linux-x64-v1` |
+
+```sh
+bin/llvmnet --runtime=portable program.cpp -o program.dll
+bin/llvmnet --runtime=system source.c --nativeaot -o program
+```
+
+Portable mode uses a fixed little-endian 64-bit ABI with its own headers, independent of the host's, and is meant to run the same image on any 64-bit .NET host. System mode uses the native Linux x86-64 SysV ABI. Every object, archive and managed reference in one program must come from the same mode; the linker rejects mixed or untagged inputs. [docs/toolchain.md](docs/toolchain.md#runtime-modes) defines both contracts, and [ports/musl](ports/musl/README.md) describes the musl port.
+
+## Managed and Native Linking
 
 ```sh
 bin/llvmnet --emit-library library.c -o Example.dll
 bin/llvmnet main.c --cil-reference Example.dll -o managed-client.dll
 
-bin/llvmnet -fno-builtin tests/c/native-import.c \
+bin/llvmnet --runtime=system -fno-builtin tests/c/native-import.c \
   --native-import 'abs=libc.so.6!abs' -o native-client.dll
 ```
 
-Managed references resolve public static methods annotated with `LlvmNet.Runtime.CExportAttribute`, also emitted on translated methods. Scalar signatures and native-width pointer values must match. Cross-assembly aggregate signatures are not yet a stable public ABI.
+`--cil-reference` resolves public static methods marked with `LlvmNet.Runtime.CExportAttribute`, which llvmnet emits on translated functions. Scalar and pointer signatures must match; aggregate signatures across assemblies are not yet a stable ABI.
 
-The explicit `--native-import` path creates opt-in P/Invoke declarations, one symbol mapping per argument. Only non-variadic scalar C signatures are supported by this path; aggregate/by-value/sret signatures are rejected. This path does not supply native callbacks or native data imports. There is no implicit native-library fallback in the managed modes.
+In system mode, calls to native libraries go through LLVM-generated bridges that support C structures, varargs, native data and scalar callbacks; `--system-library` adds a native library. `--native-import` maps one symbol to an explicit P/Invoke declaration with a non-variadic scalar signature. Portable mode rejects both options. Native C++ library interchange is not supported.
 
-That restriction applies to the explicit scalar `--native-import` path. The newer `--runtime=system` mode uses LLVM-generated native ABI bridges and supports tested C struct/varargs calls, native data imports, and scalar callbacks. Native C++ library ABI interchange remains unsupported.
-
-## Deploy and Select an ABI
+## Deploy
 
 ```sh
 bash scripts/package-toolchain.sh /path/toolchain --self-contained --bundle-llvm
+/path/toolchain/bin/llvmnet-clang source.c -o program.dll
+/path/toolchain/bin/llvmnet-clang++ source.cpp -o cpp.dll
+/path/toolchain/bin/llvmnet-flang source.f90 -o fortran.dll
 /path/toolchain/bin/llvmnet-clang --runtime=system source.c --nativeaot -o program
-/path/toolchain/bin/llvmnet-clang --runtime=portable source.c -o portable.dll
-/path/toolchain/bin/llvmnet-clang++ --runtime=portable source.cpp -o cpp.dll
-/path/toolchain/bin/llvmnet-flang --runtime=portable source.f90 -o fortran.dll
 ```
 
-`system` uses the native Linux x86-64 ABI and libc/pthread interfaces. `portable` uses the versioned `dotnet64-v2` ABI with musl, libc++ and flang-rt from the toolchain sysroot (see below). `portable` is the default; the earlier `managed-host` mode was removed. Objects and managed references from different modes are rejected.
+An output name without `.dll` produces a Unix launcher script plus a `<name>.llvmnet/` payload directory. `--nativeaot` produces a native executable that includes the .NET runtime; publishing it needs the .NET 10 SDK and a native linker. Portable images are intended to run on any little-endian 64-bit .NET host; only Linux x86-64 is tested.
 
-Outputs without `.dll` are ordinary Unix executable launchers plus a payload directory; `--nativeaot` produces a native executable with .NET runtime code included. NativeAOT publishing needs the .NET 10 SDK and native linker even when the compiler installation is self-contained. Cross-platform execution of portable CIL is a release goal with a fixed ABI, but has only been tested on Linux x86-64 so far.
+## Diagnostics
+
+- Errors carry `file:line:col` when the input has debug information (`-g` or `-gline-tables-only`), the function name and the LLVM instruction. The linked IR is kept as `<output>.failed.bc`. Exit codes: 1 compilation error, 2 usage error, 3 internal compiler error.
+- `--diagnose-limits` reports each function's IL size and locals and flags functions the JIT compiles without optimization.
+- `--check-indirect-calls` checks every indirect call against its target's signature; see [docs/dev/calling-convention.md](docs/dev/calling-convention.md).
+- [docs/user/support-matrix.md](docs/user/support-matrix.md) lists which LLVM types, instructions and intrinsics are translated.
 
 ## Tests and Workloads
 
 ```sh
-tests/run.sh --tag core                     # PR gate; tests/run.sh --list shows every test
-tests/run.sh --tag core --tag toolchain     # plus packaging and isolated deployment
-tests/run.sh --tag integration              # pinned ffmpeg and dependencies, fetched by scripts/fetch-sources.sh
+tests/run.sh --list                         # every test with its tags and prerequisites
+tests/run.sh --tag core                     # compiler and runtime regressions
+tests/run.sh --tag core --tag toolchain     # plus packaging and deployment
+tests/run.sh --tag integration              # zlib, libxml2, dav1d and ffmpeg from pinned sources
+tests/run.sh --tag conformance              # musl libc-test, the libc++ suite, FCVS and gfortran tests
 dotnet test tests/LlvmNet.UnitTests -c Release
-
-bash scripts/build-ffmpeg.sh
-bash tests/codecs.sh
-bash tests/codecs-extended.sh
-bash tests/manifests.sh
-FFMPEG_THREADS_AOT=1 bash tests/ffmpeg-threads.sh
-bash tests/wasm-simd128.sh
-bash scripts/benchmark-video.sh
-
-bash scripts/spec-mcf.sh test
-bash scripts/spec-mcf.sh refrate
-bash scripts/spec-deepsjeng.sh test
-bash scripts/spec-exchange2.sh test
-bash scripts/spec-zstd.sh
-bash scripts/spec-lbm.sh 2017 test
-bash scripts/spec-lbm.sh 2026 test
 ```
 
-Run `scripts/build-dependencies.sh` before the full ffmpeg build. Its defaults use the supplied LightPlayer-Packages checkout and cached zlib 1.3.2. Override `LIGHTPLAYER_PACKAGES`, `FFMPEG_SOURCE`, `LLVMNET_DEPS_PREFIX`, or `ZLIB_SOURCE` when needed. The smaller [scripts/build-ffmpeg-core.sh](scripts/build-ffmpeg-core.sh) is useful for backend bring-up.
+The runner builds once, runs tests in parallel and writes per-test logs, `summary.tsv` and JUnit `results.xml` under `artifacts/tests/results/`. Tests whose prerequisites are missing are reported as skipped. [CONTRIBUTING.md](CONTRIBUTING.md) explains how to add tests.
 
-The full ffmpeg profile enables pthreads. Select `LLVMNET_RUNTIME=system` or `LLVMNET_RUNTIME=portable` for both dependency and ffmpeg builds; their default outputs are isolated by ABI. Add `FFMPEG_SIMD128=1` to the ffmpeg build for HEVC SIMD128 through .NET vectors, with separate `-simd128` outputs. The decoder accepts `input [frame-limit] [video|audio] [threads:1-64] [auto|frame|slice] [hash|bench]`; `bench` skips hashing. See [docs/ffmpeg-threading.md](docs/ffmpeg-threading.md), [docs/simd128.md](docs/simd128.md), and [the six-video before/after measurements](docs/video-simd128-performance.md). JIT SIMD improves throughput; baseline NativeAOT SIMD currently regresses, while explicit host-targeted AOT improves it.
-
-Build outputs, generated media, and locally extracted SPEC materials stay under ignored `artifacts/`. The scripts do not modify the original source checkouts or mounted SPEC kits. SPEC development scripts stage only the relevant licensed benchmark archives. A standard harness runner and configuration are also available via [scripts/spec-harness.sh](scripts/spec-harness.sh). These checks are not full-suite SPEC-reportable runs or scores.
-
-The runner builds once, runs tests in parallel, and writes per-test logs, `summary.tsv` and JUnit `results.xml` under `artifacts/tests/results/`. `tests/all.sh` and `tests/toolchain-all.sh` remain as wrappers. A private local video gate runs when `FFMPEG_TEST_VIDEO` names a file.
-
-## Diagnostics and Debugging Options
-
-- Errors carry `file:line:col` when the input has debug information (`-g` or `-gline-tables-only`), the function name and the LLVM instruction; the linked IR is kept next to the output as `<output>.failed.bc`. Exit codes: 1 compilation error, 2 usage error, 3 internal compiler error.
-- `--diagnose-limits` reports per-function IL size and locals and flags functions the JIT will compile with minimal optimization.
-- `--check-indirect-calls` verifies every indirect call against its target's signature; see [docs/dev/calling-convention.md](docs/dev/calling-convention.md).
-- [docs/user/support-matrix.md](docs/user/support-matrix.md) lists which LLVM types, instructions and intrinsics are translated.
-
-## Portable C, C++ and Fortran Runtimes
-
-Portable programs (`--runtime=portable`, ABI tag `dotnet64-v2`) use unmodified musl 1.2.5, libc++/libc++abi and flang-rt 22.1.8, compiled to LLVM bitcode by llvmnet itself and installed as the toolchain's sysroot `sysroot/dotnet64-v2`. The libraries reach the operating system only through a small host layer in `LlvmNet.Runtime` ([docs/dev/host-abi.md](docs/dev/host-abi.md)). `scripts/ensure-built.sh` builds the sysroot (about 35 seconds) and rebuilds it only when its inputs change; see [ports/musl](ports/musl/README.md) for the port.
+The ffmpeg profile (`config/ffmpeg-browser.sh`) builds ffmpeg with dav1d, libxml2 and zlib and a decode harness, `tests/ffmpeg/decode.c`:
 
 ```sh
-bash scripts/build-sysroot.sh              # normally run by scripts/ensure-built.sh
-bin/llvmnet --runtime=portable program.cpp -o program.dll
+LLVMNET_RUNTIME=system bash scripts/build-dependencies.sh
+LLVMNET_RUNTIME=system bash scripts/build-ffmpeg.sh
+dotnet artifacts/ffmpeg-browser-system/decode.dll input.mp4 10
+FFMPEG_TEST_VIDEO=/path/video.mp4 tests/run.sh video
 ```
 
-Objects built for the earlier `dotnet64-v1` headers are rejected at link time; recompile them.
+`LLVMNET_RUNTIME` is `portable` (default) or `system`; outputs go to separate per-mode directories under `artifacts/`. `FFMPEG_SIMD128=1` builds the HEVC SIMD128 kernels ([docs/simd128.md](docs/simd128.md)). The harness accepts `input [frame-limit] [video|audio] [threads:1-64] [auto|frame|slice] [hash|bench]`; see [docs/ffmpeg-threading.md](docs/ffmpeg-threading.md) and [docs/video-simd128-performance.md](docs/video-simd128-performance.md). `scripts/build-ffmpeg-core.sh` builds a smaller profile.
 
-## Safety and Portability
+SPEC CPU 2017 and 2026 run through the ordinary `runcpu` harness with [config/spec/llvmnet.cfg](config/spec/llvmnet.cfg) and [scripts/spec-harness.sh](scripts/spec-harness.sh); see [docs/toolchain.md](docs/toolchain.md#standard-spec-configuration), [docs/spec-coverage.md](docs/spec-coverage.md) and [docs/spec-portable-limitations.md](docs/spec-portable-limitations.md). Licensed kits, generated media and build outputs stay under the ignored `artifacts/` directory.
 
-Generated code is intentionally unsafe and is not a sandbox. C pointers, invalid memory accesses, or untrusted programs can corrupt memory or terminate the process. Only compile and execute code you trust.
+## Safety
 
-Host-ABI modes target Linux/x86-64 SysV. Portable mode uses a fixed little-endian 64-bit .NET ABI with owned headers and runtime structures, not host headers. None of the modes is a sandbox or a complete libc/POSIX implementation. See [docs/toolchain.md](docs/toolchain.md), [docs/architecture.md](docs/architecture.md), and [docs/roadmap.md](docs/roadmap.md).
+Generated code is unsafe and is not a sandbox: invalid pointers or untrusted programs can corrupt memory or terminate the process. Compile and run only code you trust. Neither mode is a complete libc or POSIX implementation; [docs/status.md](docs/status.md) lists the gaps.
+
+## Documentation
+
+- [docs/toolchain.md](docs/toolchain.md): installation, driver, runtime modes and ABI contracts, SPEC configuration.
+- [docs/architecture.md](docs/architecture.md): how LLVM IR becomes CIL.
+- [docs/status.md](docs/status.md): current coverage and limitations.
+- [docs/plan/README.md](docs/plan/README.md): production-readiness plan.
+- [docs/dev/](docs/dev/): host interface, calling convention, C++ exception bridge, versioning, artifact layout.
 
 ## License
 
-llvmnet is licensed under the Apache License v2.0 with LLVM Exceptions, the same license as the LLVM project. See [LICENSE.TXT](LICENSE.TXT). Bundled and redistributed third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Contributions are accepted under the same license; see [CONTRIBUTING.md](CONTRIBUTING.md).
+llvmnet is licensed under the Apache License v2.0 with LLVM Exceptions, the same license as the LLVM project; see [LICENSE.TXT](LICENSE.TXT). Third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Contributions are accepted under the same license; see [CONTRIBUTING.md](CONTRIBUTING.md).

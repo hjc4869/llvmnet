@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # tags: toolchain cpp
 # requires: clang++
-# Causes of portable SPEC failures recorded in docs/spec-portable-limitations.md. Most were gaps of the
-# hand-written C library and disappeared with musl and libc++ in the sysroot (LC-23): those probes must now
-# build and exit like their native builds. The causes that remain must still fail with their diagnostic.
+# Causes of portable SPEC failures recorded in docs/spec-portable-limitations.md: resolved causes must build and
+# exit like their native builds, and the remaining ones must still fail with their diagnostic.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/portable-spec-causes"
@@ -41,17 +40,17 @@ expect_failure() {
 for header in sys/ioctl.h sys/param.h complex.h locale.h malloc.h sys/resource.h; do
     resolved "header-${header//\//-}" clang-22 "$root/tests/c/portable-spec-header.c" "-DPROBE_HEADER=<$header>"
 done
-# Not part of a C library: Linux kernel headers, BSD machine headers and OpenMP (FT-08).
+# Not part of a C library: Linux kernel headers, BSD machine headers and OpenMP.
 for header in linux/limits.h machine/endian.h omp.h; do
     expect_failure "header-${header//\//-}" "'$header' file not found" \
         "$llvmnet" --runtime=portable -c "-DPROBE_HEADER=<$header>" "$root/tests/c/portable-spec-header.c" -o header.o
 done
-# system, dup2, freopen, hypotl, cexp, and SPEC's pthread stubs (sys/types.h now declares the pthread types, as glibc does).
+# system, dup2, freopen, hypotl, cexp, and SPEC's pthread stubs, which need sys/types.h to declare the pthread types as glibc does.
 for probe in 1 2 3 4 5; do
     resolved "c-$probe" clang-22 "$root/tests/c/portable-spec-missing.c" "-DPROBE=$probe"
 done
 resolved c-7 clang-22 "$root/tests/c/portable-spec-missing.c" -DPROBE=7 -DSPEC
-# A call through a prototype that contradicts the C library's declaration is rejected, not miscompiled (BE-18).
+# A call through a prototype that contradicts the C library's declaration is rejected, not miscompiled.
 expect_failure c-9 'Incompatible direct call signature for open' \
     "$llvmnet" --runtime=portable -O0 -fno-builtin -DPROBE=9 "$root/tests/c/portable-spec-missing.c" -o probe.dll
 expect_failure openmp 'Unresolved function: __kmpc_fork_call' \

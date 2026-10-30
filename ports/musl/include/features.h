@@ -1,7 +1,6 @@
 /* llvmnet port of musl: upstream include/features.h with one addition. As in glibc, _GNU_SOURCE also selects the
- * LFS64 names (stat64, off64_t, open64...), which musl 1.2.4 and later declare only for _LARGEFILE64_SOURCE; Linux
- * software written against glibc, such as SPEC CPU's omnetpp, uses them. On LP64 they are aliases of the
- * standard names. */
+ * LFS64 names (stat64, off64_t, open64...), which musl declares only for _LARGEFILE64_SOURCE and which software
+ * written against glibc uses. On LP64 they are aliases of the standard names. */
 #ifndef _FEATURES_H
 #define _FEATURES_H
 

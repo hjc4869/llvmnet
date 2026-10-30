@@ -21,7 +21,7 @@ if "$llvmnet" "$output/rejected.bc" -o "$output/rejected.dll" > "$output/used-vo
     exit 1
 fi
 grep -q 'Incompatible direct call signature' "$output/used-void-return.log"
-# Link inputs must carry an ABI tag; untagged IR is rejected with guidance (ADR-04).
+# Link inputs must carry an ABI tag; untagged IR is rejected with guidance.
 if "$llvmnet" "$root/tests/ir/switch.ll" -o "$output/untagged.dll" > "$output/untagged.log" 2>&1; then
     printf 'FAIL: untagged LLVM IR was accepted as a link input\n' >&2
     exit 1

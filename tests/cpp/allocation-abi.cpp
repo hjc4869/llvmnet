@@ -1,4 +1,4 @@
-// C++ allocation ABI details (CX-09): a program's own operator new and delete replace the library's, sized and
+// C++ allocation ABI details: a program's own operator new and delete replace the library's, sized and
 // aligned forms are called, and an allocation the C library refuses throws std::bad_alloc. Pointers escape through
 // sink so that the compiler cannot elide the allocations, which the standard permits.
 #include <cstdint>

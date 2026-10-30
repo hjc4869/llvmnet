@@ -1,4 +1,4 @@
-/* Host interface conformance (plan item LC-14): results and errno values of the system services the portable
+/* Host interface conformance: results and errno values of the system services the portable
  * host layer provides, for success and error cases. The program runs natively and in portable mode in an
  * empty scratch directory; both outputs must be identical, because the host implements Linux semantics.
  * Values that legitimately differ between runs (times, sizes, ids) are reduced to facts that do not. */
@@ -287,7 +287,7 @@ static void filesystem(void)
     chmod("list", 0755);
     CHECK("opendir a file", opendir("moved") ? 0 : -1);
     CHECK("opendir missing", opendir("missing") ? 0 : -1);
-    /* A trailing slash names a directory and repeated slashes act as one (cppcheck's plist output directory). */
+    /* A trailing slash names a directory and repeated slashes act as one. */
     CHECK("mkdir with a trailing slash", mkdir("slashed/", 0755));
     CHECK("mkdir it again", mkdir("slashed/", 0755));
     CHECK("stat directory with a trailing slash", stat("slashed/", &metadata));

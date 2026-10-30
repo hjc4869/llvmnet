@@ -1,7 +1,7 @@
 namespace LlvmNet.Runtime;
 
 /// <summary>
-/// Process termination work in native order (BE-08): atexit and __cxa_atexit handlers share one list and
+/// Process termination work in native order: atexit and __cxa_atexit handlers share one list and
 /// run in reverse registration order, including handlers registered while exiting; .fini_array functions
 /// (destructor attributes, llvm.global_dtors) run afterwards, in reverse of their ascending-priority registration.
 /// </summary>

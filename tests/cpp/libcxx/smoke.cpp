@@ -1,4 +1,4 @@
-// Upstream libc++ on musl (CX-01 spike): containers, algorithms, strings and streams, regex, filesystem,
+// libc++ on musl: containers, algorithms, strings and streams, regex, filesystem,
 // threads, futures, formatting, smart pointers, exceptions and RTTI. Output is library-independent so native
 // clang++ with libstdc++ serves as the oracle.
 #include <algorithm>

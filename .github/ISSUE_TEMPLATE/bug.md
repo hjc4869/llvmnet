@@ -8,7 +8,7 @@ labels: bug
 
 ## Reproducer
 
-<!-- Smallest C, C++, Fortran or LLVM IR input. Attach `--keep-ir` output if the input cannot be shared. -->
+<!-- Smallest C, C++, Fortran or LLVM IR input. For a compile failure, attach the `<output>.failed.bc` llvmnet keeps; otherwise `--keep-ir` output if the input cannot be shared. -->
 
 ```sh
 llvmnet --runtime=portable repro.c -o repro.dll
@@ -24,4 +24,4 @@ dotnet repro.dll
 - `llvmnet --version`:
 - `dotnet --info` runtime version:
 - OS and architecture:
-- Runtime mode and execution (JIT or NativeAOT):
+- Runtime mode (portable or system) and execution (JIT or NativeAOT):

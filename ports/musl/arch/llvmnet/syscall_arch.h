@@ -1,6 +1,6 @@
-/* llvmnet port of musl: system calls go to the managed host layer instead of the kernel.
- * The host implements Linux x86-64 system call numbers and semantics over .NET APIs
- * (src/LlvmNet.Runtime/HostSyscalls.cs), so musl's C code is used unchanged. */
+/* llvmnet port of musl: system calls go to the managed host layer, which implements Linux x86-64
+ * system call numbers and semantics over .NET APIs (src/LlvmNet.Runtime/Host/HostSyscalls.cs),
+ * so musl's C code is used unchanged. */
 #define __SYSCALL_LL_E(x) (x)
 #define __SYSCALL_LL_O(x) (x)
 

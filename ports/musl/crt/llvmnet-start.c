@@ -1,4 +1,4 @@
-/* Process start for musl in the portable sysroot (replaces crt1.o). The emitted .NET entry method builds a
+/* Process start for musl in the portable sysroot, installed as crt1.o. The emitted .NET entry method builds a
  * Linux-style argv/envp/auxv vector and calls __llvmnet_libc_main; musl then owns initialization,
  * atexit handlers, stdio flushing and exit, exactly as with a native static link. */
 void __init_libc(char **envp, char *program_name);

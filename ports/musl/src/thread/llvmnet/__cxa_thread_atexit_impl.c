@@ -1,7 +1,7 @@
-/* llvmnet port of musl: the C++ thread_local destructor registry that glibc provides and musl 1.2.5 lacks
- * (plan item CX-12). libc++abi is built with HAVE___CXA_THREAD_ATEXIT_IMPL, so __cxa_thread_atexit calls
- * this function. Destructors run in reverse order of registration: for the main thread at the start of
- * exit(), before atexit handlers and static destructors, and for other threads when they exit. */
+/* llvmnet port of musl: the C++ thread_local destructor registry that glibc provides and musl 1.2.5 lacks.
+ * libc++abi is built with HAVE___CXA_THREAD_ATEXIT_IMPL, so __cxa_thread_atexit calls this function.
+ * Destructors run in reverse order of registration: for the main thread at the start of exit(), before
+ * atexit handlers and static destructors, and for other threads when they exit. */
 #include <stdlib.h>
 #include <pthread.h>
 #include "libc.h"

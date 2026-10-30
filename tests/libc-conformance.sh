@@ -2,7 +2,7 @@
 # tags: conformance libc
 # requires: python3
 # timeout: 7200
-# musl's libc-test (LC-19) in portable mode: the functional, regression, math and musl-internal tests, plus the
+# musl's libc-test in portable mode: the functional, regression, math and musl-internal tests, plus the
 # api headers check, each built against the portable sysroot with llvmnet and statically against native musl 1.2.5
 # (scripts/musl-native-cc.sh). A test passes when it exits with 0; a test counts when it passes natively, so the
 # pass rate measures parity with native musl. Tests that need dynamic loading (dlopen, DSOs) are not built, and

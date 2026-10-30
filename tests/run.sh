@@ -11,11 +11,11 @@
 #   --no-build         use the existing build
 #   --timeout-scale F  multiply every per-test timeout by F (for slow machines)
 #
-# Test header keys (comment lines near the top of each script):
+# Test header keys (comment lines within the first 15 lines of each script):
 #   # tags: core cpp aot        selection tags
 #   # requires: flang openmp    prerequisites; missing ones make the test SKIP with a reason
 #   # serial: 20                run alone, after the parallel phase, ordered by this number
-#   # after: codecs             skip when a selected prerequisite test did not pass in this run
+#   # after: codecs             serial tests only: skip when a selected prerequisite did not pass in this run
 #   # timeout: 1800             seconds (default 1200)
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
         --list) list=1; shift ;;
         --no-build) build=0; shift ;;
         --timeout-scale) scale="$2"; shift 2 ;;
-        -h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) printf 'Unknown option %s\n' "$1" >&2; exit 2 ;;
         *) names+=("$1"); shift ;;
     esac

@@ -55,7 +55,7 @@ entry:
   ret i32 %result
 }
 
-; Fortran passes character(1) by value as [1 x i8] where C takes char (BE-40).
+; Fortran passes character(1) by value as [1 x i8] where C takes char.
 define i32 @byte_array_argument([1 x i8] %value) noinline {
 entry:
   %byte = extractvalue [1 x i8] %value, 0

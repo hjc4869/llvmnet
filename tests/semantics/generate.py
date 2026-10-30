@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Generate LLVM IR semantics probes (plan items BE-11 and BE-12).
+"""Generate LLVM IR semantics probes.
 
 Each probe is a noinline optnone function taking and returning bit patterns, so neither the native
 pipeline nor llvmnet can fold it. main() calls every probe with edge-case operands and prints
-"<case> <64-bit chunks of the result, least significant first>". The natively compiled module is the oracle. Undefined behavior and poison
-(division by zero, signed overflow in sdiv, shift amounts >= width, out-of-range fptoi) is never
-generated. NaN results are canonicalized except for the bitwise fneg/fabs/copysign, because LLVM does
-not specify NaN payloads or signs for other operations; the sign of a zero minnum/maxnum result is
-likewise unspecified and cleared.
+"<case> <64-bit chunks of the result, least significant first>". The natively compiled module is the
+oracle. Undefined behavior and poison (division by zero, signed overflow in sdiv, shift amounts >= width,
+out-of-range fptoi) is never generated. NaN results are canonicalized except for the bitwise
+fneg/fabs/copysign, because LLVM does not specify NaN payloads or signs for other operations; the sign of
+a zero minnum/maxnum result is likewise unspecified and cleared.
 
 Usage: generate.py <output-directory> [abi]   writes integer.ll, float.ll, extended.ll and cases.tsv
 """

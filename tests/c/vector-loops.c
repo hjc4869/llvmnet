@@ -1,4 +1,4 @@
-/* Loop shapes that LLVM's loop and SLP vectorizers transform (BE-31). Results are printed as checksums;
+/* Loop shapes that LLVM's loop and SLP vectorizers transform. Results are printed as checksums;
  * native clang with the same flags is the oracle. */
 #include <stdint.h>
 #include <stdio.h>

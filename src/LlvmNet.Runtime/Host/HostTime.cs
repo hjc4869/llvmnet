@@ -5,8 +5,7 @@ using static LlvmNet.Runtime.Linux;
 namespace LlvmNet.Runtime;
 
 /// <summary>
-/// Clocks, sleeping and entropy (plan items LC-09, LC-11). .NET has no per-thread CPU clock, so
-/// CLOCK_THREAD_CPUTIME_ID reports the process's CPU time. Time zones come from TZ and the zoneinfo files musl reads.
+/// Clocks, sleeping and entropy. .NET has no per-thread CPU clock, so CLOCK_THREAD_CPUTIME_ID reports the process's CPU time.
 /// </summary>
 public static unsafe partial class HostSyscalls
 {
@@ -50,10 +49,9 @@ public static unsafe partial class HostSyscalls
     }
 
     /// <summary>
-    /// The Stopwatch timestamp a wait of the given length ends at. Thread.Sleep and Monitor.Wait count whole milliseconds
-    /// and can return before the time has passed, while sleeps and futex waits must last at least their timeout: libc++'s
-    /// condition_variable::wait_for reports an early return as no timeout, and a caller that waits for a timeout then
-    /// waits forever. Waits therefore repeat until this deadline has passed.
+    /// The Stopwatch timestamp a wait of the given length ends at. Thread.Sleep and Monitor.Wait can return early, but
+    /// sleeps and futex waits must last at least their timeout (libc++'s condition_variable::wait_for treats an early
+    /// return as no timeout), so waits repeat until this deadline has passed.
     /// </summary>
     private static long DeadlineAfter(TimeSpan wait) =>
         Stopwatch.GetTimestamp() + (long)Math.Clamp(wait.TotalSeconds * Stopwatch.Frequency, 0, long.MaxValue / 2);

@@ -31,7 +31,7 @@ while IFS=$'\t' read -r benchmark previous remainder; do
     [[ "$benchmark" != benchmark && "$previous" != PASS && "$benchmark" == $pattern ]] || continue
     if [[ ! "$benchmark" =~ ^[0-9]{3}\.[A-Za-z0-9_-]+$ ]]; then exit 2; fi
     suite="$root/artifacts/spec2026-harness"
-    if [[ "$benchmark" == [56]* && "$benchmark" != 998.* && "$benchmark" != 999.* ]]; then suite="$root/artifacts/spec2017-harness"; fi
+    if [[ -d "$root/artifacts/spec2017-harness/benchspec/CPU/$benchmark" ]]; then suite="$root/artifacts/spec2017-harness"; fi
     threads=1
     if [[ "$benchmark" == *_s ]]; then threads=4; fi
     profile=serial

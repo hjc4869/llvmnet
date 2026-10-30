@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # tags: core libc aot
 # timeout: 2400
-# Behavior of the portable C library against the same programs linked with native musl 1.2.5: a corpus of printf,
-# scanf and strtod conversions (LC-20) and a thread lifecycle stress test with 10,000 threads (LC-22), under JIT
-# and NativeAOT. musl is the same C code in both builds, so any difference is a translation or host-layer bug.
+# The portable C library against the same programs linked with native musl 1.2.5, under JIT and NativeAOT: a
+# corpus of printf, scanf and strtod conversions and a thread lifecycle stress test. musl is the same C code in
+# both builds, so any difference is a translation or host-layer bug.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"

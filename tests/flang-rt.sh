@@ -2,10 +2,9 @@
 # tags: core libc fortran aot
 # requires: flang
 # timeout: 3600
-# Upstream flang-rt 22.1.8 on musl and libc++ (FT-01, FT-05): every single-file Fortran fixture is compiled with
-# llvmnet against flang-rt and compared with native Flang, plus one NativeAOT build. Excluded: fixtures needing
-# extra sources or OpenMP flags (arithmetic, concurrent, module-main, portable-interop); default-integer-8 is built
-# with -fdefault-integer-8 in both modes, whose i64 main and register-width call need BE-39.
+# flang-rt on musl and libc++ in portable mode: every single-file Fortran fixture must exit and print like its
+# native Flang build, and namelist also under NativeAOT. Fixtures that need extra sources or OpenMP flags are left
+# out; default-integer-8 is built with -fdefault-integer-8 in both modes.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"

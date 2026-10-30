@@ -1,4 +1,4 @@
-/* Thread lifecycle stress (plan item LC-22): 10,000 threads created and joined in batches of 64, detached threads
+/* Thread lifecycle stress: 10,000 threads created and joined in batches of 64, detached threads
  * that are still running when main returns, pthread_once under contention, thread-specific data destructors,
  * and timed condition waits. Prints totals that must equal the native build's. */
 #include <errno.h>

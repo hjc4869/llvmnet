@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build libllvmnet-llvm.so, the compiler's small C++ bridge to LLVM, into the directory given as $1.
-# Invoked by the BuildLlvmBridge MSBuild target. Rebuilds only when the sources, this script, the
-# compiler or the LLVM installation change (content hash, not timestamps).
+# Invoked by the BuildLlvmBridge MSBuild target. Rebuilds only when a hash of the sources, this script, the C++
+# compiler path and the LLVM configuration changes.
 #   LLVM_CONFIG   llvm-config of LLVM 22 (default: llvm-config-22)
 #   LLVMNET_CXX   C++ compiler (default: clang++-22)
 #   LLVMNET_NATIVE_BUILD=cmake   build through native/CMakeLists.txt instead of a direct compile

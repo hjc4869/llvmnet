@@ -1,18 +1,16 @@
-# Deployable Toolchain and ABI Modes
+# Toolchain and ABI Modes
 
 ## Installation
 
-The Linux distribution has conventional compiler entry points:
+`scripts/package-toolchain.sh` installs a relocatable Linux x86-64 toolchain:
 
-- `bin/llvmnet-clang`, `bin/llvmnet-clang++`, `bin/llvmnet-flang`.
-- `bin/llvmnet-ar`, `bin/llvmnet-ranlib`, `bin/llvmnet-nm` for bitcode objects.
-- `bin/llvmnet` for extension-based frontend selection.
-- `lib/llvmnet/` for the compiler and its managed runtime libraries.
-- `libexec/llvm/` for optional bundled LLVM, Clang, Flang, builtin headers, and intrinsic Fortran modules.
-- `sysroot/dotnet64-v2/` for the portable sysroot: musl, libc++, libc++abi and flang-rt headers and LLVM bitcode archives, built by `scripts/build-sysroot.sh`; `sysroot/simd128/` for the SIMD128 header.
-- `share/llvmnet/` for documentation, SPEC configuration, and redistribution notices.
-
-Build a thin installation or bundle the compiler's .NET runtime and LLVM tools:
+- `bin/llvmnet-clang`, `bin/llvmnet-clang++`, `bin/llvmnet-flang`: compiler entry points.
+- `bin/llvmnet`: selects the frontend from each input's extension.
+- `bin/llvmnet-ar`, `bin/llvmnet-ranlib`, `bin/llvmnet-nm`: LLVM's archive and symbol tools for bitcode objects.
+- `lib/llvmnet/`: the compiler, its LLVM bridge and the runtime assembly.
+- `libexec/llvm/`: bundled LLVM, Clang and Flang executables, libraries, Clang resource headers and Flang intrinsic modules (with `--bundle-llvm`).
+- `sysroot/dotnet64-v2/`: the portable sysroot (musl, libc++, libc++abi and flang-rt headers and bitcode archives, and compiler-rt's complex arithmetic builtins); `sysroot/system-linux-x64-v1/`: flang-rt built against glibc for system mode; `sysroot/simd128/`: the SIMD128 header. `scripts/build-sysroot.sh` builds the first two.
+- `share/llvmnet/`: documentation, the SPEC configuration (`share/llvmnet/spec/`), license and third-party notices, and the Debian copyright files of bundled LLVM packages.
 
 ```sh
 bash scripts/package-toolchain.sh /path/to/prefix
@@ -20,84 +18,38 @@ bash scripts/package-toolchain.sh /path/to/prefix --self-contained --bundle-llvm
 export PATH=/path/to/prefix/bin:$PATH
 ```
 
-The bundled distribution was tested after relocation and with `dotnet`, `clang`, and `flang` absent from `PATH`. It still requires a compatible Linux x86-64 host, Bash, ordinary shell utilities, and the OS libraries needed by LLVM/.NET. `--self-contained` refers to the compiler process, not an entirely static Linux binary. Do not mix independently copied LLVM library images; its aliases must resolve to one library instance.
+`--self-contained` bundles the compiler's .NET runtime and `--bundle-llvm` the LLVM tools, so the installation needs neither `dotnet` nor LLVM on `PATH`; `tests/deployment.sh` checks this. It still needs a compatible Linux x86-64 host, Bash, ordinary shell utilities and the OS libraries LLVM and .NET load. Copy a bundled LLVM as a whole: its library aliases must resolve to one library instance.
 
-NativeAOT publishing additionally requires the .NET 10 SDK/NativeAOT packages and the target's native linker/development libraries. They are not part of the compiler bundle yet. A produced NativeAOT executable does not need an installed `dotnet` command.
+Publishing NativeAOT executables additionally needs the .NET 10 SDK with its NativeAOT packages and the target's native linker and development libraries, which the package does not include. A NativeAOT executable does not need `dotnet` to run.
 
-The package builder obtains pinned libc++ 22.1.8 headers from the Debian package repository without administrator privileges, preserves their notices, and builds the owned support sources as ABI-tagged LLVM bitcode. This is an initial libc++ subset, not the complete libc++ library: containers/algorithms and the tested exception classes work; localization, filesystem, timezone database, and many out-of-line facilities are not provided.
+`cmake/llvmnet.cmake` and `meson/llvmnet.ini` configure CMake and Meson projects to build with `bin/llvmnet` and LLVM's archiver; `scripts/build-dependencies.sh` uses them.
 
 ## Driver Contract
 
-Frontend flags such as `-O0` through `-O3`, `-g`, `-std=`, `-D`, `-U`, `-I`, `-isystem`, warning flags, `-pthread`, and Fortran module flags are forwarded to Clang/Flang where compatible. `-c`, `-E`, `-S -emit-llvm`, `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, joined/separate `-o`, response files, and relocatable `-r` are implemented. `--version`, `-v`, and compiler resource queries report the actual selected frontend.
+Frontend options such as `-O0` to `-O3`, `-g`, `-std=`, `-D`, `-U`, `-I`, `-isystem`, warning options, `-pthread` and Fortran module options are passed to Clang or Flang. The driver implements `-c`, `-E`, `-S -emit-llvm`, `-fsyntax-only`, `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, joined and separate `-o`, response files (`@file`) and relocatable `-r`. `--version`, `-v` and resource queries (`-print-resource-dir`, `-print-file-name=`, `-print-search-dirs`, `-dumpmachine`, `-dumpversion`) report the selected frontend. `bin/llvmnet --help` lists llvmnet's own options.
 
-The compiler aliases select their language even when a filename alone is ambiguous. `llvmnet-clang++` uses clang's C++ driver mode; `llvmnet-flang` uses Flang. Defaults still favor scalar O1 LLVM IR with auto-vectorization disabled. This is not full clang driver compatibility: arbitrary `-Wl,` options, native `.o` files/static archives, complete LTO policy, and unsupported backend operations are rejected or remain unimplemented. `-pipe` is accepted; bitcode is inherently used for linking, so accepted `-flto` spellings do not invoke clang's native LTO linker.
+The aliases select their language even when a file name is ambiguous: `llvmnet-clang++` uses Clang's C++ driver mode and `llvmnet-flang` uses Flang. `-pipe`, `-fuse-ld=lld` and the `-flto` spellings are accepted and have no effect, because linking always works on bitcode. `-Wl,` options other than `--start-group`, `--end-group` and `--version`, and `-rdynamic`, are rejected; so is `-static` in system mode. Inputs ending in `.o` or `.a` must contain LLVM bitcode.
 
-`-O3 -fvectorize -fslp-vectorize` explicitly opts into optimized vector IR. Before emitting executable or library CIL, LLVM expands reductions and scalarizes supported vector operations. Remaining fixed-vector lane values preserve LLVM's packed layout. This is vectorization compatibility with scalar execution, not a promise of hardware SIMD or support for every vector intrinsic. `--keep-ir` preserves the pre-legalization linked bitcode so vector generation can be inspected.
+The default is scalar `-O1` with automatic vectorization disabled. `-O3 -fvectorize -fslp-vectorize` produces vector IR, which LLVM's reduction expansion and scalarizer turn into scalar CIL; remaining fixed-vector values keep LLVM's packed layout. `--keep-ir` keeps the linked bitcode before this lowering.
 
-`--simd128` separately enables the owned wasm-compatible source-header subset backed by architecture-neutral .NET `Vector128<T>` helpers. It preserves vector memory operations and helper values while keeping the existing system/portable data ABI. The ffmpeg profile `FFMPEG_SIMD128=1` uses this for HEVC IDCT and 8-bit SAO; it does not retarget code to wasm32 or generally accelerate auto-vectorized LLVM IR. See [simd128.md](simd128.md).
+`--simd128` enables a wasm-compatible SIMD128 source header backed by .NET `Vector128<T>` helpers. It keeps vector memory operations and helper values within the existing data ABI of either mode. The ffmpeg profile uses it for HEVC IDCT and 8-bit SAO with `FFMPEG_SIMD128=1`. It does not accelerate auto-vectorized LLVM IR; see [simd128.md](simd128.md).
 
-Output selection is independent of ABI selection:
+The output form is independent of the runtime mode:
 
 | Choice | Result |
 | --- | --- |
-| `-o program.dll` | CIL PE assembly, runtimeconfig, and runtime dependencies |
-| `-o program` or no `-o` | Unix executable launcher plus `program.llvmnet/` payload; default name `a.out` |
-| `-shared` / `--emit-library` | Managed CIL library, not a native shared object |
-| `--nativeaot -o program` | RID-specific NativeAOT executable |
+| `-o program.dll` | CIL assembly, `.runtimeconfig.json` and `LlvmNet.Runtime.dll` |
+| `-o program` or no `-o` | Unix launcher script plus `program.llvmnet/` payload; default name `a.out` |
+| `-shared` / `--emit-library` | Managed CIL library (default `a.dll`), not a native shared object |
+| `--nativeaot -o program` | NativeAOT executable for one runtime identifier |
 | `--emit-llvm -o program.bc` | Linked LLVM bitcode |
 | `-r -o combined.o` | Relocatable linked bitcode |
 
-NativeAOT options include `--runtime-id <rid>`, `--aot-optimize Balanced|Speed|Size`, `--aot-instruction-set baseline|native`, and `--aot-debug`. Instruction selection defaults to baseline; `native` uses the build host's CPU features and rejects a different RID. Such binaries may not execute on older CPUs even though the C data ABI is unchanged. The SIMD video measurements show a large baseline-AOT performance penalty that host-targeted publishing avoids; this is an explicit portability/performance choice, never a silent default. Invalid combinations such as `--nativeaot -c` or instruction selection without `--nativeaot` are errors. The current system ABI requires `linux-x64`. Other portable NativeAOT RIDs require an appropriate build host/toolchain and have not been executed in this environment.
+NativeAOT options are `--runtime-id <rid>`, `--aot-optimize Balanced|Speed|Size`, `--aot-instruction-set baseline|native` and `--aot-debug`; they require `--nativeaot`, which in turn requires an executable link. The instruction set defaults to `baseline`; `native` targets the build host's CPU, requires the host's runtime identifier, and produces binaries that may not run on older CPUs. Baseline NativeAOT code with `--simd128` can be slower than scalar code (PF-08; see [video-simd128-performance.md](video-simd128-performance.md)). System mode requires `linux-x64`. Other runtime identifiers need a matching native toolchain; CI tests only `linux-x64`.
 
 ## Runtime Modes
 
-Choose the same mode for every source, object, archive, and managed reference in one program. LLVM module flags and managed assembly metadata carry the ABI identity. Incompatible combinations fail at link time, and incompatible loaded modules cannot share runtime state. Untagged LLVM input is rejected; `llvmnet --runtime=<mode> -x ir -c input.ll` compiles LLVM IR for a mode and records its tag.
-
-### System ABI
-
-```sh
-llvmnet-clang --runtime=system -c source.c -o source.o
-llvmnet-clang --runtime=system source.o -lm -pthread --nativeaot -o program
-llvmnet-clang --runtime=system source.c --system-library /path/libexample.so -o program.dll
-```
-
-Identity: `system-linux-x64-v1`. This mode intentionally depends on the native Linux x86-64 SysV ABI and the selected host headers/libraries. C stdio, allocation, errno, math, file APIs, native data exports, and most pthread calls use real system libraries.
-
-LLVM generates a small native ABI bridge for each imported call signature. CIL passes a byte argument record; LLVM emits the actual native call, including varargs, register-classified structs, `byval`, and `sret`. Registered native variadic pointers, such as `fcntl`, `open`, and `snprintf`, also use call-site-specific LLVM thunks. This avoids guessing complex native call shapes in P/Invoke signatures. Ordinary C callbacks use unmanaged-callable CIL thunks. Internal calls to translated callbacks resolve to managed targets, including legacy no-prototype C calls and aggregate-returning C++ virtual methods. Native invocation of translated variadic or aggregate callbacks is still explicitly rejected.
-
-JIT output includes a generated native bridge shared library. NativeAOT embeds that bridge into the executable using static native inputs and direct imports, allowing SPEC to stage one executable. User-supplied dynamic libraries remain dynamic dependencies. Native globals resolve through the selected native library, not synthetic managed copies.
-
-Native threads are real pthreads. A small adapter wraps thread start and TLS destructors to keep callbacks within .NET's thread lifetime, including NativeAOT. Cancellation, `pthread_exit`, hardware-fault signal recovery, and arbitrary foreign-thread TLS destructor interactions are not complete. C++ unwinding and Fortran-specific runtime calls still use managed compatibility adapters; this mode is not a complete native C++/Fortran runtime ABI replacement.
-
-Defined LLVM TLS globals now use lazy per-thread initialized storage; external native TLS globals still require a bitcode definition. C++ thread-local destructors run before worker storage is released. Four-thread isolation, initialization, alignment, and reverse-order destruction are checked in both ABIs under JIT and NativeAOT. Direct `setjmp` calls and translated `longjmp` unwind/resume within managed frames, including dynamic allocation restoration. System `sigsetjmp` preserves requested signal masks; portable mask saving and jumps across native frames remain unsupported. LLVM stack-save/restore scopes use aligned owned allocations with cleanup, not native stack-pointer manipulation.
-
-Empty or whole-line comment-only void inline assembly preserves ordering through a managed memory barrier. System mode additionally recognizes the exact x86 `int3` debugger trap and register-checked CPUID/XGETBV forms used by LLVM and Eigen host detection. CPU queries execute in LLVM-generated native thunks and are checked against native output; the trap delivers SIGTRAP. Other executable or value-producing assembly remains rejected, and portable mode rejects CPU-query assembly. This is not a general inline assembler.
-
-`--trap-missing-arguments` is a diagnostic option, in both modes, for invalid void calls to translated functions with fewer arguments than their definition requires. The default remains a compile error. Opting in emits a build diagnostic and an `InvalidProgramException` at the call site; entering that path fails rather than inventing values. WRF selects it for a legacy implicit-interface error outside the validated input path. Build success with this option is not proof that every program path is supported.
-
-### Optional System C++ Library
-
-[../scripts/build-system-cxx.sh](../scripts/build-system-cxx.sh) compiles selected, unmodified upstream libstdc++ 16 sources to system-ABI bitcode using matching host headers. It is an explicit optional archive, not a native C++ fallback or complete standard-library distribution. Source and build products stay under ignored artifacts. Obtain the matching upstream source separately, for example by downloading and extracting Debian `gcc-16-source=16.2.0-1`, then extracting its `libstdc++-v3`, `libiberty`, and `include` subtrees.
-
-```sh
-bash scripts/build-system-cxx.sh artifacts/vendor/gcc-16.2.0/libstdc++-v3
-bash tests/system-cxx.sh artifacts/system-cxx/libstdcxx-system.a
-bin/llvmnet --runtime=system program.cpp artifacts/system-cxx/libstdcxx-system.a -o program
-```
-
-The focused check compares file/string streams, numeric formatting, list/hash-table operations, shared/weak ownership, regexes, demangling, exceptions, futures and four synchronized C++ workers with native output at O0/O3 in JIT and NativeAOT. Futures include promise errors, timed waits, deferred work, cross-thread exceptions and completion at thread exit. Random-device configuration selects the upstream OS-entropy path instead of CPU-specific RNG instructions; seeded engines are compared exactly while entropy values are not. A C++17 filesystem fixture checks status, iteration, rename and removal. Keep source notices and the applicable GPL/GCC Runtime Library Exception with any redistribution; this archive is not automatically built or included by the package script. The portable libc++ profile remains separate and does not gain these host-header facilities.
-
-### Optional System OpenMP
-
-System-mode OpenMP uses LLVM's native C runtime with translated outlined functions entering through generated scalar callback thunks. It does not substitute native benchmark code. Stage the matching Debian headers/runtime without root privileges and run the focused four-worker check:
-
-```sh
-bash scripts/install-system-openmp.sh
-bash tests/openmp.sh
-bash tests/fortran-concurrent.sh
-```
-
-The default stage is `artifacts/system-openmp`, pinned to `1:22.1.8-1+b2`; package hashes and notices are retained. The fixtures test four workers, dynamic scheduling, reductions, barriers and Fortran concurrent loops at O0/O3 in JIT and NativeAOT. Flang 22 marks `-fdo-concurrent-to-openmp=host` experimental; this mode is enabled explicitly for the CPU 2026 `doconcurrent` set. Use `LLVMNET_OPENMP_PREFIX` for another staged prefix. Generated programs require the selected library on the runtime loader path; standalone users must provide `LD_LIBRARY_PATH` or a system installation. This dependency is not bundled automatically. Portable OpenMP, device offload and full OpenMP/TLS lifetime conformance are not implemented or claimed.
+Use the same mode for every source, object, archive and managed reference of one program. LLVM module flags and managed assembly metadata carry the ABI tag, and links with mismatched or untagged inputs fail. At run time, images of different modes cannot share one process, and an image refuses a `LlvmNet.Runtime.dll` from an incompatible llvmnet version. `llvmnet --runtime=<mode> -x ir -c input.ll` compiles LLVM IR for a mode and records its tag.
 
 ### Portable .NET ABI
 
@@ -109,57 +61,100 @@ dotnet portable.dll
 llvmnet-clang --runtime=portable --nativeaot source.c -o native-program
 ```
 
-Identity: `dotnet64-v2`, the default mode. Source compiles against the sysroot's headers with `-nostdinc`: musl 1.2.5 for C, libc++ 22.1.8 for C++, and the C library, the C++ runtime (libc++, libc++abi) and the Fortran runtime (flang-rt 22.1.8) are linked from the sysroot as LLVM bitcode and compiled into the program's CIL. `-nostdlib`, `-nodefaultlibs` and `-nostartfiles` leave them out; `-lc`, `-lm`, `-lpthread`, `-ldl`, `-lrt`, `-lc++` and the Fortran runtime names are accepted and need nothing. Host OS/CPU feature macros are absent (`__linux__`, `__unix__` and `__x86_64__` are not defined; ADR-14). The LLVM target is a fixed internal `x86_64-unknown-none` layout used to define the ABI, not to generate x86 machine instructions for CIL output. ABI-changing target, wchar, enum, and packing flags are rejected.
+Tag: `dotnet64-v2`, the default mode. Sources compile with `-nostdinc` against the sysroot's headers: musl 1.2.5 for C and libc++ 22.1.8 for C++. Executables link musl, libc++, libc++abi, flang-rt 22.1.8 and the compiler-rt builtins from the sysroot as bitcode, compiled into the program's CIL. `-nostdlib`, `-nodefaultlibs` and `-nostartfiles` leave them out; `-lc`, `-lm`, `-lpthread`, `-ldl`, `-lrt`, `-lc++` and the Fortran runtime names are accepted and need no archive. `--portable-sysroot <dir>` selects another sysroot.
 
-The versioned contract includes:
+The LLVM target is a fixed `x86_64-unknown-none` layout that defines the data ABI; it does not generate x86 instructions. Host OS and CPU macros (`__linux__`, `__unix__`, `__x86_64__`, `__SSE__` and similar) are not defined; programs see `__LLVMNET__`, `__LLVMNET_PORTABLE__` and `__LLVMNET_ABI_VERSION`. Options that would change the ABI (`-target`, `--sysroot`, `-m*`, `-fshort-wchar`, `-fshort-enums`, `-funsigned-char`, `-fpack-struct`) are rejected.
 
-| Type or Surface | v2 Contract |
+| Type or interface | `dotnet64-v2` |
 | --- | --- |
 | Byte order / address space | little-endian / 64-bit |
 | `char`, `short`, `int`, `long`, `long long` | 8, 16, 32, 64, 64 bits; plain `char` signed |
 | `size_t`, `ptrdiff_t`, pointers | 64 bits |
 | `int_fast16_t`, `int_fast32_t` and unsigned forms | 64 bits, as in glibc |
-| `wchar_t` | signed 32-bit code unit |
+| `wchar_t` | signed 32-bit |
 | `float`, `double` | IEEE binary32 / binary64 |
-| `long double` | 80-bit extended precision in 16-byte storage, software CIL operations on every host |
+| `long double` | 80-bit extended precision in 16-byte storage, computed in software on every host |
 | `__int128` | 128-bit integer storage and helpers |
-| Varargs | fixed software SysV-style register/overflow representation, independent of host .NET calling convention |
+| Varargs | software SysV-style register and overflow areas, independent of the host's calling convention |
 | C library structures | musl 1.2.5 x86-64 layouts (`FILE`, `jmp_buf`, `struct stat`, pthread types, `sigset_t`) |
-| C++ objects | fixed Itanium layout and libc++ ABI version 1 (`std::__1`) |
-| Fortran descriptors | Flang 22 CFI version 20240719 and fixed byte-stride layout |
+| C++ objects | Itanium layout and libc++ ABI version 1 (`std::__1`) |
+| Fortran descriptors | Flang 22 CFI version 20240719 with byte strides |
 | errno and error text | Linux numbering; musl's messages |
 | System services | Linux x86-64 system-call semantics implemented over .NET ([dev/host-abi.md](dev/host-abi.md)) |
 
-The same portable CIL image is intended for little-endian 64-bit .NET hosts, including Windows/macOS/Linux and x64/ARM64. These cross-OS/architecture executions have not yet been validated here. Cross-platform conformance remains a required release gate, not an inferred result from IL-only metadata.
+The same image is meant to run on any little-endian 64-bit .NET host, including Windows, macOS and Linux on x64 and ARM64; CI runs Linux x64 only. Programs see Linux semantics and structure layouts on every host. Paths, file-system capabilities, time-zone data and available resources still depend on the host, and services .NET cannot provide (`fork`, `exec`, sockets, hard links and others) fail with the errors [dev/host-abi.md](dev/host-abi.md) lists.
 
-The host layer implements system calls with .NET APIs, so compiled programs see Linux semantics and structure layouts on every host. Paths, file-system capabilities, time-zone data, available resources and explicitly unsupported services (`fork`, `exec`, sockets, hard links) still vary or fail with documented errors; [dev/host-abi.md](dev/host-abi.md) lists them.
+Native libraries cannot be linked: `--native-import` and `--system-library` are rejected, and a function the sysroot does not provide is a link error. Recompile dependencies in portable mode or call them through a managed interface. Portable libraries (`-shared`) do not link the C library, because musl's process state (thread pointer, heap, stdio) belongs to the program image; a library that calls the C library must be linked into the program as bitcode. Use scalar and pointer `CExport` signatures across assemblies; aggregate signatures are not yet a stable API.
 
-Native C libraries or host-header bitcode cannot be injected with `--native-import` or `--system-library`. Recompile dependencies for portable mode, or provide an ABI-matched managed interface. A function the sysroot does not provide fails at link time rather than falling back to a native call. Portable libraries (`-shared`) do not link the C library: musl's process state (thread pointer, heap, stdio) belongs to the program image, so a library that calls the C library must be linked into the program as bitcode. Cross-assembly CIL aggregate signatures are not yet a stable managed public API; use scalar/pointer exports with the documented C layout.
+### System ABI
 
-### Removed: managed-host
+```sh
+llvmnet-clang --runtime=system -c source.c -o source.o
+llvmnet-clang --runtime=system source.o -lm -pthread --nativeaot -o program
+llvmnet-clang --runtime=system source.c --system-library /path/libexample.so -o program.dll
+```
 
-`--runtime=managed-host`, the original default that combined Linux host headers with a hand-written managed C library, was removed (ADR-04). Choose `portable` (the default) or `system`. Objects and archives built for it carry no ABI tag and are rejected; recompile them.
+Tag: `system-linux-x64-v1`. This mode uses the native Linux x86-64 SysV ABI and the host's headers and libraries. C stdio, allocation, errno, math, file interfaces, native data and most pthread calls go to the real system libraries.
+
+LLVM generates a native bridge for each imported call signature: CIL passes a byte argument record, and LLVM emits the native call, including varargs, register-classified structures, `byval` and `sret`. Native variadic functions called through pointers, such as `fcntl`, `open` and `snprintf`, use call-site-specific LLVM thunks. C callbacks passed to native code use unmanaged-callable CIL entry points; native calls into translated variadic or aggregate callbacks fail with a diagnostic. Native globals resolve through the native library that defines them.
+
+JIT output includes the generated bridge as `lib<name>.llvmnet-host.so`. NativeAOT links the bridge statically, so the result is one executable; libraries given with `--system-library` stay dynamic dependencies.
+
+Threads are native pthreads; an adapter wraps thread start and TLS destructors so callbacks run inside .NET's thread lifetime, including under NativeAOT. Cancellation, `pthread_exit`, recovery from hardware-fault signals, external native TLS globals and TLS destructors on threads created by native libraries are incomplete. C++ exceptions use the managed bridge, and C++ library code must be linked as bitcode (for example the optional libstdc++ archive below); native libstdc++ is not called. Fortran programs link flang-rt from `sysroot/system-linux-x64-v1`.
+
+Inline assembly is rejected except for empty or comment-only `asm` statements without outputs, which become a memory barrier in both modes. System mode also accepts the x86 `int3` trap, which raises `SIGTRAP`, and the CPUID and XGETBV forms used by LLVM's and Eigen's host detection, which run in generated native thunks.
+
+By default, a void call to a translated function with fewer arguments than its definition is a compile error. `--trap-missing-arguments` (both modes) instead compiles the call site to throw `InvalidProgramException` and reports each such call while compiling.
+
+### Optional System C++ Library
+
+[../scripts/build-system-cxx.sh](../scripts/build-system-cxx.sh) compiles selected, unmodified libstdc++ 16 sources to system-mode bitcode against the matching host headers. The archive provides streams, locales, containers, threads, futures, `random_device`, regular expressions, demangling and `std::filesystem`. Obtain the libstdc++ source of the host's GCC 16 release separately, for example the `libstdc++-v3`, `libiberty` and `include` directories of Debian's `gcc-16-source` package.
+
+```sh
+bash scripts/build-system-cxx.sh artifacts/vendor/gcc-16.2.0/libstdc++-v3
+tests/run.sh system-cxx
+bin/llvmnet --runtime=system program.cpp artifacts/system-cxx/libstdcxx-system.a -o program
+```
+
+`tests/system-cxx.sh` compares C++ fixtures with native output at `-O0` and `-O3` under JIT and NativeAOT. Keep the source notices and the GPL with the GCC Runtime Library Exception with any redistributed archive; the package script does not build or include it.
+
+### Optional System OpenMP
+
+System-mode OpenMP links LLVM's native C runtime; outlined regions stay translated CIL and enter through generated callback thunks. Stage the Debian headers and runtime without root privileges and run the tests:
+
+```sh
+bash scripts/install-system-openmp.sh
+tests/run.sh openmp fortran-concurrent
+```
+
+The stage defaults to `artifacts/system-openmp` with package version `1:22.1.8-1+b2` (`OPENMP_DEB_VERSION`) and keeps the package hashes and the copyright file. `LLVMNET_OPENMP_PREFIX` selects another stage for the tests. Programs need the library on the loader path (`LD_LIBRARY_PATH` or a system installation); it is not bundled. Flang's `-fdo-concurrent-to-openmp=host`, which Flang 22 marks experimental, uses the same runtime. Portable mode has no OpenMP runtime, and device offload is not supported.
 
 ## Managed and Native Libraries
 
-`-L/-l` continues to mean bitcode libraries in all modes. `--cil-reference` means an assembly with public `CExport` methods and matching ABI metadata. `--system-library` explicitly selects a native shared library for system-mode symbol resolution. The older `--native-import symbol=library!entrypoint` supports explicit scalar P/Invoke mappings in system mode. These operations stay distinct to avoid accidental ABI mixing.
+`-L` and `-l` always name bitcode archives. `--cil-reference` names an assembly with public `CExport` methods and matching ABI metadata. `--system-library` adds a native shared library for system-mode symbol resolution. `--native-import symbol=library!entrypoint` maps one symbol to an explicit P/Invoke declaration with a scalar signature, in system mode only.
 
 ## Standard SPEC Configuration
 
-[../config/spec/llvmnet.cfg](../config/spec/llvmnet.cfg) sets normal `CC`, `CXX`, and `FC` variables to the installed compiler aliases. Runtime mode is passed during compile and link; `--nativeaot` is passed only during link. No special runtime submit command is needed because the harness stages a normal native executable.
+[../config/spec/llvmnet.cfg](../config/spec/llvmnet.cfg) sets the ordinary `CC`, `CXX` and `FC` variables to the installed compiler aliases. The runtime mode is passed at compile and link time and `--nativeaot` at link time, so the harness stages an ordinary native executable.
 
-SPEC builds default to `-O3`, independently of the driver's scalar O1 default. The wrapper selects C++14 for CPU 2017 and C++17 for CPU 2026. Runtime, optimization, vectorization, C++ dialect, and thread count are included in build labels. Set `SPEC_OPT_LEVEL`, `SPEC_VECTORIZE=1`, or `SPEC_CXX_STANDARD` for explicit alternatives; set `SPEC_REBUILD=1` to force recompilation after a toolchain update. Rate uses one copy and one thread; speed defaults to one copy and four threads, with `SPEC_THREADS` available for explicit overrides. The wrapper passes the count to `runcpu` and OpenMP environment settings. For multi-thread runs the kit's OpenMP set also receives `-fopenmp -DSPEC_OPENMP`; system mode adds an explicit LLVM OpenMP library. `SPEC_OPENMP_PREFIX` selects staged headers/runtime (default `artifacts/system-openmp`), and `SPEC_OPENMP_LIBRARY` overrides the library. The staged directory is added to `LD_LIBRARY_PATH`. Thread count alone still does not prove worker activation; inspect source selection and build/run evidence. Kit-managed multiprocess speed entries use the same concurrency setting.
+SPEC builds default to `-O3`, C++14 for CPU 2017 and C++17 for CPU 2026. Build labels include the runtime, optimization, vectorization, C++ dialect and thread count. Environment overrides:
 
-`SPEC_SYSTEM_CXX=/absolute/path/libstdcxx-system.a` adds the optional bitcode library to system C++ links only, and matrix environment records include its hash. Benchmark-specific portability settings are scoped to their suite version; they do not change licensed sources.
-
-For a focused diagnostic retry only, `SPEC_REUSE_BUILD=1` requests the kit's `--make_no_clobber` mode, preserving existing makefiles and objects. Use it only when source flags and object ABI are unchanged, record the relinked toolchain/library, and still require harness execution and output validation. An already-built executable must be retained outside the build target path before retrying with a new runtime; otherwise make can report nothing to do and run the old image even with `SPEC_REBUILD=1`. Such builds are non-reportable. Matrix runs explicitly disable reuse and always rebuild.
+| Variable | Effect |
+| --- | --- |
+| `SPEC_OPT_LEVEL`, `SPEC_VECTORIZE=1`, `SPEC_CXX_STANDARD` | optimization level, vectorization, C++ dialect |
+| `SPEC_REBUILD=1` | force recompilation, for example after a toolchain update |
+| `SPEC_THREADS` | thread count; rate entries default to 1, speed entries to 4. Above 1, the kit's OpenMP set gets `-fopenmp -DSPEC_OPENMP` and CPU 2026's DO CONCURRENT set host lowering |
+| `SPEC_OPENMP_PREFIX`, `SPEC_OPENMP_LIBRARY` | system mode with more than one thread: staged OpenMP headers and runtime (default `artifacts/system-openmp`), linked with `--system-library` and added to `LD_LIBRARY_PATH` |
+| `SPEC_SYSTEM_CXX=/abs/path/libstdcxx-system.a` | add the optional libstdc++ archive to system-mode C++ links |
+| `SPEC_STACK_KB` | soft stack limit of the run (default `unlimited`; large Fortran automatic arrays exceed 8 MiB) |
+| `SPEC_REUSE_BUILD=1` | the kit's `--make_no_clobber`, for diagnostic retries with unchanged flags and object ABI; matrix runs never reuse builds |
 
 ```sh
 bash scripts/spec-harness.sh /path/installed-cpu2017 /path/toolchain system 505.mcf_r test
 bash scripts/spec-harness.sh /path/installed-cpu2017 /path/toolchain portable 505.mcf_r test
 ```
 
-The runner installs the configuration/flag description in the chosen harness. Its equivalent ordinary command, after sourcing the suite's environment, is:
+The runner installs the configuration and flags description in the harness. The equivalent command, after sourcing the suite's environment, is:
 
 ```sh
 runcpu --config=llvmnet --define llvmnet_dir=/path/toolchain \
@@ -167,9 +162,9 @@ runcpu --config=llvmnet --define llvmnet_dir=/path/toolchain \
   --noreportable --tune=base 505.mcf_r
 ```
 
-Both modes have passed normal CPU 2017 harness validation for C mcf, C++ deepsjeng, and Fortran exchange2 test workloads. A system-mode mcf one-copy reference workload also passed harness validation. The same configuration passed CPU 2026 system-mode zstd integer-rate and lbm FP-rate test workloads. These are successful benchmark validation runs, not full-suite reportable SPEC results. The configuration intentionally defaults to `reportable=0`; setting a flag to reportable does not satisfy SPEC rules. Full suites, prescribed iteration/run rules, complete flags/system disclosures, portability review, and validation are still required before publishing a valid SPEC score.
+The configuration sets `reportable=0`. A reportable result needs full suites, SPEC's run rules and complete flag and system disclosures.
 
-Run every installed entry one at a time, system then portable, including speed variants that share sources:
+### Matrix, summary and ordered runs
 
 ```sh
 bash scripts/spec-matrix.sh artifacts/spec2017-harness artifacts/spec-toolchain test
@@ -177,13 +172,11 @@ bash scripts/spec-matrix.sh artifacts/spec2026-harness artifacts/spec-toolchain 
 SPEC_VECTORIZE=1 bash scripts/spec-matrix.sh artifacts/spec2017-harness artifacts/spec-toolchain test '505.*'
 ```
 
-The matrix always rebuilds. It continues after failures and exits nonzero unless every case passes. Each run gets a unique directory under `artifacts/spec-matrix/` containing a TSV result for each benchmark/ABI, harness logs, snapshots of make logs, config/flags, and compiler/runtime hashes. Only a zero harness exit with the benchmark's explicit `Success:` validation marker is PASS. A build without validation is not PASS. `SPEC_TIMEOUT` bounds each build-plus-run (default 1800 seconds); TIMEOUT is incomplete evidence, not an unsupported-operation diagnosis. `SPEC_STACK_KB` sets the child's soft stack limit (default `unlimited`); the hard limit must permit it. Large Fortran automatic arrays can exceed an ordinary 8 MiB shell stack. `SPEC_MATRIX_OUTPUT` changes the output root. The optional fourth argument is a quoted shell pattern selecting benchmark names. Do not run two matrices concurrently against the same installed kit.
+`scripts/spec-matrix.sh` runs every installed entry one at a time, system then portable, always rebuilding. It continues after failures and exits nonzero unless every case passes. A case passes only when the harness exits with 0 and prints the benchmark's `Success:` validation marker. Each run gets a directory under `artifacts/spec-matrix/` (`SPEC_MATRIX_OUTPUT`) with a TSV row per benchmark and mode, harness and make logs, the configuration and compiler and runtime hashes, and a `completion.txt` written once every row exists. `SPEC_TIMEOUT` bounds each build and run (default 1800 seconds). The optional fourth argument is a shell pattern of benchmark names. The script runs a frozen copy of itself, the harness wrapper and the configuration, so later workspace edits do not affect a running matrix; keep the installed toolchain unchanged until it finishes, and do not run two matrices against the same installed kit.
 
-Before starting checks, the matrix re-executes a frozen copy of itself and uses copies of the harness wrapper and configuration from the same artifact directory. Later workspace edits cannot change an in-progress run. Keep the selected installed toolchain unchanged until completion. New runs write `completion.txt` only after every selected benchmark/ABI has a result row; its failure count may be nonzero. Absence of that record indicates an interrupted or incomplete run. The completed older inventories predate this marker and retain their terminal completion output.
+`bash scripts/spec-summary.sh first/results.tsv retry/results.tsv` prints one row per suite, benchmark, input, optimization, vectorization, copies, threads and threading profile, with separate system and portable results; later files override earlier ones and missing modes show as MISSING.
 
-`bash scripts/spec-summary.sh first/results.tsv retry/results.tsv` prints one row per suite/benchmark/input/optimization/vectorization/copy/thread/threading profile, with separate system/portable results. Historical nine-column tables are one-copy, one-thread profiles. Eleven-column multi-thread tables have unspecified activation; twelve-column rows distinguish `serial`, `kit-openmp-v1` (explicit OpenMP), and `kit-openmp-v2` (also host DO CONCURRENT lowering). These profiles do not overwrite each other. The profile identifies configuration, not whether an individual benchmark uses OpenMP, C++ threads, processes or serial code. Later files override earlier attempts for the same profile; missing ABI rows are explicitly marked MISSING. Supply only compatible C++ dialect/toolchain profiles when combining results. The label records the requested suite dialect; scoped overrides such as Parest's C++03 mode are recorded in config and make logs. Raw files retain compiler hashes and logs for provenance.
-
-For repair-first progression, use [../scripts/spec-ordered.sh](../scripts/spec-ordered.sh):
+[../scripts/spec-ordered.sh](../scripts/spec-ordered.sh) runs the matrix one benchmark at a time in this group order: 2017 integer rate, 2026 integer rate, 2026 FP rate, 2026 integer speed, 2026 FP speed, 2017 FP rate, 2017 integer speed, 2017 FP speed. It stops at the first benchmark whose required modes fail (`SPEC_REQUIRED_ABIS`, `system` by default or `both`) and records COMPLETE or BLOCKED under `artifacts/spec-ordered/`. `SPEC_ORDER_START=2026-intrate:721.gcc_r` resumes at an entry.
 
 ```sh
 SPEC_REQUIRED_ABIS=system SPEC_TIMEOUT=600 \
@@ -191,12 +184,8 @@ SPEC_SYSTEM_CXX="$PWD/artifacts/system-cxx/libstdcxx-system.a" \
   bash scripts/spec-ordered.sh artifacts/spec2017-harness artifacts/spec2026-harness artifacts/spec-ordered-toolchain test
 ```
 
-It reads the kits' benchmark sets, sorts each numerically, and runs these groups in order: 2017 integer rate; 2026 integer rate; 2026 FP rate; 2026 integer speed; 2026 FP speed; 2017 FP rate; 2017 integer speed; 2017 FP speed. Each benchmark attempts system then portable sequentially. By default a validated system result gates advancement and portable failures remain visible; `SPEC_REQUIRED_ABIS=both` gates on both. It stops before the next benchmark on a failed required gate or an incomplete matrix. `SPEC_ORDER_START=2026-intrate:721.gcc_r` explicitly resumes at an entry without implying earlier coverage. The driver freezes scripts, config and benchmark sets, retaining progress and a COMPLETE/BLOCKED record under `artifacts/spec-ordered/`. Keep its toolchain and optional library unchanged while it runs.
-
-Use `test`, `train`, or `ref` inputs explicitly. A test-input pass is not validation of train/reference inputs, parallel behavior, or a reportable score. Kits may add automatic OpenMP/thread suppression flags even when a thread count is configured. Inspect build/run evidence before claiming actual speed/parallel support. Proprietary sources, inputs, and raw diagnostic snapshots stay in ignored local artifacts, not tracked documentation.
+`scripts/spec-portable-check.sh` reruns portable-mode entries against a baseline result file; [spec-portable-limitations.md](spec-portable-limitations.md) describes it and the causes of the remaining portable failures. Choose `test`, `train` or `ref` inputs explicitly. Licensed sources, inputs and run outputs stay under the ignored `artifacts/` directory.
 
 ## Verification
 
-`bash tests/toolchain-all.sh` covers compiler regressions, both ABI modes, real native C structs/varargs/data/callbacks, NativeAOT including native pthread TLS cleanup, portable C/C++/Fortran, compatible/incompatible managed links, relocation, and isolated-PATH deployment. It does not substitute for cross-platform CI or full SPEC validation.
-
-The completed local run is recorded in `artifacts/toolchain-verification.log`. Post-change ffmpeg regression evidence is in `artifacts/ffmpeg-regression.log`; standard harness logs are `artifacts/spec-harness-*.log` and `artifacts/spec2026-harness-*.log`. Those logs and proprietary suite installations are intentionally not packaged with the compiler.
+`tests/run.sh --tag core --tag toolchain` covers compiler regressions, both modes, native C structures, varargs, data and callbacks, NativeAOT, portable C, C++ and Fortran, managed links and mode-mismatch rejection, packaging, and deployment without `dotnet`, `clang` or `flang` on `PATH`. The `integration`, `optional` and `conformance` tags cover ffmpeg, OpenMP, the system libstdc++ archive and the upstream library test suites.

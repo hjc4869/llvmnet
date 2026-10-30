@@ -168,8 +168,8 @@ public readonly struct Float80
 
     public static double ToDouble(Float80 value) => BitConverter.Int64BitsToDouble(unchecked((long)value.IeeeBits(53, -1022, 1023, 11)));
     public static float ToSingle(Float80 value) => BitConverter.Int32BitsToSingle(unchecked((int)value.IeeeBits(24, -126, 127, 8)));
-    // Out-of-range conversions are poison in LLVM (C leaves them undefined, lrintl and friends raise FE_INVALID);
-    // like the x87 instructions native code uses, they produce the "integer indefinite" value 0x8000000000000000.
+    // Out-of-range conversions are poison in LLVM; like the x87 instructions native code uses, they produce the
+    // "integer indefinite" value 0x8000000000000000.
     private const long IntegerIndefinite = long.MinValue;
 
     public static long ToSigned(Float80 value)

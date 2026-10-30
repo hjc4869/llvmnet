@@ -7,11 +7,9 @@ using static LlvmNet.Runtime.Linux;
 namespace LlvmNet.Runtime;
 
 /// <summary>
-/// Process services (plan items LC-08, LC-12): exit, signals, child processes, identity and limits. Signals raised
-/// inside the process are delivered synchronously on the raising thread, honoring masks; SIGINT, SIGTERM, SIGHUP and
-/// SIGQUIT (on Linux hosts every catchable signal below 32) from outside reach installed handlers on a .NET signal
-/// thread. fork and exec are not available;
-/// posix_spawn, system and popen start host processes through __llvmnet_spawn.
+/// Process services: exit, signals, child processes, identity and limits. Signals raised inside the process are
+/// delivered synchronously on the raising thread, honoring masks; signals from outside reach installed handlers on a
+/// .NET signal thread. posix_spawn, system and popen start host processes through __llvmnet_spawn.
 /// </summary>
 public static unsafe partial class HostSyscalls
 {
@@ -107,7 +105,7 @@ public static unsafe partial class HostSyscalls
         }
     }
 
-    /// <summary>kill, tkill and tgkill aimed at this process: a blocked signal stays pending, others are delivered now.</summary>
+    /// <summary>kill, tkill and tgkill aimed at this process: a blocked signal stays pending, others are delivered at once.</summary>
     private static long Raise(int signal)
     {
         if (signal == 0) return 0;
@@ -163,7 +161,7 @@ public static unsafe partial class HostSyscalls
         DeliverPending();
     }
 
-    /// <summary>The translated (C, C++ or Fortran) frames of the current thread, innermost first, for abort (LC-08).</summary>
+    /// <summary>The translated (C, C++ or Fortran) frames of the current thread, innermost first, for abort.</summary>
     private static void WriteCallStack()
     {
         IEnumerable<string> frames = new StackTrace().GetFrames()
@@ -182,7 +180,7 @@ public static unsafe partial class HostSyscalls
         return 0;
     }
 
-    /// <summary>With LLVMNET_CHECK_DESCRIPTORS=1, descriptors above 2 still open at exit are reported (LC-05).</summary>
+    /// <summary>With LLVMNET_CHECK_DESCRIPTORS=1, descriptors above 2 still open at exit are reported.</summary>
     private static void ReportOpenDescriptors()
     {
         List<string> open;
@@ -367,7 +365,7 @@ public static unsafe partial class HostSyscalls
     private static string UserName => Environment.UserName.Replace(':', '_');
     private static string HomeDirectory => Environment.GetEnvironmentVariable("HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-    /// <summary>The synthetic /etc/passwd: root and the one user every portable program runs as (LC-12).</summary>
+    /// <summary>The synthetic /etc/passwd: root and the one user every portable program runs as.</summary>
     private static string PasswordFile() => $"root:x:0:0:root:/root:/bin/sh\n{UserName}:x:{UserId}:{GroupId}:{UserName}:{HomeDirectory}:/bin/sh\n";
 
     private static string GroupFile() => $"root:x:0:\n{UserName}:x:{GroupId}:\n";

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build upstream libc++ and libc++abi 22.1.8 for dotnet64-v2 on top of the musl port (plan items CX-01, CX-07);
-# the second step of scripts/build-sysroot.sh.
+# Build upstream libc++ and libc++abi 22.1.8 for dotnet64-v2 on top of the musl port; a step of
+# scripts/build-sysroot.sh.
 #   scripts/build-portable-cxx.sh [prefix]    default artifacts/sysroot-build/dotnet64-v2 (must already contain musl)
 # Installs <prefix>/include/c++/v1 and <prefix>/lib/{libc++.a,libc++abi.a}; per-file failures go to
-# <prefix>/build-cxx/failures.tsv. Throwing, catching and terminate handlers stay in the managed bridge
-# (src/LlvmNet.Runtime/Cxx.cs) because the CLR performs unwinding, so libc++abi's cxa_exception, cxa_personality
-# and handler sources are not compiled; type_info, dynamic_cast and catch matching come from private_typeinfo and
-# ports/libcxxabi/llvmnet-catch.cpp (docs/dev/cxx-eh-bridge.md, CX-02, CX-03).
+# <prefix>/build-cxx/failures.tsv. The CLR unwinds the stack, so throwing, catching and terminate handlers live in the
+# managed bridge (src/LlvmNet.Runtime/Cxx.cs) and libc++abi's cxa_exception, cxa_personality and handler sources are
+# left out; type_info, dynamic_cast and catch matching come from private_typeinfo and
+# ports/libcxxabi/llvmnet-catch.cpp (docs/dev/cxx-eh-bridge.md).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 prefix="$(realpath -m "${1:-$root/artifacts/sysroot-build/dotnet64-v2}")"

@@ -1,4 +1,4 @@
-/* Multi-threaded atomic read-modify-write on every width and operation (BE-16). Each thread applies a
+/* Multi-threaded atomic read-modify-write on every width and operation. Each thread applies a
  * deterministic sequence, so final values are exact; misaligned and adjacent sub-word locations check
  * that neighbouring bytes are never clobbered. Native clang is the oracle. */
 #include <pthread.h>

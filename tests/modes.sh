@@ -31,7 +31,7 @@ dotnet "$output/isolated.dll"
 "$root/bin/llvmnet" --runtime=system -fno-builtin "$root/tests/c/native-import.c" \
     --native-import 'abs=libc.so.6!abs' -o "$output/explicit-system-import"
 "$output/explicit-system-import"
-# System mode never links the portable sysroot (LC-25): no musl definitions, and libc calls stay native imports.
+# System mode never links the portable sysroot: no musl definitions, and libc calls stay native imports.
 "$root/bin/llvmnet" --runtime=system "$root/tests/c/runtime.c" --emit-llvm -o "$output/system-linked.bc"
 if llvm-nm-22 --defined-only "$output/system-linked.bc" | grep -E ' (__init_libc|__stdio_write|__libc_start_main)$' >/dev/null; then
     printf 'FAIL: a system-mode link contains the portable C library\n' >&2

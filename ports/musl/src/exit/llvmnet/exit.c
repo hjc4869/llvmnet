@@ -1,6 +1,6 @@
 /* llvmnet port of musl: upstream src/exit/exit.c with one addition. exit() first runs the calling thread's
- * C++ thread_local destructors, as glibc's exit does (plan item CX-12); they are registered through
- * __cxa_thread_atexit_impl in src/thread/llvmnet/__cxa_thread_atexit_impl.c, which overrides the hook. */
+ * C++ thread_local destructors, as glibc's exit does; they are registered through __cxa_thread_atexit_impl
+ * in src/thread/llvmnet/__cxa_thread_atexit_impl.c, which overrides the hook. */
 #include <stdlib.h>
 #include <stdint.h>
 #include "libc.h"

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Runtime performance guard (LC-24): the microbenchmarks in tests/perf (stdio, malloc/free, printf) built in portable
-# mode with this toolchain and with a baseline toolchain, by default the hand-written C library of 0f21ada (end of
-# M2), which the script extracts from git and builds. Each runs under JIT and NativeAOT; wall times are the median of
-# three runs, with native glibc builds for reference, and every build's output must equal the native one. Run it on
-# an otherwise idle machine.
+# Runtime performance guard: the microbenchmarks in tests/perf (stdio, malloc/free, printf) built in portable mode
+# with this toolchain and with a baseline toolchain, by default commit 0f21ada, which the script extracts from git and
+# builds. Each runs under JIT and NativeAOT; wall times are the median of three runs, with native glibc builds for
+# reference, and every build's output must equal the native one. Run it on an otherwise idle machine.
 #   scripts/bench-runtime.sh [baseline-toolchain-root]
 #   BENCH_VIDEO=video.mp4 BENCH_FRAMES=300                 also time an ffmpeg decode of that many frames with
 #   BENCH_FFMPEG_BASELINE=dir BENCH_FFMPEG=dir             two ffmpeg builds (directories holding decode.dll)

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Build the portable sysroot sysroot/dotnet64-v2 (plan items LC-15, CX-07, FT-05): unmodified musl 1.2.5,
-# libc++/libc++abi and flang-rt 22.1.8 compiled to LLVM bitcode by llvmnet, with their headers; and the system-mode
-# sysroot sysroot/system-linux-x64-v1, which holds flang-rt built against the host's glibc (FT-09).
+# Build the portable sysroot sysroot/dotnet64-v2: musl 1.2.5 with ports/musl, the compiler-rt complex arithmetic
+# builtins, libc++/libc++abi and flang-rt 22.1.8 compiled to LLVM bitcode by llvmnet, with their headers; and the
+# system-mode sysroot sysroot/system-linux-x64-v1, which holds flang-rt built against the host's glibc.
 #   scripts/build-sysroot.sh [--force]
-# The sysroot is rebuilt only when an input changes: the pinned sources, ports/, these build scripts, the
-# driver code that chooses portable compile flags, or the Clang version. Build trees stay in
-# artifacts/sysroot-build/dotnet64-v2; the script fails if any library source does not compile.
+# The sysroots are rebuilt only when an input changes: the pinned musl and LLVM sources, ports/, these build scripts,
+# the compiler sources that define the portable ABI and compile flags, or the Clang version; --force rebuilds them
+# anyway. Build trees stay in artifacts/sysroot-build/dotnet64-v2; the script fails if any library source does not
+# compile.
 # Needs a built compiler (scripts/ensure-built.sh runs this script after building the solution).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

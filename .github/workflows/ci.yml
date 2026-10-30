@@ -95,7 +95,7 @@ jobs:
           cp -a artifacts/tests/results artifacts/tests/results-all
       - name: Differential fuzzing (FD-16)
         if: always()
-        # 500 new csmith seeds every night, starting from a seed derived from the date.
+        # 500 new seeds per generator every night, starting from a seed derived from the date.
         run: |
           export FUZZ_SEEDS=500 FUZZ_FIRST_SEED=$(( $(date -u +%s) / 86400 * 1000 ))
           tests/run.sh --no-build --tag fuzz --timeout-scale 2

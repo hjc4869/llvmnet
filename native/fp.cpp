@@ -7,11 +7,10 @@
 #include <string>
 #include <vector>
 
-// Replaces llvm.experimental.constrained.* calls with the equivalent plain instruction or intrinsic.
-// llvmnet's floating-point environment has only round-to-nearest-even and no exception flags, so a
-// constrained operation whose rounding mode is to-nearest or dynamic computes the same value as the
-// plain one, and exception-behavior arguments have nothing to observe. Calls with any other static
-// rounding mode are left in place so the compiler still rejects them. Returns the number replaced.
+// Replaces llvm.experimental.constrained.* calls with the equivalent plain instruction or intrinsic and returns
+// the number replaced. llvmnet's floating-point environment is round-to-nearest-even without exception flags, so
+// the plain form computes the same value unless the call names another static rounding mode; such calls are left
+// for the compiler to reject.
 extern "C" unsigned llvmnet_lower_constrained_fp(LLVMModuleRef handle)
 {
     llvm::Module &module = *llvm::unwrap(handle);

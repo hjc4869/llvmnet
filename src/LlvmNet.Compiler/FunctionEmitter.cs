@@ -1048,7 +1048,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         TypeSystem.Kind(Llvm.LLVMGetElementType(type)) == 8 && TypeSystem.Width(Llvm.LLVMGetElementType(type)) == 8;
 
     /// <summary>i8 and [1 x i8], which x86-64 passes and returns in the same register: Fortran passes character(1) by value
-    /// as the array where C takes char (BE-40).</summary>
+    /// as the array where C takes char.</summary>
     private static bool OneByte(nint first, nint second) =>
         ByteArray(first) && TypeSystem.Kind(second) == 8 && TypeSystem.Width(second) == 8 ||
         ByteArray(second) && TypeSystem.Kind(first) == 8 && TypeSystem.Width(first) == 8;
@@ -1089,7 +1089,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             (TypeSystem.Width(source) == 1 && TypeSystem.Width(destination) == 8 || TypeSystem.Width(source) == 8 && TypeSystem.Width(destination) == 1);
         bool pointerBits = TypeSystem.Kind(source) == 12 && TypeSystem.Kind(destination) == 8 && TypeSystem.Width(destination) == 64 ||
             TypeSystem.Kind(source) == 8 && TypeSystem.Width(source) == 64 && TypeSystem.Kind(destination) == 12;
-        // Both ABIs follow x86-64's register-slot behavior for these mismatches (BE-18, BE-39): pointer/i64 interchange,
+        // Both ABIs follow x86-64's register-slot behavior for these mismatches: pointer/i64 interchange,
         // i64 arguments narrowed to their low 32 bits and i32 arguments zero-extended in the six register positions, and
         // i1/i8. Flang passes hidden character lengths as i64 to C functions declared with int, for example.
         nint returned = Llvm.LLVMGetReturnType(Llvm.LLVMGlobalGetValueType(target));

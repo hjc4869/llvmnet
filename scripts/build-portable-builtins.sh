@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build the compiler-rt builtins that Clang calls for portable code but that a C library does not provide (plan
-# item LC-29): complex multiplication and division with C Annex G semantics (__mulsc3, __muldc3, __mulxc3 and the
-# matching divisions). Integer and other arithmetic builtins are not needed: llvmnet lowers them itself.
+# Build the compiler-rt builtins that Clang calls for portable code but that a C library does not provide: complex
+# multiplication and division with C Annex G semantics (__mulsc3, __muldc3, __mulxc3 and the matching divisions).
+# llvmnet lowers the other arithmetic builtins itself.
 #   scripts/build-portable-builtins.sh [prefix]     default artifacts/sysroot-build/dotnet64-v2 (must contain musl)
 # Installs <prefix>/lib/libclang_rt.builtins.a; a step of scripts/build-sysroot.sh.
 set -euo pipefail

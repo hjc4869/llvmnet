@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # tags: core libc aot
 # timeout: 2400
-# musl 1.2.5 in the portable sysroot (LC-01, LC-02, LC-15): compare stdio, libm, system and thread probes with
-# the same programs statically linked against native musl 1.2.5, under JIT and NativeAOT.
+# musl in the portable sysroot: stdio, libm, system and thread probes compared with the same programs statically
+# linked against native musl 1.2.5, under JIT and NativeAOT.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"
@@ -15,7 +15,7 @@ for probe in stdio math system threads; do
     "$llvmnet" --runtime=portable -O1 --nativeaot "$source_file" -o "$test_output/musl-$probe-aot" >"$test_output/aot-$probe.log"
     (cd "$test_output" && timeout 120 "./musl-$probe-aot" >"$probe-aot.txt")
     diff -u "$test_output/$probe-native.txt" "$test_output/$probe-aot.txt"
-    # Nothing but the host interface may resolve outside musl: the old hand-written C# C library is unused.
+    # Nothing but the host interface may resolve outside musl.
     "$llvmnet" --runtime=portable -O1 "$source_file" --emit-llvm -o "$test_output/$probe-linked.bc"
     unexpected="$(llvm-nm-22 -u "$test_output/$probe-linked.bc" | awk '{print $2}' |
         grep -v -E '^(llvm\..*|__llvmnet_(syscall|get_tp|clone|spawn|run_constructors)|setjmp|longjmp|_DYNAMIC|__(init|fini)_array_(start|end))$' || true)"

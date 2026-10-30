@@ -68,7 +68,7 @@ internal static class Linux
     internal const ulong RLIM_INFINITY = ulong.MaxValue;
     internal const int R_OK = 4, W_OK = 2, X_OK = 1;
 
-    /// <summary>The identity every portable program sees on every host (LC-12): one user and group, number 1000.</summary>
+    /// <summary>The identity every portable program sees on every host: one user and group, number 1000.</summary>
     internal const int UserId = 1000, GroupId = 1000;
 
     /// <summary>System call numbers the host implements; any other number returns -ENOSYS.</summary>

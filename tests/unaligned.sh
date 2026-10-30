@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tags: core aot
-# Under-aligned, packed, overlapping and volatile memory access compared with native (BE-15).
+# Under-aligned, packed, overlapping and volatile memory access compared with native.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"

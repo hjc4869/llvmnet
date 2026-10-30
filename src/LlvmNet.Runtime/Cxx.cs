@@ -119,7 +119,7 @@ public static unsafe class Cxx
             }
         }
     }
-    /// <summary>libc++abi's __llvmnet_cxx_can_catch, registered by portable images (CX-03); system mode uses the walk above.</summary>
+    /// <summary>libc++abi's __llvmnet_cxx_can_catch, registered by portable images; system mode walks the RTTI with Bases.</summary>
     private static nint catchMatcher;
     public static void UseCatchMatcher(nint matcher) => catchMatcher = matcher;
 
@@ -229,7 +229,7 @@ public static unsafe class Cxx
     [CExport("_ZdlPvmSt11align_val_t"), CExport("_ZdaPvmSt11align_val_t")]
     public static void AlignedSizedDelete(nint pointer, long size, long alignment) => AlignedDelete(pointer, alignment);
 
-    // libc++abi exception_ptr ABI (used by upstream libc++, CX-01): exception_ptr holds the thrown object pointer.
+    // libc++abi's exception_ptr ABI, which libc++ uses: an exception_ptr holds the thrown object pointer.
     private static readonly ConcurrentDictionary<nint, CxxException> primaries = new();
     private static nint newHandler;
 

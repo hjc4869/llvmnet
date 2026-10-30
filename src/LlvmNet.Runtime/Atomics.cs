@@ -1,11 +1,10 @@
 namespace LlvmNet.Runtime;
 
 /// <summary>
-/// LLVM atomic load/store/cmpxchg/atomicrmw (BE-16). Naturally aligned 8- to 64-bit locations use hardware
-/// atomics through Interlocked and Volatile, so they are lock-free and interoperate with atomics performed
-/// by native code in system mode. Stores use Interlocked.Exchange, which is sequentially consistent and so
-/// valid for every LLVM ordering. A misaligned location always takes the locked path, so every access to a
-/// given address is consistent; LLVM requires atomics to be naturally aligned for portable code anyway.
+/// LLVM atomic load/store/cmpxchg/atomicrmw. Naturally aligned 8- to 64-bit locations use hardware atomics through
+/// Interlocked and Volatile, so they are lock-free and interoperate with native code's atomics in system mode; stores
+/// use Interlocked.Exchange, which is sequentially consistent and so valid for every LLVM ordering. A misaligned
+/// location always takes the locked path, so every access to a given address is consistent.
 /// </summary>
 public static unsafe class Atomics
 {

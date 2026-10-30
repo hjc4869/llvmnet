@@ -1,6 +1,6 @@
 # Calls and signature compatibility
 
-This page states which caller/callee signature differences llvmnet accepts (plan item BE-18). It follows from how LLVM IR is lowered: every LLVM function becomes a static CIL method, direct calls become `call`, and calls through pointers become `calli` with the call site's signature.
+This page states which caller/callee signature differences llvmnet accepts. It follows from how LLVM IR is lowered: every LLVM function becomes a static CIL method, direct calls become `call`, and calls through pointers become `calli` with the call site's signature. The rules are implemented in `src/LlvmNet.Compiler/FunctionEmitter.cs`.
 
 ## LLVM to CIL types
 
@@ -18,13 +18,13 @@ This page states which caller/callee signature differences llvmnet accepts (plan
 
 ## Direct calls
 
-The callee's definition is known, so llvmnet checks the call site against it at compile time.
+The callee's definition is known, so llvmnet checks the call site against it at compile time. The same rules apply in both runtime modes; `dotnet64-v2` follows x86-64's calling convention.
 
 - An identical LLVM function type is always accepted.
-- A call site whose LLVM type is variadic, as produced by a K&R or no-prototype call, may call a fixed-arity definition when the leading argument types match. Unused trailing arguments, including Flang's hidden character lengths, are dropped.
+- A call that passes more arguments than a fixed-arity definition takes, as K&R and unprototyped calls do, is accepted when the leading argument types match. The extra arguments, such as Flang's hidden character lengths, are dropped.
 - A `void` call site may call a definition that returns a value; the value is discarded. A non-`void` call site may call a `void` definition only when the result is unused.
-- In both modes, these x86-64 SysV register-slot equivalences are accepted, because native C and Fortran code relies on them (BE-39 extended them to portable mode, whose `dotnet64-v2` ABI follows x86-64's): `i32` and `i64` integer arguments in register positions, `i1` and `i8`, `ptr` and `i64`, and `i8` and `[1 x i8]` arguments and returns (BE-40). Flang passes hidden character lengths as `i64` to C functions declared with `int`, and `character(1)` values as `[1 x i8]` where C takes `char`, for example. Aggregates, `byval`, `sret`, `inreg` and `signext` parameters, and non-C calling conventions are never adjusted.
-- Calling with fewer arguments than the definition requires is a compile error. `--trap-missing-arguments` instead emits a trap at such a `void` call so a program whose invalid path is never executed can still be built.
+- Native C and Fortran code relies on x86-64 register slots for some mismatches, so these are accepted for C calling-convention calls: an `i64` argument for an `i32` parameter (the low 32 bits are passed), an `i32` argument for an `i64` parameter in the first six positions, `i1` and `i8`, `ptr` and `i64`, and `i8` and `[1 x i8]` for arguments and returns. Flang passes hidden character lengths as `i64` to C functions declared with `int`, and `character(1)` values as `[1 x i8]` where C takes `char`, for example. An argument is never adjusted when the callee returns an aggregate other than a byte array, or when that parameter or an earlier one is not an integer of up to 64 bits, `float`, `double`, pointer or byte array, or has a `byval`, `sret`, `inreg` or `signext` attribute (`signext` is allowed on a one-byte conversion).
+- Calling with fewer arguments than the definition requires is a compile error. With `--trap-missing-arguments`, such a call to a `void` function compiles to a run-time trap instead, so a program whose invalid path never runs can still be built.
 - Every other difference is a compile error ("Incompatible direct call signature").
 
 ## Indirect calls

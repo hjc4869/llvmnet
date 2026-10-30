@@ -8,7 +8,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 if [[ $# -gt 0 ]]; then
     prefix="$(realpath "$1")"
 else
-    # Under the runner: build a fresh self-contained package with bundled LLVM first.
+    # Without a package prefix argument, build a fresh self-contained package with bundled LLVM.
     prefix="$root/artifacts/tests/deployment/toolchain"
     rm -rf "$prefix"
     bash "$root/scripts/package-toolchain.sh" "$prefix" --self-contained --bundle-llvm

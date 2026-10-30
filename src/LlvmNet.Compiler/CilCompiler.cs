@@ -18,7 +18,7 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal TypeSystem Types { get; private set; } = null!;
     internal TypeBuilder Program { get; private set; } = null!;
     // The CLR limits how many fields one type may have, so static fields beyond this many per type go to further
-    // internal holder classes (a program with tens of thousands of string literals, such as libc++abi's test_demangle).
+    // internal holder classes.
     private const int FieldsPerType = 32768;
     private readonly List<TypeBuilder> fieldHolders = [];
     private int fieldsInHolder;
@@ -51,8 +51,7 @@ internal sealed class CilCompiler(CompilerOptions options)
 
     /// <summary>
     /// In portable mode, where musl, libc++ and flang-rt are linked as bitcode, only the host interface, the C++ exception
-    /// bridge (the CLR unwinds), non-local jumps, SIMD128 helpers and managed references resolve to managed code. A C
-    /// library symbol musl lacks is then an error, not a silent fallback.
+    /// bridge (the CLR unwinds), non-local jumps, SIMD128 helpers and managed references resolve to managed code.
     /// </summary>
     private bool MuslVisible(string name, MethodInfo method)
     {
@@ -60,8 +59,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         if (owner == typeof(HostSyscalls) || owner == typeof(NonLocalJumps) || owner == typeof(Simd128))
             return true;
         if (owner != typeof(Cxx)) return managedImports.Contains(name);
-        // libc++abi supplies type_info, __dynamic_cast and the bad_cast/bad_typeid helpers (private_typeinfo.cpp,
-        // cxa_aux_runtime.cpp); the bridge keeps throwing, catching and termination (docs/dev/cxx-eh-bridge.md).
+        // The bridge handles throwing, catching and termination (docs/dev/cxx-eh-bridge.md); libc++abi and musl supply
+        // the rest of the C++ ABI, such as guards, atexit and the bad_cast/bad_typeid helpers.
         return name is "_Unwind_Resume" or "__clang_call_terminate" or "__cxa_call_unexpected" ||
             name.StartsWith("__cxa_", StringComparison.Ordinal) && name is not ("__cxa_atexit" or "__cxa_finalize" or "__cxa_thread_atexit" or
                 "__cxa_thread_atexit_impl" or "__cxa_guard_acquire" or "__cxa_guard_release" or "__cxa_guard_abort" or
@@ -396,8 +395,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         nint llvmMain = Methods.First(pair => pair.Value == main).Key;
         Type[] parameters = Types.Parameters(Llvm.LLVMGlobalGetValueType(llvmMain));
         bool fortran = Llvm.Name(llvmMain) == "_QQmain" && main.ReturnType == typeof(void) && parameters.Length == 0;
-        // Flang with -fdefault-integer-8 defines i64 main(i64, ...); like the native start code, which passes argc in a
-        // register and reads the status from one, the entry point converts at the boundary.
+        // Flang with -fdefault-integer-8 defines i64 main(i64, ...); the entry point converts argc and the exit status
+        // at the boundary, as native start code does through registers.
         bool wide = main.ReturnType == typeof(long);
         bool wideCount = parameters.Length >= 2 && parameters[0] == typeof(long);
         if (!fortran && (main.ReturnType != typeof(int) && !wide || !(parameters.Length == 0 ||
@@ -498,7 +497,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         il.Emit(OpCodes.Ldstr, options.AbiTag);
         il.Emit(OpCodes.Ldstr, BuildInfo.Version);
         il.Emit(OpCodes.Call, typeof(AbiContract).GetMethod(nameof(AbiContract.Require), [typeof(string), typeof(string)])!);
-        // libc++abi's catch matching (ports/libcxxabi/llvmnet-catch.cpp) replaces the bridge's type walk (CX-03).
+        // When linked, libc++abi's catch matcher (ports/libcxxabi/llvmnet-catch.cpp) decides which handlers catch an exception.
         nint catchMatcher = Llvm.LLVMGetNamedFunction(module, "__llvmnet_cxx_can_catch");
         if (catchMatcher != 0 && Llvm.LLVMIsDeclaration(catchMatcher) == 0)
         {

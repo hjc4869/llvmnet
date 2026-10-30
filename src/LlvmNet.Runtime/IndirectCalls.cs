@@ -3,11 +3,9 @@ using System.Collections.Concurrent;
 namespace LlvmNet.Runtime;
 
 /// <summary>
-/// Debug support for --check-indirect-calls (BE-18). The CLR dispatches calli by the call site's CIL
-/// signature without checking the target, so a function called through a pointer of an incompatible
-/// type is undefined behavior. Images compiled with the option record each address-taken function's CIL
-/// signature and verify it at every indirect call. Pointers that were never registered (native functions,
-/// runtime callbacks) are not checked.
+/// Debug support for --check-indirect-calls: calli does not check its target's signature, so images compiled with
+/// the option register each address-taken function's CIL signature and verify it at every indirect call.
+/// Unregistered pointers (native functions, runtime callbacks) are not checked.
 /// </summary>
 public static class IndirectCalls
 {

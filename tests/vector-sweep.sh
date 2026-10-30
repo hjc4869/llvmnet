@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tags: core aot
 # Vectorized code must either run exactly like native or be rejected with an ordinary diagnostic,
-# never miscompile or fail internally (BE-31). Fixtures are compiled with the same flags natively. The AVX2
+# never miscompile or fail internally. Fixtures are compiled with the same flags natively. The AVX2
 # profile disables FP contraction: llvm.fmuladd may legally fuse natively (FMA) but not in llvmnet.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"

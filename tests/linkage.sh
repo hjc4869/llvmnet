@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tags: core
-# Linkage semantics (BE-07): aliases, weak definitions, undefined weak references, archive extraction
+# Linkage semantics: aliases, weak definitions, undefined weak references, archive extraction
 # rules, alias exports from managed libraries, and explicit ifunc rejection. Native clang is the oracle.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 fixtures="$root/tests/c/linkage"

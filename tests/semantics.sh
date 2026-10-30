@@ -2,9 +2,9 @@
 # tags: core aot
 # requires: python3
 # timeout: 2400
-# LLVM IR semantics audit (BE-11, BE-12): about 43,000 generated probes of integer, float, double and x86_fp80
-# operations, casts, comparisons and intrinsics on edge values, widths 1 to 128 including odd widths,
-# compared bit for bit with the natively compiled module in all modes, plus portable NativeAOT.
+# LLVM IR semantics: generated probes of integer, float, double and x86_fp80 operations, casts, comparisons and
+# intrinsics on edge values, widths 1 to 128 including odd widths, compared bit for bit with the natively
+# compiled module in both modes, plus portable NativeAOT.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 python3 "$root/tests/semantics/generate.py" "$test_output/native" >/dev/null

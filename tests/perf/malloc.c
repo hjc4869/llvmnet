@@ -1,4 +1,4 @@
-// Allocator throughput (LC-24): 20 million malloc/free pairs of 16 to 4,096 bytes over 4,096 live slots.
+// malloc/free throughput (scripts/bench-runtime.sh): 20 million pairs of 16 to 4,096 bytes over 4,096 live slots.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

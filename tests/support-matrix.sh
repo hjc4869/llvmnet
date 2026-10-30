@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tags: core
 # requires: python3
-# Regenerate the LLVM IR support matrix (BE-02) and fail when docs/user/support-matrix.md is stale or
+# Regenerate the LLVM IR support matrix and fail when docs/user/support-matrix.md is stale or
 # any construct causes an internal compiler error. Run "tests/run.sh support-matrix" and commit the result.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"

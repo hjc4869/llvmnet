@@ -1,5 +1,5 @@
-// stdio throughput (LC-24): writes 1 GiB to the file named by argv[1] through fwrite in 256-byte calls, so the cost
-// is the C library's buffering rather than the disk, then reads it back in 64 KiB freads.
+// stdio throughput (scripts/bench-runtime.sh): writes 1 GiB to the file named by argv[1] through fwrite in 256-byte
+// calls, so the cost is the C library's buffering rather than the disk, then reads it back in 64 KiB freads.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

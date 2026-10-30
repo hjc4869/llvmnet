@@ -2,7 +2,7 @@
 # tags: fuzz
 # requires: fuzz-build
 # timeout: 7200
-# Differential fuzzing with csmith and yarpgen (FD-16). Each seed makes one random C program per generator,
+# Differential fuzzing with csmith and yarpgen. Each seed makes one random C program per generator,
 # compiled natively with clang-22 and by llvmnet in system and portable modes with the same optimization
 # level; the outputs (checksums of the program state) are compared. A program llvmnet rejects with a
 # diagnostic is recorded, not failed; a mismatch, crash, hang or internal error fails the run and keeps
@@ -11,6 +11,7 @@
 #   FUZZ_GENERATORS=csmith tests/fuzz.sh                 generators (default: csmith yarpgen)
 #   FUZZ_OPT=-O2 tests/fuzz.sh                           one level for every seed (default: -O0..-O3 by seed)
 #   FUZZ_RUNTIMES=portable tests/fuzz.sh                 modes to compare (default: system portable)
+#   JOBS=8 tests/fuzz.sh                                 programs in parallel (default: nproc/2)
 # Results: artifacts/tests/fuzz/{results.tsv,rejected.txt,failures/<generator>-<seed>/}.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"

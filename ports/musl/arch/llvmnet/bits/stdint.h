@@ -1,6 +1,6 @@
-/* llvmnet port of musl: the fast 16- and 32-bit types are 64-bit, as in glibc on x86-64 and in the original
- * hand-written dotnet64-v1 headers, so programs whose results depend on their width (flang-rt's random numbers, for
- * example) behave as native glibc builds do. musl itself does not use these types. */
+/* llvmnet port of musl: the fast 16- and 32-bit types are 64-bit, as in glibc on x86-64, so programs whose results
+ * depend on their width (flang-rt's random numbers, for example) behave as native glibc builds do. musl itself does
+ * not use these types. */
 typedef int64_t int_fast16_t;
 typedef int64_t int_fast32_t;
 typedef uint64_t uint_fast16_t;

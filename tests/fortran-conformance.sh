@@ -2,8 +2,8 @@
 # tags: conformance fortran
 # requires: flang python3
 # timeout: 14400
-# Fortran conformance (FT-06) in portable mode: the NIST FCVS F77 suite and the run tests of the gfortran
-# test-suite port in llvm-test-suite 22.1.8. Each program is built natively with flang-22 and with llvmnet; a
+# Fortran conformance in portable mode: the NIST FCVS F77 suite and the run tests of the gfortran
+# test-suite port in llvm-test-suite. Each program is built natively with flang-22 and with llvmnet; a
 # test counts when the native build passes it (FCVS: output equals the reference; gfortran: exit status 0, or
 # the expected failure for xfail tests), and llvmnet passes when its build behaves the same.
 #   tests/fortran-conformance.sh [fcvs] [gfortran]        default: both

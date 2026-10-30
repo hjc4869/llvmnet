@@ -16,7 +16,7 @@ public static unsafe class NonLocalJumps
 
     public static int Save(nint buffer, long frame, int site, int saveMask, int system, nint stackPosition)
     {
-        // Word 12 records the saved mask: 1 for the native one (system mode), 2 for the host's (portable mode).
+        // The int at offset 12 records which signal mask was saved: 0 none, 1 the native one (system mode), 2 the host's (portable mode).
         *(long*)buffer = frame;
         *(int*)(buffer + 8) = site;
         *(int*)(buffer + 12) = saveMask == 0 ? 0 : system != 0 ? 1 : 2;

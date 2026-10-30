@@ -26,8 +26,8 @@ public static unsafe class ProcessRuntime
     }
 
     /// <summary>
-    /// For musl (LC-01): one Linux-style start vector, argv entries, NULL, environment entries, NULL, then an
-    /// auxiliary vector with AT_PAGESZ, AT_RANDOM and equal real/effective ids, which musl's __init_libc reads.
+    /// Builds musl's Linux-style start vector: argv entries, NULL, environment entries, NULL, then an auxiliary
+    /// vector with AT_PAGESZ, AT_RANDOM and equal real/effective ids, which __init_libc reads.
     /// </summary>
     public static int InitializeStartup(string[] arguments)
     {

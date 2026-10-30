@@ -1,5 +1,5 @@
-// Formatted output (LC-24): 5 million lines of integers, strings, floating point and hexadecimal through printf; run
-// with stdout redirected to /dev/null. The checksum of the lengths goes to stderr.
+// Formatted output (scripts/bench-runtime.sh): 5 million lines of integers, strings, floating point and hexadecimal
+// through printf; run with stdout redirected to /dev/null. The checksum of the lengths goes to stderr.
 #include <stdio.h>
 
 int main(void)

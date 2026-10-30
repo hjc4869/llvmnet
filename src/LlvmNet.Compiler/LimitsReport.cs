@@ -5,10 +5,9 @@ using System.Reflection.PortableExecutable;
 namespace LlvmNet;
 
 /// <summary>
-/// --diagnose-limits (BE-25): per-method IL size, locals and maximum stack from the emitted image, joined
-/// with LLVM block and instruction counts, flagging methods beyond the CLR's hard local-variable limit
-/// or the RyuJIT thresholds above which it compiles a method with minimal optimization (MinOpts):
-/// 60,000 IL bytes, 20,000 instructions, 2,000 basic blocks or 2,000 locals.
+/// --diagnose-limits: per-method IL size, locals and maximum stack from the emitted image, joined with LLVM block
+/// and instruction counts, flagging methods near the CLR local limit or beyond a threshold at which RyuJIT
+/// compiles with minimal optimization (MinOpts).
 /// </summary>
 internal static class LimitsReport
 {

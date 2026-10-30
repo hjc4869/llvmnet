@@ -1,12 +1,12 @@
 ## Plan item
 
-<!-- The plan item ID(s) from docs/plan, for example BE-16. Use "none" for unplanned fixes. -->
+<!-- The plan item ID(s) from docs/plan, for example FT-08. Use "none" for unplanned fixes. -->
 
 ## What changed
 
 ## How it was verified
 
-<!-- Runner tags or scripts executed, for example `tests/run.sh --tag core`, and any manual checks. -->
+<!-- Runner tags or scripts executed, for example `tests/run.sh --tag core --tag toolchain`, and any manual checks. -->
 
 ## Checklist
 

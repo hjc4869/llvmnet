@@ -1,4 +1,4 @@
-// Order of process termination work (BE-08). Native glibc order: thread_local destructors of the exiting
+// Order of process termination work. Native glibc order: thread_local destructors of the exiting
 // thread, then atexit and __cxa_atexit handlers in reverse registration order, then .fini_array
 // (destructor attributes, llvm.global_dtors) by descending priority.
 #include <cstdio>

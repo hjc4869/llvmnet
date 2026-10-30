@@ -1,7 +1,7 @@
-// llvmnet port of libc++abi: catch matching for the managed exception bridge (plan item CX-03,
-// docs/dev/cxx-eh-bridge.md). The CLR unwinds the stack, so libc++abi's personality routine never runs; the
-// bridge asks this function whether a catch clause or exception specification accepts a thrown type, which
-// is the question the personality routine asks private_typeinfo.cpp natively.
+// llvmnet port of libc++abi: catch matching for the managed exception bridge (docs/dev/cxx-eh-bridge.md).
+// The CLR unwinds the stack, so libc++abi's personality routine never runs; the bridge asks this function
+// whether a catch clause or exception specification accepts a thrown type, which is the question the
+// personality routine asks private_typeinfo.cpp natively.
 #include "private_typeinfo.h"
 
 // Returns 1 when catch_type accepts an exception of thrown_type; *adjusted is the thrown object on entry and the

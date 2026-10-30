@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build the upstream Fortran runtime (flang-rt 22.1.8) as LLVM bitcode for one runtime mode (plan items FT-01, FT-05,
-# FT-09); steps of scripts/build-sysroot.sh.
+# Build the upstream Fortran runtime (flang-rt 22.1.8) as LLVM bitcode for one runtime mode; steps of
+# scripts/build-sysroot.sh.
 #   scripts/build-flang-rt.sh portable [prefix]   on musl and libc++ from <prefix> (default artifacts/sysroot-build/dotnet64-v2)
 #   scripts/build-flang-rt.sh system <prefix>     on the host's glibc and libstdc++ headers, for --runtime=system
 # Installs <prefix>/lib/libflang_rt.runtime.a; per-file failures go to <prefix>/build-flang-rt/failures.tsv. As upstream
 # builds it, the runtime uses no C++ exceptions or RTTI, so system mode needs only the C++ bridge's new, delete and
-# guards. REAL(16) is not available: flang disables __float128 with libc++, and llvmnet has no fp128 yet (BE-14).
+# guards. REAL(16) is not available: flang disables __float128 with libc++, and llvmnet has no fp128 support.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 target="${1:?Usage: build-flang-rt.sh portable|system [prefix]}"

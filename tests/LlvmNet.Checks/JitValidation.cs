@@ -8,10 +8,9 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 
 /// <summary>
-/// Forces the JIT to compile every method body of llvmnet-emitted assemblies. Translated C is
-/// intentionally unverifiable (raw pointers, localloc, calli), so ILVerify-style verification does not
-/// apply; the JIT still rejects structurally invalid IL with InvalidProgramException, and compiling
-/// eagerly finds it in methods no test happens to execute.
+/// Forces the JIT to compile every method body of llvmnet-emitted assemblies, so structurally invalid IL surfaces as
+/// InvalidProgramException even in methods no test executes. Translated code is unverifiable by design (raw pointers,
+/// localloc, calli), which leaves the JIT as the structural check.
 /// </summary>
 internal static class JitValidation
 {

@@ -1,7 +1,5 @@
-// Catch clauses the bridge once got wrong. A catch (...) after a typed handler entered the typed one when that clause
-// held the program's first type id, which the bridge also returned for catch (...) (found by libc++abi's
-// catch_array_01, CX-13). System mode handed pointer handlers the address of the thrown pointer instead of its value
-// and did not convert to qualified or base-class pointers.
+// Catch clause selection: catch (...) after a typed handler whose type has the program's first type id, and pointer
+// handlers, which receive the thrown pointer's value and convert to qualified, void and base-class pointers.
 #include <cstdio>
 
 struct Base {

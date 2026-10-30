@@ -1,8 +1,8 @@
-/* llvmnet port of musl: posix_spawn without fork or exec (plan item LC-08). The host starts the program as a
- * separate process (__llvmnet_spawn in src/LlvmNet.Runtime/Host/HostProcess.cs). The file actions are applied
- * here to a table of the child's standard input, output and error, which are all a host process can inherit;
- * descriptors above 2 are never inherited. posix_spawnp, system and popen use this function unchanged. Spawn
- * attributes (signal mask and defaults, process group, scheduling) have no host equivalent and are ignored. */
+/* llvmnet port of musl: posix_spawn without fork or exec. The host starts the program as a separate process
+ * (__llvmnet_spawn in src/LlvmNet.Runtime/Host/HostProcess.cs). The file actions are applied here to a table of
+ * the child's standard input, output and error, which are all a host process can inherit; descriptors above 2
+ * are never inherited. posix_spawnp, system and popen use this function unchanged. Spawn attributes (signal
+ * mask and defaults, process group, scheduling) have no host equivalent and are ignored. */
 #define _GNU_SOURCE
 #include <spawn.h>
 #include <fcntl.h>

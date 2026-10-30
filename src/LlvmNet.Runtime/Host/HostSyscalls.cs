@@ -5,12 +5,10 @@ using static LlvmNet.Runtime.Linux;
 namespace LlvmNet.Runtime;
 
 /// <summary>
-/// The host layer under musl in the portable sysroot (plan items LC-04 to LC-12, contract in docs/dev/host-abi.md).
-/// musl's arch/llvmnet/syscall_arch.h sends every system call to <see cref="Syscall"/>. Numbers, arguments,
-/// structure layouts and results follow Linux x86-64, including the rule that a failing call returns -errno, so
-/// musl runs unmodified. The implementation uses .NET APIs only and behaves the same on every .NET host.
-/// The parts live in Host/: descriptors and pipes, the file system, memory mappings, processes and signals,
-/// clocks, and threads.
+/// The host layer under musl in the portable sysroot (contract in docs/dev/host-abi.md). musl's
+/// arch/llvmnet/syscall_arch.h sends every system call to <see cref="Syscall"/>, whose numbers, arguments, layouts
+/// and -errno results follow Linux x86-64, so musl runs unmodified. It uses .NET APIs only and behaves the same on
+/// every .NET host.
 /// </summary>
 public static unsafe partial class HostSyscalls
 {
@@ -120,7 +118,7 @@ public static unsafe partial class HostSyscalls
                 Linux.Syscall.Statfs => FileSystemStatusOf(AT_FDCWD, (nint)a, (FileSystemStatus*)b),
                 Linux.Syscall.Fstatfs => FileSystemStatusOf((int)a, 0, (FileSystemStatus*)b),
                 Linux.Syscall.Prctl => 0,
-                Linux.Syscall.ArchPrctl => b == ARCH_SET_FS ? SetThreadPointer((nint)b) : -EINVAL,
+                Linux.Syscall.ArchPrctl => a == ARCH_SET_FS ? SetThreadPointer((nint)b) : -EINVAL,
                 Linux.Syscall.Setrlimit => ResourceLimit((int)a, (ulong*)b, null),
                 Linux.Syscall.Prlimit64 => (int)a is 0 || (int)a == Environment.ProcessId ? ResourceLimit((int)b, (ulong*)c, (ulong*)d) : -ESRCH,
                 Linux.Syscall.SetRobustList => SetRobustList((nint)a, b),
@@ -152,7 +150,7 @@ public static unsafe partial class HostSyscalls
         }
         catch (ThreadInterruptedException)
         {
-            // A blocking call of a thread that pthread_cancel (SIGCANCEL) or pthread_kill woke up.
+            // A blocking call that pthread_cancel (SIGCANCEL) interrupted.
             return -EINTR;
         }
     }
