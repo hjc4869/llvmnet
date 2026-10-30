@@ -87,7 +87,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             result = function
                 ? !options.NativeImports.ContainsKey(name) && !(runtimeExports.TryGetValue(name, out MethodInfo? export) && (options.Runtime != "portable" || MuslVisible(name, export))) &&
                     (Host is null || HostInterop.Adapter(name) is null)
-                : !Stdio.HasGlobal(name) && !Cxx.HasGlobal(name);
+                : !Cxx.HasGlobal(name);
             if (result && Host is not null && !(function && !Host.IsSystem(value)))
             {
                 try { Host.LibraryFor(name); result = false; }
@@ -301,7 +301,7 @@ internal sealed class CilCompiler(CompilerOptions options)
                 throw new NotSupportedException($"External thread-local global requires a bitcode definition: {Llvm.Name(global)}");
             if (Llvm.LLVMGetInitializer(global) == 0 && Host is not null && !Cxx.HasGlobal(Llvm.Name(global)))
                 Host.LibraryFor(Llvm.Name(global));
-            else if (Llvm.LLVMGetInitializer(global) == 0 && !Stdio.HasGlobal(Llvm.Name(global)) && !Cxx.HasGlobal(Llvm.Name(global)))
+            else if (Llvm.LLVMGetInitializer(global) == 0 && !Cxx.HasGlobal(Llvm.Name(global)))
                 throw new NotSupportedException($"Unresolved external global: {Llvm.Name(global)}");
             Globals[global] = Program.DefineField($"__global{Globals.Count}", typeof(nint), FieldAttributes.Private | FieldAttributes.Static);
             if (threadLocal)
@@ -462,7 +462,7 @@ internal sealed class CilCompiler(CompilerOptions options)
                 else
                 {
                     il.Emit(OpCodes.Ldstr, Llvm.Name(global));
-                    il.Emit(OpCodes.Call, Stdio.HasGlobal(Llvm.Name(global)) ? typeof(Stdio).GetMethod(nameof(Stdio.Global))! : typeof(Cxx).GetMethod(nameof(Cxx.Global))!);
+                    il.Emit(OpCodes.Call, typeof(Cxx).GetMethod(nameof(Cxx.Global))!);
                 }
                 il.Emit(OpCodes.Stsfld, field);
             }

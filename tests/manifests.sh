@@ -6,7 +6,6 @@
 # timeout: 1800
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-build="${FFMPEG_BUILD_DIR:-$root/artifacts/ffmpeg-browser}"
 fixtures="$root/artifacts/tests/manifests"
 mkdir -p "$fixtures/dash" "$fixtures/hls"
 if [[ ! -f "$fixtures/source.mp4" ]]; then
@@ -22,8 +21,10 @@ if [[ ! -f "$fixtures/hls/playlist.m3u8" ]]; then
         -f hls -hls_time 0.4 -hls_list_size 0 -hls_segment_filename "$fixtures/hls/segment%03d.ts" -y "$fixtures/hls/playlist.m3u8"
 fi
 for file in dash/manifest.mpd hls/playlist.m3u8; do
-    "$build/decode-native" "$fixtures/$file" 100 >"$fixtures/native.txt"
-    dotnet "$build/decode.dll" "$fixtures/$file" 100 >"$fixtures/cil.txt"
-    diff -u "$fixtures/native.txt" "$fixtures/cil.txt"
-    printf 'PASS: local-file %s decoded hashes match native\n' "$file"
+    "$root/artifacts/ffmpeg-browser-system/decode-native" "$fixtures/$file" 100 >"$fixtures/native.txt"
+    for runtime in system portable; do
+        dotnet "$root/artifacts/ffmpeg-browser-$runtime/decode.dll" "$fixtures/$file" 100 >"$fixtures/$runtime.txt"
+        diff -u "$fixtures/native.txt" "$fixtures/$runtime.txt"
+    done
+    printf 'PASS: local-file %s decoded hashes match native in system and portable mode\n' "$file"
 done

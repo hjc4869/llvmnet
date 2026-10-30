@@ -22,7 +22,7 @@ public static class AbiContract
     {
         if (IntPtr.Size != 8 || !BitConverter.IsLittleEndian)
             throw new PlatformNotSupportedException("llvmnet ABIs require a little-endian 64-bit .NET runtime.");
-        if (contract is not ("dotnet64-v2" or "managed-host-v1" or "system-linux-x64-v1"))
+        if (contract is not ("dotnet64-v2" or "system-linux-x64-v1"))
             throw new NotSupportedException($"Unknown llvmnet ABI contract {contract}");
         if (contract != "dotnet64-v2" && (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64))
             throw new PlatformNotSupportedException($"{contract} targets Linux x86-64; rebuild with --runtime=portable for a platform-neutral .NET ABI.");

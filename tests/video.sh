@@ -7,6 +7,9 @@
 # Opt-in check against a private local video: set FFMPEG_TEST_VIDEO to a file path.
 # FFMPEG_TEST_FRAMES selects the frame limit (default 10; use a large value for a full-file comparison).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-build="${FFMPEG_BUILD_DIR:-$root/artifacts/ffmpeg-browser}"
-FFMPEG_BUILD_DIR="$build" bash "$root/scripts/validate-video.sh" "$FFMPEG_TEST_VIDEO" "${FFMPEG_TEST_FRAMES:-10}"
-dotnet "$checks" inspect "$build/decode.dll"
+for runtime in system portable; do
+    build="$root/artifacts/ffmpeg-browser-$runtime"
+    FFMPEG_BUILD_DIR="$build" FFMPEG_NATIVE_DECODER="$root/artifacts/ffmpeg-browser-system/decode-native" \
+        bash "$root/scripts/validate-video.sh" "$FFMPEG_TEST_VIDEO" "${FFMPEG_TEST_FRAMES:-10}"
+    dotnet "$checks" inspect "$build/decode.dll"
+done

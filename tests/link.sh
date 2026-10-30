@@ -4,26 +4,35 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/link"
 mkdir -p "$output"
-compiler=(dotnet "$root/src/LlvmNet.Compiler/bin/Release/net10.0/llvmnet.dll")
-"${compiler[@]}" -c "$root/tests/c/link-main.c" -o "$output/main.o"
-"${compiler[@]}" -c "$root/tests/c/link-library.c" -o "$output/library.o"
-"${compiler[@]}" -c "$root/tests/c/link-unused.c" -o "$output/unused.o"
-llvm-ar-22 rcs "$output/libexample.a" "$output/library.o" "$output/unused.o"
-"${compiler[@]}" "$output/main.o" -L"$output" -lexample -o "$output/archive.dll"
-dotnet "$output/archive.dll"
-"${compiler[@]}" --emit-library "$output/library.o" -o "$output/example.dll"
-"${compiler[@]}" "$output/main.o" --cil-reference "$output/example.dll" -o "$output/cil-link.dll"
-dotnet "$output/cil-link.dll"
-"${compiler[@]}" -fno-builtin "$root/tests/c/native-import.c" --native-import 'abs=libc.so.6!abs' -o "$output/native-import.dll"
-dotnet "$output/native-import.dll"
-if "${compiler[@]}" -fno-builtin "$root/tests/c/native-import.c" -o "$output/unresolved.dll" 2>"$output/unresolved.log"; then
-    printf 'FAIL: unresolved native symbol linked without an explicit import\n' >&2
+for runtime in system portable; do
+    compiler=("$llvmnet" --runtime="$runtime")
+    "${compiler[@]}" -c "$root/tests/c/link-main.c" -o "$output/main-$runtime.o"
+    "${compiler[@]}" -c "$root/tests/c/link-library.c" -o "$output/library-$runtime.o"
+    "${compiler[@]}" -c "$root/tests/c/link-unused.c" -o "$output/unused-$runtime.o"
+    llvm-ar-22 rcs "$output/libexample-$runtime.a" "$output/library-$runtime.o" "$output/unused-$runtime.o"
+    "${compiler[@]}" "$output/main-$runtime.o" -L"$output" "-lexample-$runtime" -o "$output/archive-$runtime.dll"
+    dotnet "$output/archive-$runtime.dll"
+    "${compiler[@]}" --emit-library "$output/library-$runtime.o" -o "$output/Example${runtime^}.dll"
+    "${compiler[@]}" "$output/main-$runtime.o" --cil-reference "$output/Example${runtime^}.dll" -o "$output/cil-link-$runtime.dll"
+    dotnet "$output/cil-link-$runtime.dll"
+done
+if "$llvmnet" --runtime=portable "$output/main-system.o" -o "$output/mixed.dll" 2>"$output/mixed.log"; then
+    printf 'FAIL: a system-mode object linked into a portable program\n' >&2
     exit 1
 fi
-grep -q 'Unresolved function: abs' "$output/unresolved.log"
+grep -q 'ABI mismatch' "$output/mixed.log"
+# Explicit scalar P/Invoke imports exist in system mode only.
+compiler=("$llvmnet" --runtime=system)
+"${compiler[@]}" -fno-builtin "$root/tests/c/native-import.c" --native-import 'abs=libc.so.6!abs' -o "$output/native-import.dll"
+dotnet "$output/native-import.dll"
 if "${compiler[@]}" "$root/tests/c/native-aggregate.c" --native-import 'foreign_aggregate=libc.so.6!abs' -o "$output/invalid-abi.dll" 2>"$output/invalid-abi.log"; then
     printf 'FAIL: native aggregate ABI accepted by scalar-only P/Invoke linker\n' >&2
     exit 1
 fi
 grep -q 'requires a non-variadic scalar C ABI signature' "$output/invalid-abi.log"
-printf 'PASS: bitcode archive, CIL reference, explicit P/Invoke and unresolved-symbol rejection\n'
+if "$llvmnet" --runtime=managed-host "$root/tests/c/smoke.c" -o "$output/legacy.dll" 2>"$output/legacy.log"; then
+    printf 'FAIL: the removed managed-host mode was accepted\n' >&2
+    exit 1
+fi
+grep -q 'managed-host was removed' "$output/legacy.log"
+printf 'PASS: bitcode archives, CIL references and ABI mismatch rejection in both modes; explicit P/Invoke in system mode\n'

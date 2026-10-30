@@ -7,14 +7,14 @@ internal sealed record NativeImport(string Library, string EntryPoint);
 internal sealed class CompilerOptions
 {
     internal bool Library { get; set; }
-    internal string Runtime { get; set; } = "managed-host";
+    internal string Runtime { get; set; } = "portable";
     internal bool Verbose { get; set; }
     internal bool NativeAot { get; set; }
     internal bool Simd128 { get; set; }
     internal bool TrapMissingArguments { get; set; }
     internal bool DiagnoseLimits { get; set; }
     internal bool CheckIndirectCalls { get; set; }
-    internal string AbiTag => Runtime switch { "system" => "system-linux-x64-v1", "portable" => PortableAbi.Tag, _ => "managed-host-v1" };
+    internal string AbiTag => Runtime == "system" ? "system-linux-x64-v1" : PortableAbi.Tag;
     internal List<string> SystemLibraries { get; } = [];
     internal Dictionary<string, NativeImport> NativeImports { get; } = new(StringComparer.Ordinal);
     internal List<string> CilReferences { get; } = [];
@@ -53,7 +53,7 @@ internal static class Driver
                 "  --cil-reference <dll>    Resolve ABI-compatible managed CExport methods",
                 "  --native-import <spec>   Explicit scalar P/Invoke: symbol=library!entrypoint",
                 "  --system-library <file>  Additional native library in system ABI mode",
-                "  --runtime <mode>         system, portable, or managed-host (legacy default)",
+                "  --runtime <mode>         portable (default) or system",
                 "  --simd128                Enable architecture-neutral SIMD128 helper calls",
                 "  --trap-missing-arguments Trap invalid void calls with missing arguments (system only)",
                 "  --diagnose-limits        Report per-function IL size, locals and JIT optimization thresholds",
@@ -185,7 +185,9 @@ internal static class Driver
             throw new ArgumentException("--nativeaot requires an executable link, not -c, -E, -S, --emit-llvm or -shared.");
         if (!nativeAot && (runtimeId is not null || aotDebug || aotPreference != "Balanced" || aotInstructionSet is not null))
             throw new ArgumentException("NativeAOT output settings require --nativeaot.");
-        if (options.Runtime is not ("system" or "portable" or "managed-host")) throw new ArgumentException("--runtime requires system, portable or managed-host.");
+        if (options.Runtime == "managed-host")
+            throw new ArgumentException("--runtime=managed-host was removed (ADR-04); use --runtime=portable for a platform-neutral .NET ABI or --runtime=system for the native Linux ABI.");
+        if (options.Runtime is not ("system" or "portable")) throw new ArgumentException("--runtime requires portable or system.");
         if (options.Runtime == "portable" && options.NativeImports.Count != 0)
             throw new ArgumentException("Portable ABI mode cannot contain native imports; use a managed CIL reference or --runtime=system.");
         if (options.Runtime != "system" && options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
@@ -230,16 +232,17 @@ internal static class Driver
             foreach (string input in inputs)
             {
                 string extension = Path.GetExtension(input);
-                if (extension is ".o" or ".bc" or ".ll" or ".a")
+                // With -c, LLVM IR is compiled like a source, which records the ABI tag that link inputs need.
+                if (extension is ".o" or ".a" || extension is ".bc" or ".ll" && !compileOnly)
                 {
                     if (compileOnly)
-                        throw new NotSupportedException("-c currently requires a source input; pass LLVM IR directly at link time.");
+                        throw new NotSupportedException("-c requires a source or LLVM IR input, not an object or archive.");
                     bitcode.Add(input);
                     continue;
                 }
                 bool fortran = driver == "flang" || IsFortran(input);
                 bool cpp = driver == "clang++" || IsCpp(input);
-                if (!fortran && !frontend.Contains("-x") && extension is not (".c" or ".cc" or ".cpp" or ".cxx" or ".C" or ".i" or ".ii"))
+                if (!fortran && !frontend.Contains("-x") && extension is not (".c" or ".cc" or ".cpp" or ".cxx" or ".C" or ".i" or ".ii" or ".ll" or ".bc"))
                     throw new NotSupportedException($"Unsupported input kind: {input}");
                 string destination = compileOnly ? output ?? Path.GetFileNameWithoutExtension(input) + (textual ? ".ll" : ".o") : Path.Combine(temporary, $"input{bitcode.Count}.bc");
                 List<string> command = ["-O1", "-fno-vectorize", "-fno-slp-vectorize"];

@@ -25,9 +25,15 @@ extern "C" int llvmnet_link(const char *const *paths, unsigned count,
         *message = LLVMCreateMessage(text.c_str());
         return 1;
     };
-    auto compatible = [&](const llvm::Module &module) {
+    // Every input must carry the ABI tag that llvmnet -c records; an untagged module could have been built for any target.
+    auto incompatible = [&](const llvm::Module &module, const std::string &name) -> std::string {
         auto *flag = llvm::dyn_cast_or_null<llvm::MDString>(module.getModuleFlag("llvmnet.abi"));
-        return flag ? flag->getString() == abi : llvm::StringRef(abi) == "managed-host-v1";
+        if (!flag)
+            return "untagged LLVM input " + name + ": compile sources with llvmnet -c, or LLVM IR with llvmnet --runtime=<mode> -x ir -c, so that its ABI is recorded";
+        if (flag->getString() != abi)
+            return "ABI mismatch: " + name + " was compiled for " + flag->getString().str() + ", but this link is " + abi +
+                "; recompile all inputs with the same --runtime mode";
+        return "";
     };
     for (unsigned index = 0; index < count; ++index) {
         llvm::StringRef path(paths[index]);
@@ -59,8 +65,8 @@ extern "C" int llvmnet_link(const char *const *paths, unsigned count,
                 diagnostic.print("llvmnet", stream);
                 return fail(text);
             }
-            if (!compatible(*module))
-                return fail("ABI mode mismatch or untagged object: " + path.str() + "; recompile all inputs with the same --runtime mode");
+            if (std::string problem = incompatible(*module, path.str()); !problem.empty())
+                return fail(problem);
             if (llvm::Linker::linkModules(*linked, std::move(module)))
                 return fail("LLVM object link failed: " + path.str());
         }
@@ -84,8 +90,8 @@ extern "C" int llvmnet_link(const char *const *paths, unsigned count,
             }
             if (!needed)
                 continue;
-            if (!compatible(*member))
-                return fail("ABI mode mismatch or untagged archive member: " + member->getModuleIdentifier());
+            if (std::string problem = incompatible(*member, "archive member " + member->getModuleIdentifier()); !problem.empty())
+                return fail(problem);
             if (llvm::Linker::linkModules(*linked, std::move(member)))
                 return fail("LLVM archive member link failed");
             progress = true;

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-runtime="${LLVMNET_RUNTIME:-managed-host}"
+runtime="${LLVMNET_RUNTIME:-portable}"
 case "$runtime" in
-    managed-host) suffix= ;;
     system|portable) suffix="-$runtime" ;;
-    *) printf 'Unsupported LLVMNET_RUNTIME: %s\n' "$runtime" >&2; exit 2 ;;
+    *) printf 'Unsupported LLVMNET_RUNTIME: %s (portable or system)\n' "$runtime" >&2; exit 2 ;;
 esac
 prefix="${LLVMNET_DEPS_PREFIX:-$root/artifacts/deps$suffix}"
 build="${LLVMNET_DEPS_BUILD_DIR:-$root/artifacts/deps-build$suffix}"
@@ -17,7 +16,12 @@ for directory in "$build" "$prefix"; do
 done
 export PATH="$root/bin:$PATH"
 bash "$root/scripts/ensure-built.sh"
+# Objects built against another portable sysroot carry an incompatible ABI; start over when it changes.
+abi_stamp="$runtime"
+[[ "$runtime" == portable ]] && abi_stamp+=" $(cat "$root/sysroot/dotnet64-v2/.llvmnet-inputs")"
+if [[ -f "$build/llvmnet-abi" && "$(<"$build/llvmnet-abi")" != "$abi_stamp" ]]; then rm -rf "${build:?}" "${prefix:?}"; fi
 mkdir -p "$build" "$prefix"
+printf '%s\n' "$abi_stamp" >"$build/llvmnet-abi"
 printf '%s\n' "$runtime" | tee "$build/llvmnet-runtime" >"$prefix/llvmnet-runtime"
 cflags="--runtime=$runtime -O1 -fno-vectorize -fno-slp-vectorize -fno-stack-protector"
 dependency="${1:-all}"

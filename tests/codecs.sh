@@ -6,10 +6,13 @@
 # timeout: 3600
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-build="${FFMPEG_BUILD_DIR:-$root/artifacts/ffmpeg-browser}"
 fixtures="$root/artifacts/tests/codecs"
 mkdir -p "$fixtures"
-FFMPEG_BUILD_DIR="$build" bash "$root/scripts/build-ffmpeg.sh" >"$fixtures/build.log" 2>&1
+# Both modes are built; the system build's decoder compiled natively from its IR is the oracle for both.
+for runtime in system portable; do
+    LLVMNET_RUNTIME="$runtime" bash "$root/scripts/build-ffmpeg.sh" >"$fixtures/build-$runtime.log" 2>&1
+done
+native="$root/artifacts/ffmpeg-browser-system/decode-native"
 video_source='testsrc2=size=128x72:rate=5:duration=0.8'
 audio_source='sine=frequency=997:sample_rate=48000:duration=0.15'
 if [[ ! -f "$fixtures/h264.mp4" ]]; then
@@ -24,8 +27,10 @@ fi
 for fixture in h264.mp4 vp9.webm av1.mkv image.png pcm.wav audio.flac aac.m4a; do
     mode=video
     case "$fixture" in *.wav|*.flac|*.m4a) mode=audio ;; esac
-    "$build/decode-native" "$fixtures/$fixture" 100 "$mode" >"$fixtures/$fixture-native.txt"
-    dotnet "$build/decode.dll" "$fixtures/$fixture" 100 "$mode" >"$fixtures/$fixture-cil.txt"
-    diff -u "$fixtures/$fixture-native.txt" "$fixtures/$fixture-cil.txt"
-    printf 'PASS: decoded %s hashes match native\n' "$fixture"
+    "$native" "$fixtures/$fixture" 100 "$mode" >"$fixtures/$fixture-native.txt"
+    for runtime in system portable; do
+        dotnet "$root/artifacts/ffmpeg-browser-$runtime/decode.dll" "$fixtures/$fixture" 100 "$mode" >"$fixtures/$fixture-$runtime.txt"
+        diff -u "$fixtures/$fixture-native.txt" "$fixtures/$fixture-$runtime.txt"
+    done
+    printf 'PASS: decoded %s hashes match native in system and portable mode\n' "$fixture"
 done

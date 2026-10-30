@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/driver"
 mkdir -p "$output"
-for runtime in managed-host system portable; do
+for runtime in system portable; do
     "$root/bin/llvmnet" -Wl,--version --runtime="$runtime" >"$output/linker-$runtime.txt"
     grep -q 'emits CIL, not native images' "$output/linker-$runtime.txt"
     "$root/bin/llvmnet" --runtime "$runtime" -Wl,--version >"$output/linker-$runtime.txt"

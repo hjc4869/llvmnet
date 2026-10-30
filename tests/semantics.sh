@@ -21,10 +21,9 @@ compare() {
         exit 1
     fi
 }
-for runtime in managed-host system portable; do
-    abi=""
+for runtime in system portable; do
+    abi=dotnet64-v2
     [[ "$runtime" == system ]] && abi=system-linux-x64-v1
-    [[ "$runtime" == portable ]] && abi=dotnet64-v2
     directory="$test_output/$runtime"
     python3 "$root/tests/semantics/generate.py" "$directory" "$abi" >/dev/null
     for module in integer float extended; do

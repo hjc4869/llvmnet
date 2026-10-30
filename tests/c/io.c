@@ -6,7 +6,10 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
+#ifdef __GLIBC__
+/* glibc 2.38 redirects strtol to this name for C23; system-mode programs built against older headers call it directly. */
 extern long __isoc23_strtol(const char *, char **, int);
+#endif
 
 static int compare(const void *left, const void *right)
 {
@@ -62,7 +65,9 @@ int main(int argc, char **argv)
     errno = 0;
     if (strtoll("9223372036854775808", &end, 10) != INT64_MAX || errno != ERANGE) return 16;
     if (strtod(" -12.5e2end", &end) != -1250 || strcmp(end, "end")) return 17;
+#ifdef __GLIBC__
     if (__isoc23_strtol("-0b101101rest", &end, 0) != -45 || strcmp(end, "rest")) return 29;
+#endif
     int integer, consumed = 0;
     double real;
     char word[8];

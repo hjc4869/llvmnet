@@ -23,7 +23,8 @@ for runtime in system portable; do
 	"$output/barrier-$runtime-aot"
 done
 for fixture in asm-instruction asm-output asm-comment-instruction; do
-	if "$root/bin/llvmnet" "$root/tests/ir/rejected/$fixture.ll" -o "$output/rejected.dll" > "$output/$fixture.log" 2>&1; then
+	tag_ir portable "$root/tests/ir/rejected/$fixture.ll" "$output/$fixture.bc"
+	if "$root/bin/llvmnet" "$output/$fixture.bc" -o "$output/rejected.dll" > "$output/$fixture.log" 2>&1; then
 		printf 'FAIL: unsupported assembly was accepted: %s\n' "$fixture" >&2
 		exit 1
 	fi

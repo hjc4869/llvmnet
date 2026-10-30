@@ -26,5 +26,5 @@ if "$root/bin/llvmnet" --runtime=system "$output/system.o" "$output/compat.o" -o
     printf 'FAIL: incompatible ABI modes were linked\n' >&2
     exit 1
 fi
-grep -q 'ABI mode mismatch' "$output/mismatch.log"
+grep -q 'ABI mismatch' "$output/mismatch.log"
 printf 'PASS: system libc/stdio, native varargs, qsort and pthread callbacks, OS mappings, and ABI-mix rejection\n'

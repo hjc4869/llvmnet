@@ -15,3 +15,7 @@ if [[ "${LLVMNET_SKIP_BUILD:-0}" != 1 ]]; then
     bash "$root/scripts/ensure-built.sh"
     export LLVMNET_SKIP_BUILD=1
 fi
+
+# Compiles LLVM IR for one runtime mode without optimizing it. Link inputs must carry the ABI tag llvmnet -c
+# records, so IR fixtures go through this before they are linked: tag_ir <runtime> <input.ll> <output.bc>
+tag_ir() { "$llvmnet" --runtime="$1" -x ir -O0 -c "$2" -o "$3" 2>"$3.log" || { cat "$3.log" >&2; return 1; }; }

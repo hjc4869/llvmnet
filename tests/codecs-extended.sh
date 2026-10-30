@@ -6,7 +6,6 @@
 # timeout: 1800
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-build="${FFMPEG_BUILD_DIR:-$root/artifacts/ffmpeg-browser}"
 fixtures="$root/artifacts/tests/codecs-extended"
 mkdir -p "$fixtures"
 video_source='testsrc2=size=128x96:rate=25:duration=0.16'
@@ -15,10 +14,12 @@ video_cases=(mpeg1video:mpeg1.mpg mpeg2video:mpeg2.mpg mpeg4:mpeg4.avi msmpeg4v2
 audio_cases=(alac:alac.m4a ac3:ac3.ac3 eac3:eac3.eac3 mp2:mp2.mp2 libmp3lame:mp3.mp3 libopus:opus.ogg libvorbis:vorbis.ogg pcm_f32le:float.wav pcm_s24le:pcm24.wav pcm_alaw:alaw.wav pcm_mulaw:mulaw.wav)
 check() {
     local file="$1" mode="$2"
-    "$build/decode-native" "$fixtures/$file" 100 "$mode" >"$fixtures/$file-native.txt"
-    dotnet "$build/decode.dll" "$fixtures/$file" 100 "$mode" >"$fixtures/$file-cil.txt"
-    diff -u "$fixtures/$file-native.txt" "$fixtures/$file-cil.txt"
-    printf 'PASS: decoded %s hashes match native\n' "$file"
+    "$root/artifacts/ffmpeg-browser-system/decode-native" "$fixtures/$file" 100 "$mode" >"$fixtures/$file-native.txt"
+    for runtime in system portable; do
+        dotnet "$root/artifacts/ffmpeg-browser-$runtime/decode.dll" "$fixtures/$file" 100 "$mode" >"$fixtures/$file-$runtime.txt"
+        diff -u "$fixtures/$file-native.txt" "$fixtures/$file-$runtime.txt"
+    done
+    printf 'PASS: decoded %s hashes match native in system and portable mode\n' "$file"
 }
 for item in "${video_cases[@]}"; do
     encoder="${item%%:*}"; file="${item#*:}"

@@ -10,7 +10,7 @@ clang-22 -c "$fixtures/archive-member.c" -o "$test_output/member-native.o"
 llvm-ar-22 rcs "$test_output/libmember-native.a" "$test_output/member-native.o"
 clang-22 "$fixtures/weak-default.c" "$fixtures/strong.c" "$test_output/libmember-native.a" -o "$test_output/native"
 "$test_output/native"
-for runtime in managed-host system portable; do
+for runtime in system portable; do
     out="$test_output/$runtime"
     mkdir -p "$out"
     "$llvmnet" --runtime="$runtime" -c "$fixtures/archive-member.c" -o "$out/member.o"
@@ -20,13 +20,11 @@ for runtime in managed-host system portable; do
     "$llvmnet" --runtime="$runtime" -shared "$fixtures/library.c" -o "$out/AliasLibrary.dll"
     "$llvmnet" --runtime="$runtime" "$fixtures/client.c" --cil-reference "$out/AliasLibrary.dll" -o "$out/alias-client.dll"
     dotnet "$out/alias-client.dll"
-    if [[ "$runtime" != managed-host ]]; then
-        abi=dotnet64-v2
-        [[ "$runtime" == system ]] && abi=system-linux-x64-v1
-        { cat "$root/tests/ir/linkage.ll"; printf '\n!llvm.module.flags = !{!0}\n!0 = !{i32 1, !"llvmnet.abi", !"%s"}\n' "$abi"; } >"$out/linkage.ll"
-        "$llvmnet" --runtime="$runtime" "$out/linkage.ll" -o "$out/linkage-ir.dll"
-        dotnet "$out/linkage-ir.dll"
-    fi
+    abi=dotnet64-v2
+    [[ "$runtime" == system ]] && abi=system-linux-x64-v1
+    { cat "$root/tests/ir/linkage.ll"; printf '\n!llvm.module.flags = !{!0}\n!0 = !{i32 1, !"llvmnet.abi", !"%s"}\n' "$abi"; } >"$out/linkage.ll"
+    "$llvmnet" --runtime="$runtime" "$out/linkage.ll" -o "$out/linkage-ir.dll"
+    dotnet "$out/linkage-ir.dll"
     # -O0 keeps the call; at -O1 LLVM resolves this ifunc statically and nothing remains to reject.
     if "$llvmnet" --runtime="$runtime" -O0 "$fixtures/ifunc.c" -o "$out/ifunc.dll" >"$out/ifunc.log" 2>&1; then
         printf 'FAIL: ifunc was accepted in %s mode\n' "$runtime" >&2

@@ -2,11 +2,10 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_dir="${FFMPEG_SOURCE:-$("$root/scripts/fetch-sources.sh" --path ffmpeg)}"
-runtime="${LLVMNET_RUNTIME:-managed-host}"
+runtime="${LLVMNET_RUNTIME:-portable}"
 case "$runtime" in
-    managed-host) suffix= ;;
     system|portable) suffix="-$runtime" ;;
-    *) printf 'Unsupported LLVMNET_RUNTIME: %s\n' "$runtime" >&2; exit 2 ;;
+    *) printf 'Unsupported LLVMNET_RUNTIME: %s (portable or system)\n' "$runtime" >&2; exit 2 ;;
 esac
 prefix="${LLVMNET_DEPS_PREFIX:-$root/artifacts/deps$suffix}"
 simd128="${FFMPEG_SIMD128:-0}"
@@ -44,7 +43,7 @@ mkdir -p "$build_dir"
 export PKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig"
 export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
 if [[ ! -f "$build_dir/ffbuild/config.mak" || "$(cat "$build_dir/llvmnet-source" 2>/dev/null)" != "$source_dir" || "$root/config/ffmpeg-browser.sh" -nt "$build_dir/ffbuild/config.mak" || "${BASH_SOURCE[0]}" -nt "$build_dir/ffbuild/config.mak" || "$root/config/ffmpeg-configure.patch" -nt "$build_dir/ffbuild/config.mak" ]] ||
-    { [[ "$runtime" == portable ]] && [[ -n "$(find "$root/sysroot/dotnet64-v1/include" -type f -newer "$build_dir/ffbuild/config.mak" -print -quit)" ]]; }; then
+    { [[ "$runtime" == portable ]] && [[ "$root/sysroot/dotnet64-v2/.llvmnet-inputs" -nt "$build_dir/ffbuild/config.mak" ]]; }; then
     configure="$source_dir/configure"
     if [[ "$simd128" == 1 && "$runtime" == portable ]]; then
         mkdir -p "$build_dir/ffbuild"

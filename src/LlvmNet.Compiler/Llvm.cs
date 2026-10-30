@@ -41,7 +41,7 @@ internal static unsafe class Llvm
         throw new InvalidOperationException(text);
     }
 
-    internal static void Link(string[] paths, string output, string abi = "managed-host-v1")
+    internal static void Link(string[] paths, string output, string abi)
     {
         nint[] pointers = new nint[paths.Length];
         try
