@@ -899,6 +899,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         bool discardReturn = false;
         bool truncateBooleanReturn = false;
         Type? convertReturn = null;
+        (nint From, nint To)? byteReturn = null;
         if (Llvm.LLVMIsAFunction(target) != 0 && signature != Llvm.LLVMGlobalGetValueType(target))
         {
             nint definition = Llvm.LLVMGlobalGetValueType(target);
@@ -927,8 +928,10 @@ internal sealed class FunctionEmitter : ValueEmitter
             bool pointerReturn = TypeSystem.Kind(siteReturn) == 12 && TypeSystem.Kind(definedReturn) == 8 && TypeSystem.Width(definedReturn) == 64 ||
                 TypeSystem.Kind(siteReturn) == 8 && TypeSystem.Width(siteReturn) == 64 && TypeSystem.Kind(definedReturn) == 12;
             if (pointerReturn) convertReturn = Types.Map(siteReturn);
+            if (Llvm.LLVMGetInstructionCallConv(instruction) == 0 && Llvm.LLVMGetFunctionCallConv(target) == 0 && OneByte(definedReturn, siteReturn))
+                byteReturn = (definedReturn, siteReturn);
             if (Llvm.LLVMIsFunctionVarArg(definition) != 0 || parameters > arguments ||
-                !discardReturn && !unusedVoidReturn && !truncateBooleanReturn && !pointerReturn && Llvm.LLVMGetReturnType(definition) != Llvm.LLVMGetReturnType(signature) ||
+                !discardReturn && !unusedVoidReturn && !truncateBooleanReturn && !pointerReturn && byteReturn is null && Llvm.LLVMGetReturnType(definition) != Llvm.LLVMGetReturnType(signature) ||
                 Enumerable.Range(0, checked((int)parameters)).Any(index => Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, (uint)index)) != Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index)) &&
                     !SystemIntegerArgumentCompatible(instruction, target, (uint)index)))
                 throw new NotSupportedException($"Incompatible direct call signature for {name}: {Llvm.PrintType(signature)} versus {Llvm.PrintType(definition)}");
@@ -980,6 +983,11 @@ internal sealed class FunctionEmitter : ValueEmitter
             if (!variadic && Llvm.LLVMIsAFunction(target) != 0 && Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, index)) != Llvm.LLVMTypeOf(argument))
             {
                 nint parameter = Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, index));
+                if (OneByte(Llvm.LLVMTypeOf(argument), parameter))
+                {
+                    ConvertOneByte(Llvm.LLVMTypeOf(argument), parameter);
+                    continue;
+                }
                 Il.Emit(TypeSystem.Kind(parameter) == 12 ? OpCodes.Conv_I : TypeSystem.Width(parameter) == 64 ? OpCodes.Conv_U8 : OpCodes.Conv_I4);
                 Normalize(parameter);
             }
@@ -1033,6 +1041,37 @@ internal sealed class FunctionEmitter : ValueEmitter
         if (discardReturn) Il.Emit(OpCodes.Pop);
         if (truncateBooleanReturn) Normalize(Llvm.LLVMTypeOf(instruction));
         if (convertReturn is not null) Il.Emit(convertReturn == typeof(nint) ? OpCodes.Conv_I : OpCodes.Conv_I8);
+        if (byteReturn is (nint from, nint to)) ConvertOneByte(from, to);
+    }
+
+    private static bool ByteArray(nint type) => TypeSystem.Kind(type) == 11 && Llvm.LLVMGetArrayLength2(type) == 1 &&
+        TypeSystem.Kind(Llvm.LLVMGetElementType(type)) == 8 && TypeSystem.Width(Llvm.LLVMGetElementType(type)) == 8;
+
+    /// <summary>i8 and [1 x i8], which x86-64 passes and returns in the same register: Fortran passes character(1) by value
+    /// as the array where C takes char (BE-40).</summary>
+    private static bool OneByte(nint first, nint second) =>
+        ByteArray(first) && TypeSystem.Kind(second) == 8 && TypeSystem.Width(second) == 8 ||
+        ByteArray(second) && TypeSystem.Kind(first) == 8 && TypeSystem.Width(first) == 8;
+
+    /// <summary>Converts the value on the stack between i8 and [1 x i8] through a temporary of the one-byte aggregate.</summary>
+    private void ConvertOneByte(nint from, nint to)
+    {
+        if (ByteArray(to))
+        {
+            LocalBuilder value = Il.DeclareLocal(typeof(int)), aggregate = Il.DeclareLocal(Types.Map(to));
+            Il.Emit(OpCodes.Stloc, value);
+            Il.Emit(OpCodes.Ldloca, aggregate);
+            Il.Emit(OpCodes.Ldloc, value);
+            Il.Emit(OpCodes.Stind_I1);
+            Il.Emit(OpCodes.Ldloc, aggregate);
+        }
+        else
+        {
+            LocalBuilder aggregate = Il.DeclareLocal(Types.Map(from));
+            Il.Emit(OpCodes.Stloc, aggregate);
+            Il.Emit(OpCodes.Ldloca, aggregate);
+            Il.Emit(OpCodes.Ldind_U1);
+        }
     }
 
     private void ManagedCalli(Type returnType, Type[] parameters)
@@ -1053,16 +1092,19 @@ internal sealed class FunctionEmitter : ValueEmitter
         // Both ABIs follow x86-64's register-slot behavior for these mismatches (BE-18, BE-39): pointer/i64 interchange,
         // i64 arguments narrowed to their low 32 bits and i32 arguments zero-extended in the six register positions, and
         // i1/i8. Flang passes hidden character lengths as i64 to C functions declared with int, for example.
+        nint returned = Llvm.LLVMGetReturnType(Llvm.LLVMGlobalGetValueType(target));
         if (Llvm.LLVMGetInstructionCallConv(instruction) != 0 || Llvm.LLVMGetFunctionCallConv(target) != 0 ||
-            !(integerWidths || booleanWidths || pointerBits) || integerWidths && TypeSystem.Width(source) == 32 && index >= 6 ||
-            TypeSystem.Kind(Llvm.LLVMGetReturnType(Llvm.LLVMGlobalGetValueType(target))) is 10 or 11)
+            !(integerWidths || booleanWidths || pointerBits || OneByte(source, destination)) ||
+            integerWidths && TypeSystem.Width(source) == 32 && index >= 6 || TypeSystem.Kind(returned) is 10 or 11 && !ByteArray(returned))
             return false;
         for (uint parameter = 0; parameter <= index; parameter++)
         {
             nint type = Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, parameter));
-            if (TypeSystem.Kind(type) is not (2 or 3 or 12) && !(TypeSystem.Kind(type) == 8 && TypeSystem.Width(type) <= 64)) return false;
+            if (TypeSystem.Kind(type) is not (2 or 3 or 12) && !(TypeSystem.Kind(type) == 8 && TypeSystem.Width(type) <= 64) && !ByteArray(type)) return false;
             foreach (string attribute in new[] { "byval", "sret", "inreg", "signext" })
             {
+                // C's char parameter is signext; the one-byte conversion delivers the byte, which the callee extends itself.
+                if (attribute == "signext" && OneByte(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, parameter)), type)) continue;
                 uint kind = Llvm.LLVMGetEnumAttributeKindForName(attribute, (nuint)attribute.Length);
                 if (Llvm.LLVMGetEnumAttributeAtIndex(target, parameter + 1, kind) != 0 || Llvm.LLVMGetCallSiteEnumAttribute(instruction, parameter + 1, kind) != 0)
                     return false;

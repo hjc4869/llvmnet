@@ -55,6 +55,25 @@ entry:
   ret i32 %result
 }
 
+; Fortran passes character(1) by value as [1 x i8] where C takes char (BE-40).
+define i32 @byte_array_argument([1 x i8] %value) noinline {
+entry:
+  %byte = extractvalue [1 x i8] %value, 0
+  %wide = zext i8 %byte to i32
+  ret i32 %wide
+}
+
+define i32 @char_argument(i8 signext %value) noinline {
+entry:
+  %wide = zext i8 %value to i32
+  ret i32 %wide
+}
+
+define [1 x i8] @byte_array_result() noinline {
+entry:
+  ret [1 x i8] [i8 65]
+}
+
 define i32 @main() {
 entry:
   %positive = call i64 (i32) @wide_argument(i32 42)
@@ -104,7 +123,17 @@ entry:
   %seventh_valid = and i1 %sixth_valid, %booleans_valid
   %eighth_valid = and i1 %seventh_valid, %wide_booleans_valid
   %ninth_valid = and i1 %eighth_valid, %arguments_valid
-  %valid = and i1 %ninth_valid, %mixed_valid
+  %from_char = call i32 (i8) @byte_array_argument(i8 200)
+  %from_char_valid = icmp eq i32 %from_char, 200
+  %array = insertvalue [1 x i8] undef, i8 -3, 0
+  %from_array = call i32 ([1 x i8]) @char_argument([1 x i8] %array)
+  %from_array_valid = icmp eq i32 %from_array, 253
+  %returned_byte = call i8 () @byte_array_result()
+  %returned_byte_valid = icmp eq i8 %returned_byte, 65
+  %bytes_valid = and i1 %from_char_valid, %from_array_valid
+  %one_byte_valid = and i1 %bytes_valid, %returned_byte_valid
+  %tenth_valid = and i1 %ninth_valid, %one_byte_valid
+  %valid = and i1 %tenth_valid, %mixed_valid
   %result = select i1 %valid, i32 0, i32 1
   ret i32 %result
 }
