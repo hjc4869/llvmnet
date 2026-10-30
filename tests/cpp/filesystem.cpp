@@ -24,14 +24,20 @@ int main(int count, char **arguments)
     fs::rename(original, renamed, error);
     if (error || fs::exists(original) || !fs::exists(renamed))
         return 5;
+    // copy_file goes through copy_file_range or sendfile before streams.
+    fs::path copied = directory / "copied.txt";
+    if (!fs::copy_file(renamed, copied, error) || error || fs::file_size(copied, error) != 9)
+        return 8;
+    if (fs::copy_file(renamed, copied, error) || error != std::errc::file_exists)
+        return 9;
     int entries = 0;
     for (const auto &entry : fs::directory_iterator(directory)) {
-        if (entry.path().filename() != "renamed.txt")
+        if (entry.path().filename() != "renamed.txt" && entry.path().filename() != "copied.txt")
             return 6;
         ++entries;
     }
-    if (entries != 1 || fs::remove_all(directory, error) != 2 || error)
+    if (entries != 2 || fs::remove_all(directory, error) != 3 || error)
         return 7;
-    std::puts("filesystem status, iteration and operations passed");
+    std::puts("filesystem status, iteration, copies and operations passed");
     return 0;
 }

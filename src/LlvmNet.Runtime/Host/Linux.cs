@@ -77,7 +77,7 @@ internal static class Linux
         Read = 0, Write = 1, Open = 2, Close = 3, Stat = 4, Fstat = 5, Lstat = 6, Poll = 7, Lseek = 8, Mmap = 9, Mprotect = 10,
         Munmap = 11, Brk = 12, RtSigaction = 13, RtSigprocmask = 14, Ioctl = 16, Pread64 = 17, Pwrite64 = 18, Readv = 19,
         Writev = 20, Access = 21, Pipe = 22, Select = 23, SchedYield = 24, Mremap = 25, Msync = 26, Mincore = 27, Madvise = 28,
-        Dup = 32, Dup2 = 33, Nanosleep = 35, Getpid = 39, Fork = 57, Vfork = 58, Execve = 59, Exit = 60, Wait4 = 61, Kill = 62,
+        Dup = 32, Dup2 = 33, Nanosleep = 35, Getpid = 39, Sendfile = 40, Fork = 57, Vfork = 58, Execve = 59, Exit = 60, Wait4 = 61, Kill = 62,
         Uname = 63, Fcntl = 72, Flock = 73, Fsync = 74, Fdatasync = 75, Truncate = 76, Ftruncate = 77, Getcwd = 79, Chdir = 80,
         Fchdir = 81, Rename = 82, Mkdir = 83, Rmdir = 84, Link = 86, Unlink = 87, Symlink = 88, Readlink = 89, Chmod = 90,
         Fchmod = 91, Chown = 92, Fchown = 93, Lchown = 94, Umask = 95, Gettimeofday = 96, Getrusage = 98, Sysinfo = 99,
@@ -91,7 +91,7 @@ internal static class Linux
         Openat = 257, Mkdirat = 258, Mknodat = 259, Fchownat = 260, Newfstatat = 262, Unlinkat = 263, Renameat = 264,
         Linkat = 265, Symlinkat = 266, Readlinkat = 267, Fchmodat = 268, Faccessat = 269, Pselect6 = 270, Ppoll = 271,
         SetRobustList = 273, GetRobustList = 274, Utimensat = 280, Fallocate = 285, Dup3 = 292, Pipe2 = 293, Preadv = 295, Pwritev = 296, Prlimit64 = 302,
-        Syncfs = 306, Renameat2 = 316, Getrandom = 318, Membarrier = 324, Preadv2 = 327, Pwritev2 = 328, Faccessat2 = 439,
+        Syncfs = 306, Renameat2 = 316, Getrandom = 318, Membarrier = 324, CopyFileRange = 326, Preadv2 = 327, Pwritev2 = 328, Faccessat2 = 439,
     }
 
     /// <summary>struct stat as the x86-64 kernel fills it (144 bytes).</summary>

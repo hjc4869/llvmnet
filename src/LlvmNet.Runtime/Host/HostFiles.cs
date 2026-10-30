@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using static LlvmNet.Runtime.Linux;
@@ -151,6 +152,48 @@ public static unsafe partial class HostSyscalls
         var source = new ReadOnlySpan<byte>((void*)buffer, (int)Math.Min(count, int.MaxValue));
         RandomAccess.Write(stream.SafeFileHandle, source, (file.Flags & O_APPEND) != 0 ? RandomAccess.GetLength(stream.SafeFileHandle) : offset);
         return source.Length;
+    }
+
+    /// <summary>
+    /// sendfile and copy_file_range, which std::filesystem::copy_file tries before streams: copies from a regular file
+    /// through a buffer, from its position or from *inputOffset (which then advances instead), to the output's position
+    /// or *outputOffset, at most 0x7ffff000 bytes per call as in Linux. Other input kinds are EINVAL, as for the kernel.
+    /// </summary>
+    private static long CopyRange(int input, nint inputOffset, int output, nint outputOffset, long count)
+    {
+        OpenFile? source = Lookup(input), destination = Lookup(output);
+        if (source is null || !source.CanRead || destination is null || !destination.CanWrite) return -EBADF;
+        if (source.Kind != FileKind.Regular || count < 0) return -EINVAL;
+        if (outputOffset != 0 && destination.Kind != FileKind.Regular) return -EINVAL;
+        count = Math.Min(count, 0x7ffff000);
+        const int size = 65536;
+        byte* buffer = (byte*)NativeMemory.Alloc(size);
+        long total = 0;
+        try
+        {
+            while (total < count)
+            {
+                long chunk = Math.Min(size, count - total);
+                long read = inputOffset != 0 ? ReadAt(input, (nint)buffer, chunk, *(long*)inputOffset + total) : Read(input, (nint)buffer, chunk);
+                if (read <= 0)
+                {
+                    if (total == 0 && read < 0) return read;
+                    break;
+                }
+                long written = outputOffset != 0 ? WriteAt(output, (nint)buffer, read, *(long*)outputOffset + total) : Write(output, (nint)buffer, read);
+                if (written <= 0)
+                {
+                    if (total == 0) return written;
+                    break;
+                }
+                total += written;
+                if (read < chunk || written < read) break;
+            }
+        }
+        finally { NativeMemory.Free(buffer); }
+        if (inputOffset != 0) *(long*)inputOffset += total;
+        if (outputOffset != 0) *(long*)outputOffset += total;
+        return total;
     }
 
     private static long Vector(int descriptor, nint vectors, int count, bool read, long offset)

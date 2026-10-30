@@ -40,6 +40,8 @@ public static unsafe partial class HostSyscalls
                 Linux.Syscall.Ioctl => Control((int)a, b, (nint)c),
                 Linux.Syscall.Pread64 => ReadAt((int)a, (nint)b, c, d),
                 Linux.Syscall.Pwrite64 => WriteAt((int)a, (nint)b, c, d),
+                Linux.Syscall.Sendfile => CopyRange((int)b, (nint)c, (int)a, 0, d),
+                Linux.Syscall.CopyFileRange => f != 0 ? -EINVAL : CopyRange((int)a, (nint)b, (int)c, (nint)d, e),
                 Linux.Syscall.Readv => Vector((int)a, (nint)b, (int)c, read: true, offset: -1),
                 Linux.Syscall.Writev => Vector((int)a, (nint)b, (int)c, read: false, offset: -1),
                 Linux.Syscall.Preadv or Linux.Syscall.Preadv2 => Vector((int)a, (nint)b, (int)c, read: true, offset: d),

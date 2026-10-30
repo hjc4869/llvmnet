@@ -10,6 +10,7 @@
 #include <poll.h>
 #include <pwd.h>
 #include <signal.h>
+#include <sys/sendfile.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -130,6 +131,33 @@ static void files(void)
     struct stat metadata;
     stat("file", &metadata);
     CHECK("size after truncate", metadata.st_size);
+    /* sendfile and copy_file_range, which std::filesystem::copy_file uses. */
+    write_file("source", "0123456789");
+    int source = open("source", O_RDONLY), target = open("target", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    off_t offset = 2;
+    CHECK("sendfile from offset 2", sendfile(target, source, &offset, 5));
+    CHECK("offset advanced", offset);
+    CHECK("input position unchanged", lseek(source, 0, SEEK_CUR));
+    CHECK("sendfile from the position", sendfile(target, source, NULL, 3));
+    CHECK("input position advanced", lseek(source, 0, SEEK_CUR));
+    off_t input = 8, output = 0;
+    CHECK("copy_file_range at offsets", copy_file_range(source, &input, target, NULL, 100, 0));
+    CHECK("copy_file_range with flags", copy_file_range(source, &input, target, &output, 1, 1));
+    CHECK("sendfile to a read-only descriptor", sendfile(source, source, NULL, 1));
+    close(target);
+    target = open("target", O_RDONLY);
+    CHECK("copied length", read(target, buffer, sizeof buffer));
+    printf("%-44s %.10s\n", "copied contents", buffer);
+    close(target);
+    close(source);
+    int ends[2];
+    pipe(ends);
+    write(ends[1], "xy", 2);
+    target = open("target", O_WRONLY);
+    CHECK("sendfile from a pipe", sendfile(target, ends[0], NULL, 2));
+    close(target);
+    close(ends[0]);
+    close(ends[1]);
 }
 
 static void pipes(void)
