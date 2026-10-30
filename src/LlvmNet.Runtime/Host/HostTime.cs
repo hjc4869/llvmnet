@@ -44,8 +44,25 @@ public static unsafe partial class HostSyscalls
     private static long Sleep(Timespec* request)
     {
         if (request->Duration is not TimeSpan duration) return -EINVAL;
-        Thread.Sleep(duration);
+        long deadline = DeadlineAfter(duration);
+        for (int milliseconds; (milliseconds = MillisecondsUntil(deadline)) > 0;) Thread.Sleep(milliseconds);
         return 0;
+    }
+
+    /// <summary>
+    /// The Stopwatch timestamp a wait of the given length ends at. Thread.Sleep and Monitor.Wait count whole milliseconds
+    /// and can return before the time has passed, while sleeps and futex waits must last at least their timeout: libc++'s
+    /// condition_variable::wait_for reports an early return as no timeout, and a caller that waits for a timeout then
+    /// waits forever. Waits therefore repeat until this deadline has passed.
+    /// </summary>
+    private static long DeadlineAfter(TimeSpan wait) =>
+        Stopwatch.GetTimestamp() + (long)Math.Clamp(wait.TotalSeconds * Stopwatch.Frequency, 0, long.MaxValue / 2);
+
+    /// <summary>Milliseconds until the deadline, rounded up; 0 once it has passed.</summary>
+    private static int MillisecondsUntil(long deadline)
+    {
+        long remaining = deadline - Stopwatch.GetTimestamp();
+        return remaining <= 0 ? 0 : (int)Math.Min(int.MaxValue, Math.Ceiling(remaining * 1000.0 / Stopwatch.Frequency));
     }
 
     private static long ClockSleep(int clock, int flags, Timespec* request)
@@ -53,7 +70,8 @@ public static unsafe partial class HostSyscalls
         if (clock is CLOCK_THREAD_CPUTIME_ID || ClockValue(clock) is not TimeSpan now) return -EINVAL;
         if (request->Duration is not TimeSpan duration) return -EINVAL;
         if ((flags & TIMER_ABSTIME) != 0) duration -= now;
-        if (duration > TimeSpan.Zero) Thread.Sleep(duration);
+        long deadline = DeadlineAfter(duration);
+        for (int milliseconds; (milliseconds = MillisecondsUntil(deadline)) > 0;) Thread.Sleep(milliseconds);
         return 0;
     }
 

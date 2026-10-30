@@ -8,7 +8,9 @@
 # pass rate measures parity with native musl. Tests that need dynamic loading (dlopen, DSOs) are not built, and
 # the math tests check values in round-to-nearest without exception flags, the only environment CIL has.
 #   tests/libc-conformance.sh [functional] [regression] [math] [musl] [api]    default: all
-#   LIBC_CONFORMANCE_JOBS=16                                                    parallel tests (default: nproc)
+#   LIBC_CONFORMANCE_JOBS=8                                                     parallel tests (default: 4)
+# Every job runs .NET processes and some tests exhaust memory on purpose; on a shared machine, run the script inside
+# a memory cap, for example: systemd-run --user --scope -p MemoryMax=40G -p MemorySwapMax=0 bash tests/libc-conformance.sh
 # Results: artifacts/tests/libc-conformance/{summary.tsv,results.tsv,failures.txt}; fails below LIBC_THRESHOLD
 # percent (default 0: report only).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -47,7 +49,7 @@ import concurrent.futures, glob, os, shutil, subprocess, sys
 
 suite, output, llvmnet, native_cc, stage, threshold, groups, flags = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], float(sys.argv[6]), sys.argv[7].split(), sys.argv[8:]
 resource = subprocess.run(['clang-22', '-print-resource-dir'], capture_output=True, text=True).stdout.strip()
-jobs = int(os.environ.get('LIBC_CONFORMANCE_JOBS', os.cpu_count()))
+jobs = int(os.environ.get('LIBC_CONFORMANCE_JOBS', 4))
 common = sorted(path for path in glob.glob(f'{suite}/src/common/*.c') if not path.endswith('runtest.c'))
 # Dynamic loading is not available; tls_align's static build links its companion object, as libc-test does.
 skipped = {'functional/dlopen', 'functional/tls_align_dlopen', 'functional/tls_init_dlopen', 'regression/tls_get_new-dtv'}

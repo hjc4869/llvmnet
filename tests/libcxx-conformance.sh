@@ -104,7 +104,9 @@ for test in results:
     name = test['testId'].split(' :: ', 1)[-1]
     directory = next((d for d in directories if d == '.' or name.startswith(d + '/')), 'other')
     code = test['status']
-    # The result database reports UNSUPPORTED as SKIP, an expected failure as PASS and an unexpected pass as FAIL.
+    # The result database reports UNSUPPORTED as SKIP, an expected failure as PASS, an unexpected pass as FAIL and a
+    # timeout as ABORT.
+    if code == 'ABORT': code = 'TIMEOUT'
     if code in ('FAIL', 'TIMEOUT', 'UNRESOLVED', 'XPASS'):
         directory_part, _, file_part = name.rpartition('/')
         reason = reasons.get(directory_part.replace('.', '_') + '/' + file_part, 'timeout' if code == 'TIMEOUT' else 'run failed')

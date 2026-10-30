@@ -93,7 +93,10 @@ public static unsafe partial class HostSyscalls
                     // FUTEX_WAIT takes a relative timeout; FUTEX_WAIT_BITSET an absolute monotonic or realtime one.
                     if ((operation & FUTEX_CMD_MASK) == FUTEX_WAIT_BITSET)
                         wait -= (operation & FUTEX_CLOCK_REALTIME) != 0 ? DateTime.UtcNow - DateTime.UnixEpoch : Monotonic;
-                    return wait <= TimeSpan.Zero || !Monitor.Wait(queue, wait) ? -ETIMEDOUT : 0;
+                    long deadline = DeadlineAfter(wait);
+                    for (int milliseconds; (milliseconds = MillisecondsUntil(deadline)) > 0;)
+                        if (Monitor.Wait(queue, milliseconds)) return 0;
+                    return -ETIMEDOUT;
                 }
             case FUTEX_WAKE or FUTEX_WAKE_BITSET:
                 lock (queue)
@@ -128,8 +131,9 @@ public static unsafe partial class HostSyscalls
     private static long LockPriorityInheritance(nint address, object queue, bool tryOnly, Timespec* timeout)
     {
         int tid = CurrentThreadId;
-        TimeSpan? deadline = timeout == null ? null : timeout->Duration;
-        if (timeout != null && deadline is null) return -EINVAL;
+        TimeSpan? absolute = timeout == null ? null : timeout->Duration;
+        if (timeout != null && absolute is null) return -EINVAL;
+        long deadline = absolute is TimeSpan end ? DeadlineAfter(end - (DateTime.UtcNow - DateTime.UnixEpoch)) : long.MaxValue;
         lock (queue)
             while (true)
             {
@@ -143,11 +147,12 @@ public static unsafe partial class HostSyscalls
                 if ((word & FUTEX_TID_MASK) == tid) return -EDEADLK;
                 if (tryOnly) return -EAGAIN;
                 if ((word & FUTEX_WAITERS) == 0 && Interlocked.CompareExchange(ref *(int*)address, word | FUTEX_WAITERS, word) != word) continue;
-                if (deadline is null) Monitor.Wait(queue);
+                if (absolute is null) Monitor.Wait(queue);
                 else
                 {
-                    TimeSpan remaining = deadline.Value - (DateTime.UtcNow - DateTime.UnixEpoch);
-                    if (remaining <= TimeSpan.Zero || !Monitor.Wait(queue, remaining)) return -ETIMEDOUT;
+                    int milliseconds = MillisecondsUntil(deadline);
+                    if (milliseconds == 0) return -ETIMEDOUT;
+                    Monitor.Wait(queue, milliseconds);
                 }
             }
     }

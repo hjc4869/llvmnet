@@ -7,7 +7,8 @@
 # test counts when the native build passes it (FCVS: output equals the reference; gfortran: exit status 0, or
 # the expected failure for xfail tests), and llvmnet passes when its build behaves the same.
 #   tests/fortran-conformance.sh [fcvs] [gfortran]        default: both
-#   FORTRAN_CONFORMANCE_JOBS=16                            parallel tests (default: nproc)
+#   FORTRAN_CONFORMANCE_JOBS=16                            parallel tests (default: 8; each runs .NET processes, so on a
+#                                                          shared machine run inside a memory cap, see libc-conformance.sh)
 #   FORTRAN_CONFORMANCE_FILTER=regression/pr1              only gfortran tests whose path contains this text
 # Results: artifacts/tests/fortran-conformance/{summary.tsv,results.tsv,failures.txt}. Fails if a suite's pass
 # rate is below FORTRAN_THRESHOLD percent (default 0: report only).
@@ -21,7 +22,7 @@ python3 - "$suite" "$test_output" "$llvmnet" "${FORTRAN_THRESHOLD:-0}" "${suites
 import concurrent.futures, os, re, shutil, subprocess, sys
 
 suite, output, llvmnet, threshold, selected = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4]), sys.argv[5:]
-jobs = int(os.environ.get('FORTRAN_CONFORMANCE_JOBS', os.cpu_count()))
+jobs = int(os.environ.get('FORTRAN_CONFORMANCE_JOBS', 8))
 name_filter = os.environ.get('FORTRAN_CONFORMANCE_FILTER', '')
 fortran = re.compile(r'\.(f|f90|f95|f03|f08|F|F90|F95|F03|F08|for)$')
 

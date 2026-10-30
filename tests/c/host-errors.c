@@ -26,6 +26,7 @@
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <pthread.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -389,6 +390,41 @@ static void process(void)
     CHECK("getrandom", getrandom(random, sizeof random, 0));
 }
 
+static long long nanoseconds(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return now.tv_sec * 1000000000LL + now.tv_nsec;
+}
+
+/* A timed wait or sleep lasts at least its timeout: libc++'s condition_variable::wait_for reports an early return as
+ * no timeout, so a caller waiting for the timeout never gets it. Fractions of a millisecond expose rounding. */
+static void timed_waits(void)
+{
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_condattr_t attributes;
+    pthread_cond_t condition;
+    pthread_condattr_init(&attributes);
+    pthread_condattr_setclock(&attributes, CLOCK_MONOTONIC);
+    pthread_cond_init(&condition, &attributes);
+    int early_waits = 0, early_sleeps = 0, timeouts = 0;
+    pthread_mutex_lock(&mutex);
+    for (int round = 0; round < 10; round++) {
+        long long deadline = nanoseconds() + 7300000 + round * 100000;
+        struct timespec until = {deadline / 1000000000, deadline % 1000000000};
+        if (pthread_cond_timedwait(&condition, &mutex, &until) == ETIMEDOUT) timeouts++;
+        if (nanoseconds() < deadline) early_waits++;
+        long long start = nanoseconds();
+        struct timespec pause = {0, 1300000 + round * 100000};
+        nanosleep(&pause, 0);
+        if (nanoseconds() - start < pause.tv_nsec) early_sleeps++;
+    }
+    pthread_mutex_unlock(&mutex);
+    printf("%-44s %d of 10\n", "timed condition waits that time out", timeouts);
+    FACT("no timed condition wait ends early", early_waits == 0);
+    FACT("no nanosleep ends early", early_sleeps == 0);
+}
+
 static void clocks(void)
 {
     struct timespec first, second;
@@ -411,6 +447,7 @@ static void clocks(void)
     tzset();
     strftime(text, sizeof text, "%Y-%m-%d %H:%M:%S %Z", localtime(&moment));
     printf("%-44s %s\n", "localtime with a POSIX TZ rule", text);
+    timed_waits();
     if (access("/usr/share/zoneinfo/Europe/Berlin", F_OK) == 0) {
         setenv("TZ", "Europe/Berlin", 1);
         tzset();
