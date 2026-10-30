@@ -194,19 +194,9 @@ public static unsafe class Cxx
     [CExport("_ZdlPvm"), CExport("_ZdaPvm")]
     public static void SizedDelete(nint pointer, long size) => Delete(pointer);
     [CExport("_ZnwmSt11align_val_t"), CExport("_ZnamSt11align_val_t")]
-    public static nint AlignedNew(long size, long alignment)
-    {
-        if (!AbiContract.Portable) return Memory.Allocate(size, checked((int)alignment));
-        nint result = PortableHeap.Allocate(size, alignment);
-        if (result == 0) throw new OutOfMemoryException();
-        return result;
-    }
+    public static nint AlignedNew(long size, long alignment) => Memory.Allocate(size, checked((int)alignment));
     [CExport("_ZdlPvSt11align_val_t"), CExport("_ZdaPvSt11align_val_t")]
-    public static void AlignedDelete(nint pointer, long alignment)
-    {
-        if (AbiContract.Portable) PortableHeap.Free(pointer);
-        else NativeMemory.AlignedFree((void*)pointer);
-    }
+    public static void AlignedDelete(nint pointer, long alignment) => NativeMemory.AlignedFree((void*)pointer);
     [CExport("_ZdlPvmSt11align_val_t"), CExport("_ZdaPvmSt11align_val_t")]
     public static void AlignedSizedDelete(nint pointer, long size, long alignment) => AlignedDelete(pointer, alignment);
 

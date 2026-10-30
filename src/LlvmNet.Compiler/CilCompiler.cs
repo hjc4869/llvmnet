@@ -45,17 +45,15 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal bool IsManagedImport(string name) => managedImports.Contains(name);
 
     /// <summary>
-    /// In portable mode, where musl is the C library, the hand-written C# C library must stay invisible; only the host interface,
-    /// the C++ exception bridge (the CLR unwinds), non-local jumps, SIMD128 helpers and, until flang-rt replaces
-    /// it, the Fortran runtime remain. A C library symbol musl lacks is then an error, not a silent fallback.
+    /// In portable mode, where musl, libc++ and flang-rt are linked as bitcode, only the host interface, the C++ exception
+    /// bridge (the CLR unwinds), non-local jumps, SIMD128 helpers and managed references resolve to managed code. A C
+    /// library symbol musl lacks is then an error, not a silent fallback.
     /// </summary>
     private bool MuslVisible(string name, MethodInfo method)
     {
         Type owner = method.DeclaringType!;
         if (owner == typeof(HostSyscalls) || owner == typeof(NonLocalJumps) || owner == typeof(Simd128))
             return true;
-        if (owner.Name.StartsWith("Fortran", StringComparison.Ordinal))
-            return !PortableAbi.FlangRuntime;
         if (owner != typeof(Cxx)) return managedImports.Contains(name);
         // libc++abi supplies type_info, __dynamic_cast and the bad_cast/bad_typeid helpers (private_typeinfo.cpp,
         // cxa_aux_runtime.cpp); the bridge keeps throwing, catching and termination (docs/dev/cxx-eh-bridge.md).

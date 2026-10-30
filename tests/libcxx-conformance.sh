@@ -29,12 +29,16 @@ config.test_source_root = os.path.join('$llvm', 'libcxx', 'test')
 config.test_exec_root = '$test_output/exec'
 config.test_format = libcxx.test.format.CxxStandardLibraryTest()
 config.recursiveExpansionLimit = 10
+# The parameters a CMake build would serialize. The triple names the sysroot's C library; the driver refuses
+# --target in portable mode, so libc++'s configuration does not pass it.
+config.compiler = '$test_output/bin/llvmnet-clang++'
+config.target_triple = 'x86_64-unknown-linux-musl'
 for name, value in [('%{bin-dir}', '$test_output'), ('%{libcxx-dir}', os.path.join('$llvm', 'libcxx')),
                     ('%{install-prefix}', '$sysroot'), ('%{include-dir}', '$sysroot/include/c++/v1'),
                     ('%{target-include-dir}', '$sysroot/include/c++/v1'), ('%{lib-dir}', '$sysroot/lib'),
                     ('%{module-dir}', '$sysroot/share/libc++/v1'), ('%{test-tools-dir}', '$test_output'),
                     ('%{benchmark_flags}', ''), ('%{python}', sys.executable),
-                    ('%{cxx}', '$test_output/bin/llvmnet-clang++'), ('%{flags}', '-pthread'),
+                    ('%{flags}', '-pthread'),
                     ('%{compile_flags}', '-I %{libcxx-dir}/test/support'), ('%{link_flags}', ''),
                     ('%{exec}', '%{executor} --execdir %{temp} -- ')]:
     config.substitutions.append((name, value))
@@ -45,12 +49,15 @@ cat >"$test_output/lit.py" <<EOF
 import os, sys
 sys.path.insert(0, os.path.join('$llvm', 'llvm', 'utils', 'lit'))
 import lit.main
-lit.main.main({'config_map': {os.path.normcase(os.path.join('$llvm', 'libcxx', 'test', 'lit.cfg.py')): '$test_output/lit.site.cfg'}})
+# Worker processes import this module again (forkserver); only the parent runs lit.
+if __name__ == '__main__':
+    lit.main.main({'config_map': {os.path.normcase(os.path.join('$llvm', 'libcxx', 'test', 'lit.cfg.py')): '$test_output/lit.site.cfg'}})
 EOF
 paths=()
 for directory in "${directories[@]}"; do paths+=("$llvm/libcxx/test/$directory"); done
 status=0
-python3 "$test_output/lit.py" -q -j "${LIBCXX_LIT_JOBS:-$(nproc)}" --timeout 600 --max-failures 100000 \
+# Experimental features (libc++experimental: the time-zone database) are not part of the sysroot.
+python3 "$test_output/lit.py" -q -j "${LIBCXX_LIT_JOBS:-$(nproc)}" --param enable_experimental=False --timeout 600 --max-failures 100000 \
     --resultdb-output "$test_output/results.json" "${paths[@]}" >"$test_output/lit.log" 2>&1 || status=$?
 tail -n 30 "$test_output/lit.log"
 python3 - "$test_output" "$llvm/libcxx/test/" "${LIBCXX_THRESHOLD:-0}" "${directories[@]}" <<'PYEOF'
@@ -64,17 +71,19 @@ for test in results:
     directory = next((d for d in directories if name.startswith(d + '/')), 'other')
     code = test['status']
     counts[directory][code] += 1
+    # The result database reports UNSUPPORTED as SKIP, an expected failure as PASS and an unexpected pass as FAIL.
     if code in ('FAIL', 'TIMEOUT', 'UNRESOLVED', 'XPASS'):
         failures.append(f'{code}\t{name}')
 below = []
 with open(f'{output}/summary.tsv', 'w') as summary:
-    summary.write('directory\tpassed\tfailed\tunsupported\texpected failures\tpass rate\n')
+    summary.write('directory\tpassed\tfailed\tunsupported\texpected failures (separate statuses only)\tpass rate\n')
     for directory in directories:
         c = counts[directory]
         passed, failed = c['PASS'], c['FAIL'] + c['TIMEOUT'] + c['UNRESOLVED'] + c['XPASS']
         rate = 100.0 * passed / (passed + failed) if passed + failed else 100.0
-        summary.write(f'{directory}\t{passed}\t{failed}\t{c["UNSUPPORTED"]}\t{c["XFAIL"]}\t{rate:.1f}\n')
-        print(f'{directory}: {passed} passed, {failed} failed, {c["UNSUPPORTED"]} unsupported, {c["XFAIL"]} expected failures ({rate:.1f}%)')
+        unsupported = c['SKIP'] + c['UNSUPPORTED']
+        summary.write(f'{directory}\t{passed}\t{failed}\t{unsupported}\t{c["XFAIL"]}\t{rate:.1f}\n')
+        print(f'{directory}: {passed} passed, {failed} failed, {unsupported} unsupported ({rate:.1f}%)')
         if rate < threshold: below.append(directory)
 open(f'{output}/failures.txt', 'w').write('\n'.join(sorted(failures)) + '\n')
 if below:

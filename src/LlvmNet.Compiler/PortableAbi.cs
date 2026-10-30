@@ -15,9 +15,6 @@ internal static class PortableAbi
 
     internal static string Library(string name) => Path.Combine(Sysroot, "lib", name);
 
-    /// <summary>True when the sysroot has flang-rt (FT-01); the C# Fortran runtime is then hidden.</summary>
-    internal static bool FlangRuntime => File.Exists(Library("libflang_rt.runtime.a"));
-
     /// <summary>Fails with build guidance when the sysroot has not been built.</summary>
     internal static void RequireSysroot()
     {
@@ -34,7 +31,10 @@ internal static class PortableAbi
         string include = Path.Combine(Sysroot, "include");
         List<string> result = ["--target=x86_64-unknown-none", "-D__LLVMNET__=1", "-D__LLVMNET_PORTABLE__=1", "-D__LLVMNET_ABI_VERSION=2"];
         if (fortran) return result;
-        result.AddRange(["-nostdinc", "-U__x86_64__", "-U__amd64__", "-U__amd64", "-U__SSE__", "-U__SSE2__"]);
+        // The fixed x86-64 data layout must not imply x86 instruction sets: portable code is scalar CIL. libc++, for
+        // one, sizes its SIMD helpers from these macros (with only __MMX__ left, 16-byte types got 0-wide vectors).
+        result.AddRange(["-nostdinc", "-U__x86_64__", "-U__amd64__", "-U__amd64", "-U__SSE__", "-U__SSE2__", "-U__MMX__",
+            "-U__SSE_MATH__", "-U__SSE2_MATH__", "-U__FXSR__"]);
         if (cpp)
         {
             string cppInclude = Path.Combine(Sysroot, "include", "c++", "v1");

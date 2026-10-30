@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# Build the upstream Fortran runtime (flang-rt 22.1.8) for dotnet64-v2 on musl and libc++ (plan items FT-01, FT-05);
-# the last step of scripts/build-sysroot.sh.
-#   scripts/build-portable-flang-rt.sh [prefix]   default artifacts/sysroot-build/dotnet64-v2 (must contain musl and libc++)
-# Installs <prefix>/lib/libflang_rt.runtime.a; per-file failures go to <prefix>/build-flang-rt/failures.tsv.
-# REAL(16) is not available: flang disables __float128 with libc++, and dotnet64-v2 has no fp128 yet (BE-14).
+# Build the upstream Fortran runtime (flang-rt 22.1.8) as LLVM bitcode for one runtime mode (plan items FT-01, FT-05,
+# FT-09); steps of scripts/build-sysroot.sh.
+#   scripts/build-flang-rt.sh portable [prefix]   on musl and libc++ from <prefix> (default artifacts/sysroot-build/dotnet64-v2)
+#   scripts/build-flang-rt.sh system <prefix>     on the host's glibc and libstdc++ headers, for --runtime=system
+# Installs <prefix>/lib/libflang_rt.runtime.a; per-file failures go to <prefix>/build-flang-rt/failures.tsv. As upstream
+# builds it, the runtime uses no C++ exceptions or RTTI, so system mode needs only the C++ bridge's new, delete and
+# guards. REAL(16) is not available: flang disables __float128 with libc++, and llvmnet has no fp128 yet (BE-14).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-prefix="$(realpath -m "${1:-$root/artifacts/sysroot-build/dotnet64-v2}")"
-[[ -f "$prefix/lib/libc++.a" ]] || { printf 'Build musl and libc++ first (build-portable-libc.sh, build-portable-cxx.sh) into %s\n' "$prefix" >&2; exit 1; }
+target="${1:?Usage: build-flang-rt.sh portable|system [prefix]}"
+case "$target" in
+    portable) prefix="$(realpath -m "${2:-$root/artifacts/sysroot-build/dotnet64-v2}")"
+        [[ -f "$prefix/lib/libc++.a" ]] || { printf 'Build musl and libc++ first (build-portable-libc.sh, build-portable-cxx.sh) into %s\n' "$prefix" >&2; exit 1; }
+        mode=(--runtime=portable --portable-sysroot "$prefix") ;;
+    system) prefix="$(realpath -m "${2:?Specify the system prefix}")"
+        mode=(--runtime=system) ;;
+    *) printf 'Unknown runtime %s (portable or system)\n' "$target" >&2; exit 2 ;;
+esac
 llvm="$("$root/scripts/fetch-sources.sh" --path llvm-project)"
 bash "$root/scripts/ensure-built.sh"
 build="$prefix/build-flang-rt"
@@ -27,7 +36,8 @@ for name in ISO_Fortran_binding allocator-registry allocatable array-constructor
     sources+=("$runtime/$name.cpp")
 done
 sources+=("$runtime/complex-reduction.c")
-printf '%s\n' --runtime=portable --portable-sysroot "$prefix" -c -O2 -D__linux__ -D__unix__ -Wno-everything \
+mkdir -p "$prefix/lib"
+printf '%s\n' "${mode[@]}" -c -O2 -fno-exceptions -fno-rtti -Wno-everything \
     -I"$llvm/flang-rt/include" -I"$llvm/flang/include" -I"$build/generated" -I"$runtime" -D_GLIBCXX_NO_ASSERTIONS >"$build/flags.txt"
 export LLVMNET_SKIP_BUILD=1 build root llvm
 compile() {
@@ -49,4 +59,4 @@ sort -o "$build/failures.tsv" "$build/failures.tsv"
 rm -f "$prefix/lib/libflang_rt.runtime.a"
 mapfile -t objects < <(find "$build/obj" -name '*.o' | sort)
 llvm-ar-22 rcs "$prefix/lib/libflang_rt.runtime.a" "${objects[@]}"
-printf 'flang-rt for dotnet64-v2: %d of %d sources compiled; failures in %s\n' "${#objects[@]}" "${#sources[@]}" "$build/failures.tsv"
+printf 'flang-rt for %s mode: %d of %d sources compiled; failures in %s\n' "$target" "${#objects[@]}" "${#sources[@]}" "$build/failures.tsv"

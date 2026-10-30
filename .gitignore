@@ -6,3 +6,6 @@ artifacts/
 /sysroot/dotnet64-v2/
 /sysroot/dotnet64-v2.new/
 /sysroot/dotnet64-v2.old/
+/sysroot/system-linux-x64-v1/
+/sysroot/system-linux-x64-v1.new/
+/sysroot/system-linux-x64-v1.old/

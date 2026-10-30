@@ -40,9 +40,10 @@ cxx_sources=(algorithm any bind call_once charconv chrono error_category excepti
     regex strstream filesystem/directory_entry filesystem/directory_iterator filesystem/operations filesystem/int128_builtins)
 abi_sources=(abort_message cxa_aux_runtime cxa_demangle cxa_guard cxa_vector cxa_virtual cxa_thread_atexit
     fallback_malloc private_typeinfo stdlib_exception stdlib_new_delete stdlib_stdexcept stdlib_typeinfo llvmnet-catch)
-# musl is a Linux C library and the host implements Linux system-call semantics, so the runtimes are built
-# for a Linux userland (libc++abi only defines __cxa_thread_atexit under __linux__, for example).
-common=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -std=c++23 -nostdinc++ -isystem "$headers" -D__linux__ -D__unix__
+# The libraries see the platform macros user code sees (ADR-14): libc++'s headers choose ABI details such as the
+# atomic-wait contention type by __linux__, so a library built with it would not match programs built without it.
+# Only cxa_thread_atexit.cpp, which defines __cxa_thread_atexit solely under __linux__, gets the macro.
+common=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -std=c++23 -nostdinc++ -isystem "$headers"
     -fvisibility-inlines-hidden -Wno-everything -D_LIBCPP_BUILDING_LIBRARY -D_LIBCPP_REMOVE_TRANSITIVE_INCLUDES)
 printf '%s\n' "${common[@]}" -I"$llvm/libcxx/src" -I"$llvm/libc" -DLIBCXX_BUILDING_LIBCXXABI -D_LIBCPP_DISABLE_NEW_DELETE_DEFINITIONS >"$build/cxx-flags.txt"
 printf '%s\n' "${common[@]}" -I"$llvm/libcxxabi/include" -I"$llvm/libcxxabi/src" -I"$llvm/libcxx/src" -D_LIBCXXABI_BUILDING_LIBRARY \
@@ -55,6 +56,7 @@ compile() {
     object="$build/$library/$name.o"
     mkdir -p "$(dirname "$object")"
     mapfile -t flags <"$build/$library-flags.txt"
+    [[ "$name" == cxa_thread_atexit ]] && flags+=(-D__linux__)
     if ! "$root/bin/llvmnet" "${flags[@]}" "$source" -o "$object" >"$object.log" 2>&1; then
         printf '%s/%s\t%s\n' "$library" "$name" "$(grep -m1 -E 'error' "$object.log" | sed "s|$llvm/||" | tr '\t' ' ')" >>"$build/failures.tsv"
         rm -f "$object"

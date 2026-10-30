@@ -3,3 +3,4 @@ artifacts/
 **/obj/
 .vs/
 sysroot/dotnet64-v2/
+sysroot/system-linux-x64-v1/
