@@ -88,19 +88,34 @@ jobs:
         run: bash scripts/ensure-built.sh
       - name: Unit tests
         run: dotnet test tests/LlvmNet.UnitTests -c Release --no-build
+      # Each tests/run.sh call starts a fresh artifacts/tests/results, so every step keeps a copy of its own.
       - name: All tags
-        run: tests/run.sh --no-build --tag core --tag toolchain --tag integration --tag optional -j 4 --timeout-scale 2
+        run: |
+          tests/run.sh --no-build --tag core --tag toolchain --tag integration --tag optional -j 4 --timeout-scale 2
+          cp -a artifacts/tests/results artifacts/tests/results-all
       - name: Differential fuzzing (FD-16)
         if: always()
         # 500 new csmith seeds every night, starting from a seed derived from the date.
         run: |
           export FUZZ_SEEDS=500 FUZZ_FIRST_SEED=$(( $(date -u +%s) / 86400 * 1000 ))
           tests/run.sh --no-build --tag fuzz --timeout-scale 2
+          cp -a artifacts/tests/results artifacts/tests/results-fuzz
+      - name: Conformance suites (libc-test LC-19, libc++ CX-08, FCVS and gfortran FT-06)
+        if: always()
+        run: |
+          tests/run.sh --no-build --tag conformance --timeout-scale 2
+          cp -a artifacts/tests/results artifacts/tests/results-conformance
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nightly-results
           path: |
-            artifacts/tests/results
+            artifacts/tests/results-*
             artifacts/tests/fuzz
+            artifacts/tests/libc-conformance/*.tsv
+            artifacts/tests/libc-conformance/failures.txt
+            artifacts/tests/libcxx-conformance/summary.tsv
+            artifacts/tests/libcxx-conformance/failures.txt
+            artifacts/tests/fortran-conformance/*.tsv
+            artifacts/tests/fortran-conformance/failures.txt
           if-no-files-found: ignore

@@ -13,6 +13,14 @@ Related: [roadmap.md](../roadmap.md) (the earlier priority ordering), [status.md
 - **Review cadence**: once a week, update the status board below, tick items, and add new items with the next free number in their workstream. Never renumber. If an issue tracker is used, one issue per item with the ID in the title and a label per workstream and milestone.
 - **Evidence**: a claim that something works belongs in `docs/evidence/` (dated, produced by CI) or in a test, not in this plan.
 
+## Progress (2026-10-30, M3 to M5)
+
+Work on the `m3-m5` branch replaced the hand-written runtimes with the upstream ones in both modes. Measurements are in [evidence/2026-10-30-m3-m5.md](../evidence/2026-10-30-m3-m5.md).
+
+- **M3 portable C library.** Portable mode (the default, tag `dotnet64-v2`) compiles against and links unmodified musl 1.2.5 from `sysroot/dotnet64-v2`, built by `scripts/build-sysroot.sh`. The host layer implements Linux system-call semantics over .NET with a documented contract (`docs/dev/host-abi.md`) and a conformance test against native (157 checks). `managed-host`, the hand-written C library and MathNet.Numerics are deleted. libc-test passes 385 of 403 natively passing tests; every failure is a documented limitation. The ffmpeg portable build matches native on all 31 media fixtures and the private 4K HDR video (10 frames). Open: the SPEC portable audit (LC-23), printf/scanf and libm corpora (LC-20, LC-21), the thread stress test (LC-22), the performance guard (LC-24), the calli audit (LC-18), the time-zone fallback for hosts without zoneinfo, and the owner's confirmation of the ADR-09 tag and ADR-14 decisions.
+- **M4 portable C++ runtime.** libc++ and libc++abi 22.1.8 from the sysroot, with type_info, `dynamic_cast` and catch matching from libc++abi (CX-03) and a documented exception bridge (CX-02). libc++'s lit suite passes 5,101 of 5,171 tests in the CX-08 directories (98.6%); localization is 85.8% because musl has only C and C.UTF-8 locale data. Open: libc++abi's own tests (CX-13), the libc++ suite under NativeAOT, SPEC C++ (CX-11).
+- **M5 Fortran runtime.** flang-rt serves both modes (FT-09), so the C# Fortran runtime is deleted. FCVS passes 172 of 172 and the gfortran run tests 2,666 of 2,687 (99.2%). Open: SPEC Fortran portable parity (FT-07), portable OpenMP (FT-08).
+
 ## Progress (2026-10-30, M0 to M2)
 
 Work on the `m0-m2` branch completed the M1 and M2 exit items and every M0 item except running the PR gate on GitHub. Measurements are in [evidence/2026-10-30-m0-m2.md](../evidence/2026-10-30-m0-m2.md).
@@ -97,9 +105,9 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M0 | 0.3 | exit items done except the first GitHub run of the PR gate | 1 (FD-19) | 2026-10-30 |
 | M1 | 0.3 | exit items done; two-week fuzzing criterion open (FD-16) | 0 | 2026-10-30 |
 | M2 | 0.3 | done; ADR-01, 02, 03, 07 accepted | 0 | 2026-10-30 |
-| M3 | 0.4 | spike host layer exists; LC-10 done | 16 (incl. LC-26) | 2026-10-30 |
-| M4 | 0.5 | not started | 7 | 2026-10-30 |
-| M5 | 0.5 | not started | 6 | 2026-10-30 |
+| M3 | 0.4 | musl is the portable C library; managed-host and the hand-written libc deleted; SPEC audit and corpora open | 8 (LC-07, 09, 17-partial, 18, 20, 21, 22, 23) | 2026-10-30 |
+| M4 | 0.5 | libc++/libc++abi delivered, lit suite 98.6%; localization below 98% (locale data) | 2 (CX-06, SPEC C++ parity) | 2026-10-30 |
+| M5 | 0.5 | flang-rt in both modes, C# Fortran runtime deleted; FCVS 100%, gfortran 99.2% | 1 (FT-07) | 2026-10-30 |
 | M6 | 0.6 | not started | 4 | 2026-10-30 |
 | M7 | 0.7 | not started | 11 | 2026-10-30 |
 | M8 | 0.7 | not started | 2 | 2026-10-30 |

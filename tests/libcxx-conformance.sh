@@ -76,9 +76,10 @@ for case in ET.parse(f'{output}/results.xml').getroot().iter('testcase'):
     if 'failed to fork a process to perform a death test' in text: reason = 'death test (needs fork)'
     elif m := re.search(r'Unresolved function: (\S+)', text): reason = 'link: unresolved ' + m.group(1)
     elif m := re.search(r'llvmnet: error: ([^\n]{0,120})', text): reason = 'llvmnet: ' + m.group(1)
-    elif m := re.search(r'error: ([^\n]{0,120})', text): reason = 'compile: ' + m.group(1)
+    elif m := re.search(r'# \| \S+:\d+:\d+: error: ([^\n]{0,120})', text): reason = 'compile: ' + m.group(1)
     elif m := re.search(r'Unhandled exception\. ([^\n]{0,120})', text): reason = 'exception: ' + m.group(1)
-    elif m := re.search(r'(Assertion [^\n]{0,140})', text): reason = m.group(1)
+    elif m := re.search(r'(Assertion[^\n(]{0,140})', text): reason = m.group(1).strip()
+    elif m := re.search(r'error: command failed with exit status: (\S+)', text): reason = 'exit status ' + m.group(1)
     else: reason = 'run failed'
     reasons[name] = reason
 counts = collections.defaultdict(collections.Counter)
