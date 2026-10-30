@@ -31,7 +31,8 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Identical inputs now produce byte-identical assemblies (BE-05).
 - Atomics are lock-free on naturally aligned locations, about five times faster under contention (BE-16).
 - `atexit` and C++ static destructors run interleaved in reverse registration order, destructor attributes last (BE-08).
-- Direct calls may exchange `ptr` and `i64` in portable mode too.
+- Portable mode accepts the x86-64 register-slot equivalences that system mode accepts for direct calls: `ptr` and `i64`, `i32` and `i64` in register positions, `i1` and `i8`; the entry point accepts Flang's `i64 main` under `-fdefault-integer-8` (BE-39).
+- In portable mode `_GNU_SOURCE` also declares the LFS64 names (`stat64`, `off64_t`, `open64`), as glibc does.
 
 ### Removed
 
