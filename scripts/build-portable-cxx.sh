@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Build upstream libc++ and libc++abi 22.1.8 for dotnet64-v1 on top of the musl port (plan item CX-01, spike).
-#   scripts/build-portable-cxx.sh [prefix]    default artifacts/portable-libc (must already contain musl)
+# Build upstream libc++ and libc++abi 22.1.8 for dotnet64-v2 on top of the musl port (plan items CX-01, CX-07);
+# the second step of scripts/build-sysroot.sh.
+#   scripts/build-portable-cxx.sh [prefix]    default artifacts/sysroot-build/dotnet64-v2 (must already contain musl)
 # Installs <prefix>/include/c++/v1 and <prefix>/lib/{libc++.a,libc++abi.a}; per-file failures go to
 # <prefix>/build-cxx/failures.tsv. Exceptions, RTTI matching, dynamic_cast and terminate handlers stay in the
 # managed bridge (src/LlvmNet.Runtime/Cxx.cs) because the CLR performs unwinding, so libc++abi's
 # cxa_exception, cxa_personality, private_typeinfo and handler sources are not compiled (see CX-02, CX-03).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-prefix="$(realpath -m "${1:-$root/artifacts/portable-libc}")"
+prefix="$(realpath -m "${1:-$root/artifacts/sysroot-build/dotnet64-v2}")"
 [[ -f "$prefix/lib/libc.a" ]] || { printf 'Build musl first: scripts/build-portable-libc.sh %s\n' "$prefix" >&2; exit 1; }
 llvm="$("$root/scripts/fetch-sources.sh" --path llvm-project)"
 bash "$root/scripts/ensure-built.sh"
@@ -19,7 +20,7 @@ cp -a "$llvm/libcxx/include/." "$headers/"
 rm -f "$headers/__config_site.in" "$headers/CMakeLists.txt"
 cp "$llvm/libcxx/vendor/llvm/default_assertion_handler.in" "$headers/__assertion_handler"
 cp "$llvm/libcxxabi/include/"*.h "$headers/"
-# __config_site for musl on dotnet64-v1: Itanium ABI v1, pthreads, localization, filesystem, no time zone database.
+# __config_site for musl on dotnet64-v2: Itanium ABI v1, pthreads, localization, filesystem, no time zone database.
 sed -E \
     -e 's|^#cmakedefine _LIBCPP_ABI_VERSION .*|#define _LIBCPP_ABI_VERSION 1|' \
     -e 's|^#cmakedefine _LIBCPP_ABI_NAMESPACE .*|#define _LIBCPP_ABI_NAMESPACE __1|' \
@@ -40,10 +41,11 @@ abi_sources=(abort_message cxa_aux_runtime cxa_demangle cxa_guard cxa_vector cxa
     fallback_malloc stdlib_exception stdlib_new_delete stdlib_stdexcept stdlib_typeinfo)
 # musl is a Linux C library and the host implements Linux system-call semantics, so the runtimes are built
 # for a Linux userland (libc++abi only defines __cxa_thread_atexit under __linux__, for example).
-common=(--runtime=portable --portable-libc "$prefix" -c -O2 -std=c++23 -nostdinc++ -isystem "$headers" -D__linux__ -D__unix__
+common=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -std=c++23 -nostdinc++ -isystem "$headers" -D__linux__ -D__unix__
     -fvisibility-inlines-hidden -Wno-everything -D_LIBCPP_BUILDING_LIBRARY -D_LIBCPP_REMOVE_TRANSITIVE_INCLUDES)
 printf '%s\n' "${common[@]}" -I"$llvm/libcxx/src" -I"$llvm/libc" -DLIBCXX_BUILDING_LIBCXXABI -D_LIBCPP_DISABLE_NEW_DELETE_DEFINITIONS >"$build/cxx-flags.txt"
-printf '%s\n' "${common[@]}" -I"$llvm/libcxxabi/include" -I"$llvm/libcxxabi/src" -I"$llvm/libcxx/src" -D_LIBCXXABI_BUILDING_LIBRARY >"$build/abi-flags.txt"
+printf '%s\n' "${common[@]}" -I"$llvm/libcxxabi/include" -I"$llvm/libcxxabi/src" -I"$llvm/libcxx/src" -D_LIBCXXABI_BUILDING_LIBRARY \
+    -DHAVE___CXA_THREAD_ATEXIT_IMPL >"$build/abi-flags.txt"
 export LLVMNET_SKIP_BUILD=1 build root llvm
 compile() {
     local library="$1" name="$2" source object
@@ -67,5 +69,5 @@ for library in cxx abi; do
     rm -f "$archive"
     llvm-ar-22 rcs "$archive" "${objects[@]}"
 done
-printf 'libc++/libc++abi for dotnet64-v1: %d of %d sources compiled; failures in %s\n' \
+printf 'libc++/libc++abi for dotnet64-v2: %d of %d sources compiled; failures in %s\n' \
     "$(find "$build" -name '*.o' | wc -l)" "$(( ${#cxx_sources[@]} + ${#abi_sources[@]} ))" "$build/failures.tsv"

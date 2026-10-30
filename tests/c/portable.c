@@ -9,8 +9,8 @@
 #include <assert.h>
 #include <signal.h>
 
-#if !defined(__LLVMNET_PORTABLE__) || __LLVMNET_ABI_VERSION != 1
-#error expected llvmnet portable ABI v1
+#if !defined(__LLVMNET_PORTABLE__) || __LLVMNET_ABI_VERSION != 2
+#error expected llvmnet portable ABI v2
 #endif
 #if defined(__linux__) || defined(_WIN32) || defined(__APPLE__) || defined(__x86_64__)
 #error portable code must not inherit host OS or CPU selection macros
@@ -45,10 +45,11 @@ int main(void)
     free(aligned);
     errno = ERANGE;
     if (strcmp(strerror(ENOENT), "No such file or directory")) return 6;
-    if (strcmp(strerror(ERANGE), "Numerical result out of range")) return 7;
+    /* musl's wording, which the portable C library keeps; glibc says "Numerical result out of range". */
+    if (strcmp(strerror(ERANGE), "Result not representable")) return 7;
     if (errno != 34 || sum(8, 1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L) != 36) return 4;
     assert(sizeof(size_t) == 8);
     if (signal(SIGUSR1, receive_signal) == SIG_ERR || raise(SIGUSR1) || signal_value != SIGUSR1) return 5;
-    fprintf(stdout, "portable ABI 1: LP64, wchar32, extended long double, aligned heap and varargs\n");
+    fprintf(stdout, "portable ABI 2: LP64, wchar32, extended long double, aligned heap and varargs\n");
     return 0;
 }

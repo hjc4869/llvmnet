@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Build the upstream Fortran runtime (flang-rt 22.1.8) for dotnet64-v1 on musl and libc++ (plan item FT-01, spike).
-#   scripts/build-portable-flang-rt.sh [prefix]   default artifacts/portable-libc (must contain musl and libc++)
+# Build the upstream Fortran runtime (flang-rt 22.1.8) for dotnet64-v2 on musl and libc++ (plan items FT-01, FT-05);
+# the last step of scripts/build-sysroot.sh.
+#   scripts/build-portable-flang-rt.sh [prefix]   default artifacts/sysroot-build/dotnet64-v2 (must contain musl and libc++)
 # Installs <prefix>/lib/libflang_rt.runtime.a; per-file failures go to <prefix>/build-flang-rt/failures.tsv.
-# REAL(16) is not available: flang disables __float128 with libc++, and dotnet64-v1 has no fp128 yet (BE-14).
+# REAL(16) is not available: flang disables __float128 with libc++, and dotnet64-v2 has no fp128 yet (BE-14).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-prefix="$(realpath -m "${1:-$root/artifacts/portable-libc}")"
+prefix="$(realpath -m "${1:-$root/artifacts/sysroot-build/dotnet64-v2}")"
 [[ -f "$prefix/lib/libc++.a" ]] || { printf 'Build musl and libc++ first (build-portable-libc.sh, build-portable-cxx.sh) into %s\n' "$prefix" >&2; exit 1; }
 llvm="$("$root/scripts/fetch-sources.sh" --path llvm-project)"
 bash "$root/scripts/ensure-built.sh"
@@ -26,7 +27,7 @@ for name in ISO_Fortran_binding allocator-registry allocatable array-constructor
     sources+=("$runtime/$name.cpp")
 done
 sources+=("$runtime/complex-reduction.c")
-printf '%s\n' --runtime=portable --portable-libc "$prefix" -c -O2 -D__linux__ -D__unix__ -Wno-everything \
+printf '%s\n' --runtime=portable --portable-sysroot "$prefix" -c -O2 -D__linux__ -D__unix__ -Wno-everything \
     -I"$llvm/flang-rt/include" -I"$llvm/flang/include" -I"$build/generated" -I"$runtime" -D_GLIBCXX_NO_ASSERTIONS >"$build/flags.txt"
 export LLVMNET_SKIP_BUILD=1 build root llvm
 compile() {
@@ -48,4 +49,4 @@ sort -o "$build/failures.tsv" "$build/failures.tsv"
 rm -f "$prefix/lib/libflang_rt.runtime.a"
 mapfile -t objects < <(find "$build/obj" -name '*.o' | sort)
 llvm-ar-22 rcs "$prefix/lib/libflang_rt.runtime.a" "${objects[@]}"
-printf 'flang-rt for dotnet64-v1: %d of %d sources compiled; failures in %s\n' "${#objects[@]}" "${#sources[@]}" "$build/failures.tsv"
+printf 'flang-rt for dotnet64-v2: %d of %d sources compiled; failures in %s\n' "${#objects[@]}" "${#sources[@]}" "$build/failures.tsv"

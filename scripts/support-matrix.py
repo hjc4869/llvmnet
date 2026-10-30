@@ -12,7 +12,7 @@ import os
 import subprocess
 import sys
 
-ABI = '!llvm.module.flags = !{!0}\n!0 = !{i32 1, !"llvmnet.abi", !"dotnet64-v1"}\n'
+ABI = '!llvm.module.flags = !{!0}\n!0 = !{i32 1, !"llvmnet.abi", !"dotnet64-v2"}\n'
 
 
 def unary(name, ty, extra_decl=None, args="", ret=None):

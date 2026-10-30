@@ -18,7 +18,7 @@ dotnet artifacts/ffmpeg-browser-portable-simd128/decode.dll input.mp4 100 video 
 
 SIMD build directories have a `-simd128` suffix; scalar directories and dependency ABI tags are unchanged. ffmpeg's `ARCH_WASM` selects its C SIMD DSP kernels, not a wasm machine ABI: LLVM still targets the existing 64-bit ABI. The profile enables ffmpeg's architecture-dispatch configure switch but keeps inline assembly, x86 assembly, hardware decoders, and network support disabled. A build-local configure patch makes the portable aligned-allocation probe use the actual `posix_memalign` header/signature. No upstream source checkout is edited.
 
-The owned header is [../sysroot/dotnet64-v1/simd128/include/wasm_simd128.h](../sysroot/dotnet64-v1/simd128/include/wasm_simd128.h), selected by `--simd128` in both ABIs. Implementations are in [../src/LlvmNet.Runtime/Simd128.cs](../src/LlvmNet.Runtime/Simd128.cs). Partial 64-bit loads/stores access exactly eight bytes; shuffle/lane immediates are checked by the header. Unsupported header operations remain compile errors rather than silently using native SIMD libraries.
+The owned header is [../sysroot/simd128/include/wasm_simd128.h](../sysroot/simd128/include/wasm_simd128.h), selected by `--simd128` in both ABIs. Implementations are in [../src/LlvmNet.Runtime/Simd128.cs](../src/LlvmNet.Runtime/Simd128.cs). Partial 64-bit loads/stores access exactly eight bytes; shuffle/lane immediates are checked by the header. Unsupported header operations remain compile errors rather than silently using native SIMD libraries.
 
 For this machine only, host-targeted NativeAOT is available explicitly:
 

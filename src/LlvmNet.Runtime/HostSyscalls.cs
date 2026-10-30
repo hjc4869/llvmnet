@@ -7,7 +7,7 @@ using System.Text;
 namespace LlvmNet.Runtime;
 
 /// <summary>
-/// The host system-call layer for musl on dotnet64-v1 (plan items LC-01, LC-04..LC-10). musl's
+/// The host system-call layer for musl on dotnet64-v2 (plan items LC-01, LC-04..LC-10). musl's
 /// arch/llvmnet/syscall_arch.h sends every system call here. Numbers, argument layouts, structure
 /// layouts and error results follow Linux x86-64, so musl runs unmodified; the implementation uses
 /// only .NET APIs, so it behaves the same on every .NET host. Unimplemented calls return -ENOSYS.
@@ -119,6 +119,7 @@ public static unsafe class HostSyscalls
                 263 => Unlink((int)a, (nint)b, (int)c),
                 264 or 316 => Rename((int)a, (nint)b, (int)c, (nint)d),
                 267 => -EINVAL,                                 // readlinkat
+                280 => SetTimes((int)a, (nint)b, (nint)c, (int)d),
                 269 or 439 => Access((int)a, (nint)b, (int)c),
                 292 => Duplicate((int)a, (int)b),
                 302 => ResourceLimit((int)b, (nint)d),
@@ -406,6 +407,26 @@ public static unsafe class HostSyscalls
         }
     }
 
+    /// <summary>utimensat: a null path names the descriptor itself (futimens); UTIME_NOW and UTIME_OMIT as in Linux.</summary>
+    private static long SetTimes(int directory, nint pathPointer, nint times, int flags)
+    {
+        const long UtimeNow = (1L << 30) - 1, UtimeOmit = (1L << 30) - 2;
+        string? path = pathPointer == 0 ? Lookup(directory)?.Path : Resolve(directory, pathPointer);
+        if (path is null) return pathPointer == 0 && Lookup(directory) is null ? -EBADF : -EINVAL;
+        if (!File.Exists(path) && !Directory.Exists(path)) return -ENOENT;
+        DateTime now = DateTime.UtcNow;
+        for (int index = 0; index < 2; index++)
+        {
+            long seconds = times == 0 ? 0 : ((long*)times)[index * 2], nanoseconds = times == 0 ? UtimeNow : ((long*)times)[index * 2 + 1];
+            if (nanoseconds == UtimeOmit) continue;
+            if (nanoseconds != UtimeNow && nanoseconds is < 0 or >= 1000000000) return -EINVAL;
+            DateTime time = nanoseconds == UtimeNow ? now : DateTime.UnixEpoch.AddTicks(seconds * TimeSpan.TicksPerSecond + nanoseconds / 100);
+            if (index == 0) File.SetLastAccessTimeUtc(path, time);
+            else File.SetLastWriteTimeUtc(path, time);
+        }
+        return 0;
+    }
+
     private static long Access(int directory, nint pathPointer, int mode)
     {
         string path = Resolve(directory, pathPointer);
@@ -645,7 +666,7 @@ public static unsafe class HostSyscalls
         string[] fields =
         [
             OperatingSystem.IsLinux() ? "Linux" : OperatingSystem.IsMacOS() ? "Darwin" : OperatingSystem.IsWindows() ? "Windows" : RuntimeInformation.OSDescription,
-            Environment.MachineName, Environment.OSVersion.Version.ToString(), "llvmnet dotnet64-v1",
+            Environment.MachineName, Environment.OSVersion.Version.ToString(), "llvmnet dotnet64-v2",
             RuntimeInformation.OSArchitecture switch { Architecture.X64 => "x86_64", Architecture.Arm64 => "aarch64", var other => other.ToString().ToLowerInvariant() },
             "(none)"
         ];

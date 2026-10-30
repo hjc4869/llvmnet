@@ -294,7 +294,7 @@ def x87(value):
 
 
 def extended_module(m):
-    """x86_fp80 (long double on the fixed dotnet64-v1 ABI): software Float80 arithmetic in llvmnet."""
+    """x86_fp80 (long double on the portable ABI): software Float80 arithmetic in llvmnet."""
     name, canonical = "x86_fp80", 0x7fffc000000000000000
     values = [x87(v) for v in [0.0, -0.0, 1.0, -1.0, 0.5, 1.5, -2.5, 3.0, 0.1, 1e300, -7.25e-3, 123456.789, float("inf"), float("-inf")]]
     values += [16383 << 64 | 0x8000000000000001, 0x7ffe << 64 | 0xffffffffffffffff, 1, 1 << 64 | 1 << 63,

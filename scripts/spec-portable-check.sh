@@ -21,8 +21,8 @@ run="$(dirname "$SPEC_PORTABLE_SNAPSHOT")"
 {
     printf 'started=%s\ntoolchain=%s\npattern=%s\nsize=test\noptimization=3\nvectorize=0\ntimeout=%s\n' "$(date -u +%FT%TZ)" "$toolchain" "$pattern" "$limit"
     sha256sum "$toolchain/lib/llvmnet/llvmnet.dll" "$toolchain/lib/llvmnet/LlvmNet.Runtime.dll" \
-        "$toolchain/lib/llvmnet/libllvmnet-llvm.so" "$toolchain/sysroot/dotnet64-v1/lib/libcxx-managed.a"
-    find "$toolchain/sysroot/dotnet64-v1" -type f -print0 | sort -z | xargs -0 sha256sum
+        "$toolchain/lib/llvmnet/libllvmnet-llvm.so"
+    find "$toolchain/sysroot/dotnet64-v2/lib" -type f -print0 | sort -z | xargs -0 sha256sum
 } > "$run/environment.txt"
 printf 'suite\truntime\tbenchmark\tsize\toptimization\tvectorize\tresult\texit_code\tlog\tcopies\tthreads\tthreading_profile\n' > "$run/results.tsv"
 checked=0

@@ -39,7 +39,7 @@ jobs:
             ~/.nuget/packages
             artifacts/vendor/downloads
             artifacts/vendor/musl-native
-          key: deps-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'scripts/sources.lock', 'scripts/install-libcxx-headers.sh') }}
+          key: deps-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'scripts/sources.lock') }}
       - name: Build
         run: bash scripts/ensure-built.sh
       - name: Format check
@@ -81,7 +81,7 @@ jobs:
             ~/.nuget/packages
             artifacts/vendor/downloads
             artifacts/vendor/musl-native
-          key: deps-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'scripts/sources.lock', 'scripts/install-libcxx-headers.sh') }}
+          key: deps-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'scripts/sources.lock') }}
       - name: Fetch pinned sources
         run: scripts/fetch-sources.sh
       - name: Build

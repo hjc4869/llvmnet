@@ -21,7 +21,7 @@ for runtime in managed-host system portable; do
     "$llvmnet" --runtime="$runtime" "$fixtures/client.c" --cil-reference "$out/AliasLibrary.dll" -o "$out/alias-client.dll"
     dotnet "$out/alias-client.dll"
     if [[ "$runtime" != managed-host ]]; then
-        abi=dotnet64-v1
+        abi=dotnet64-v2
         [[ "$runtime" == system ]] && abi=system-linux-x64-v1
         { cat "$root/tests/ir/linkage.ll"; printf '\n!llvm.module.flags = !{!0}\n!0 = !{i32 1, !"llvmnet.abi", !"%s"}\n' "$abi"; } >"$out/linkage.ll"
         "$llvmnet" --runtime="$runtime" "$out/linkage.ll" -o "$out/linkage-ir.dll"

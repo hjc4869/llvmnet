@@ -14,7 +14,7 @@ internal sealed class CompilerOptions
     internal bool TrapMissingArguments { get; set; }
     internal bool DiagnoseLimits { get; set; }
     internal bool CheckIndirectCalls { get; set; }
-    internal string AbiTag => Runtime switch { "system" => "system-linux-x64-v1", "portable" => "dotnet64-v1", _ => "managed-host-v1" };
+    internal string AbiTag => Runtime switch { "system" => "system-linux-x64-v1", "portable" => PortableAbi.Tag, _ => "managed-host-v1" };
     internal List<string> SystemLibraries { get; } = [];
     internal Dictionary<string, NativeImport> NativeImports { get; } = new(StringComparer.Ordinal);
     internal List<string> CilReferences { get; } = [];
@@ -31,7 +31,7 @@ internal static class Driver
             string executable = driver == "flang" ? Toolchain.Executable("flang-22", "LLVMNET_FLANG") : Toolchain.Executable(driver == "clang++" ? "clang++-22" : "clang-22", "LLVMNET_CLANG");
             if (arguments[0] == "--version")
             {
-                Console.WriteLine($"llvmnet {BuildInfo.Version} (LLVM {Llvm.Version}; ABIs system-linux-x64-v1, dotnet64-v1)");
+                Console.WriteLine($"llvmnet {BuildInfo.Version} (LLVM {Llvm.Version}; ABIs system-linux-x64-v1, {PortableAbi.Tag})");
                 Console.WriteLine("Frontend follows:");
             }
             return Toolchain.Run(executable, arguments);
@@ -46,7 +46,8 @@ internal static class Driver
                 "  -S -emit-llvm            Emit textual LLVM IR",
                 "  -E                       Preprocess with the selected frontend",
                 "  -M / -MM / -MD / -MMD    Clang dependency-file options",
-                "  -L<dir> -l<name>         Link LLVM bitcode archives",
+                "  -L<dir> -l<name>         Link LLVM bitcode archives (-lc, -lm, -lpthread, -ldl, -lrt, -lc++ are built in)",
+                "  -nostdlib, -nodefaultlibs, -nostartfiles  Portable: omit the sysroot libraries and/or start object",
                 "  -r                       Link to a relocatable bitcode object",
                 "  -shared / --emit-library Emit a CIL library without an entry point",
                 "  --cil-reference <dll>    Resolve ABI-compatible managed CExport methods",
@@ -57,6 +58,7 @@ internal static class Driver
                 "  --trap-missing-arguments Trap invalid void calls with missing arguments (system only)",
                 "  --diagnose-limits        Report per-function IL size, locals and JIT optimization thresholds",
                 "  --check-indirect-calls   Debug: verify each indirect call's CIL signature against its target",
+                "  --portable-sysroot <dir> Use another portable sysroot (default: the toolchain's sysroot/" + PortableAbi.Tag + ")",
                 "  --emit-llvm              Stop after LLVM linking",
                 "  --keep-ir <file>         Preserve linked LLVM bitcode",
                 "  --nativeaot              Publish a self-contained NativeAOT executable",
@@ -87,6 +89,8 @@ internal static class Driver
         bool aotDebug = false;
         bool verbose = false;
         bool linkerVersion = false;
+        bool startFiles = true;
+        bool defaultLibraries = true;
         string? runtimeId = null;
         string? aotInstructionSet = null;
         string aotPreference = "Balanced";
@@ -108,7 +112,10 @@ internal static class Driver
                 case "--simd128": options.Simd128 = true; break;
                 case "--trap-missing-arguments": options.TrapMissingArguments = true; break;
                 case "--diagnose-limits": options.DiagnoseLimits = true; break;
-                case "--portable-libc": PortableAbi.Libc = Path.GetFullPath(Next()); break;
+                case "--portable-sysroot": PortableAbi.SysrootOverride = Path.GetFullPath(Next()); break;
+                case "-nostdlib": startFiles = false; defaultLibraries = false; break;
+                case "-nostartfiles": startFiles = false; break;
+                case "-nodefaultlibs": defaultLibraries = false; break;
                 case "--check-indirect-calls": options.CheckIndirectCalls = true; break;
                 case "--aot-debug": aotDebug = true; break;
                 case "--runtime-id": runtimeId = Next(); break;
@@ -183,7 +190,7 @@ internal static class Driver
             throw new ArgumentException("Portable ABI mode cannot contain native imports; use a managed CIL reference or --runtime=system.");
         if (options.Runtime != "system" && options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
         if (options.Runtime != "system" && options.TrapMissingArguments) throw new ArgumentException("--trap-missing-arguments requires --runtime=system.");
-        if (PortableAbi.Libc is not null && options.Runtime != "portable") throw new ArgumentException("--portable-libc requires --runtime=portable.");
+        if (PortableAbi.SysrootOverride is not null && options.Runtime != "portable") throw new ArgumentException("--portable-sysroot requires --runtime=portable.");
         if (options.Runtime == "system" && runtimeId is not null && runtimeId != "linux-x64")
             throw new ArgumentException("The current system ABI profile requires NativeAOT RID linux-x64.");
         if (linkerVersion)
@@ -196,7 +203,7 @@ internal static class Driver
         options.Verbose = verbose;
         options.NativeAot = nativeAot;
         if (options.Simd128)
-            frontend.InsertRange(0, ["-D__LLVMNET_SIMD128__=1", "-I", Path.Combine(Toolchain.Root, "sysroot", "dotnet64-v1", "simd128", "include")]);
+            frontend.InsertRange(0, ["-D__LLVMNET_SIMD128__=1", "-I", Path.Combine(Toolchain.Root, "sysroot", "simd128", "include")]);
         string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");
         if (preprocess || dependencyOnly)
         {
@@ -256,24 +263,24 @@ internal static class Driver
                 return 0;
             foreach (string library in libraries)
             {
-                if (library is "c" or "m" || options.Runtime == "system" && library is "pthread" or "dl" or "rt")
+                // Parts of the C library in both modes; in portable mode the sysroot also supplies the C++ and Fortran runtimes.
+                if (library is "c" or "m" or "pthread" or "dl" or "rt" or "util" or "crypt" or "resolv" ||
+                    options.Runtime == "portable" && library is "c++" or "c++abi" or "stdc++" or "supc++" or "flang_rt.runtime" or "FortranRuntime" or "FortranDecimal")
                     continue;
                 string? archive = searchPaths.Select(directory => Path.Combine(directory, $"lib{library}.a")).FirstOrDefault(File.Exists);
                 if (archive is null)
                     throw new FileNotFoundException($"Cannot find LLVM bitcode archive lib{library}.a in the -L directories. Native libraries require --native-import.");
                 bitcode.Add(archive);
             }
-            if (options.Runtime == "portable")
+            // Portable executables link musl's start object and the sysroot archives, in dependency order. Libraries do
+            // not: musl keeps per-process state (thread pointer, heap, stdio) that one image per process must own.
+            if (options.Runtime == "portable" && !options.Library)
             {
-                string cppRuntime = Path.Combine(Toolchain.Root, "sysroot", "dotnet64-v1", "lib", "libcxx-managed.a");
-                if (PortableAbi.Libc is not null)
-                {
-                    if (!options.Library) bitcode.Add(Path.Combine(PortableAbi.Libc, "lib", "crt1.o"));
-                    foreach (string archive in new[] { "libflang_rt.runtime.a", "libc++.a", "libc++abi.a" })
-                        if (File.Exists(Path.Combine(PortableAbi.Libc, "lib", archive))) bitcode.Add(Path.Combine(PortableAbi.Libc, "lib", archive));
-                    bitcode.Add(Path.Combine(PortableAbi.Libc, "lib", "libc.a"));
-                }
-                else if (File.Exists(cppRuntime)) bitcode.Add(cppRuntime);
+                PortableAbi.RequireSysroot();
+                if (startFiles) bitcode.Add(PortableAbi.Library("crt1.o"));
+                if (defaultLibraries)
+                    foreach (string archive in new[] { "libflang_rt.runtime.a", "libc++.a", "libc++abi.a", "libc.a" })
+                        if (File.Exists(PortableAbi.Library(archive))) bitcode.Add(PortableAbi.Library(archive));
             }
             string linked = Path.Combine(temporary, "linked.bc");
             if (bitcode.All(path => Path.GetExtension(path) == ".a"))
@@ -300,7 +307,7 @@ internal static class Driver
             string scalarizer = options.Simd128 ? "scalarizer" : "scalarizer<load-store>";
             string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,expand-reductions,scalarize-masked-mem-intrin,{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
-            if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (PortableAbi.Libc is null ? "" : ",__llvmnet_libc_main,__llvmnet_register_finalizer"));
+            if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (options.Runtime == "portable" ? ",__llvmnet_libc_main,__llvmnet_register_finalizer" : ""));
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);
             if (optimizeResult != 0)
                 return optimizeResult;

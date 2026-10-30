@@ -45,7 +45,7 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal bool IsManagedImport(string name) => managedImports.Contains(name);
 
     /// <summary>
-    /// With musl (--portable-libc) the hand-written C# C library must stay invisible; only the host interface,
+    /// In portable mode, where musl is the C library, the hand-written C# C library must stay invisible; only the host interface,
     /// the C++ exception bridge (the CLR unwinds), non-local jumps, SIMD128 helpers and, until flang-rt replaces
     /// it, the Fortran runtime remain. A C library symbol musl lacks is then an error, not a silent fallback.
     /// </summary>
@@ -85,7 +85,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             string name = Llvm.Name(value);
             bool function = Llvm.LLVMIsAFunction(value) != 0;
             result = function
-                ? !options.NativeImports.ContainsKey(name) && !(runtimeExports.TryGetValue(name, out MethodInfo? export) && (PortableAbi.Libc is null || MuslVisible(name, export))) &&
+                ? !options.NativeImports.ContainsKey(name) && !(runtimeExports.TryGetValue(name, out MethodInfo? export) && (options.Runtime != "portable" || MuslVisible(name, export))) &&
                     (Host is null || HostInterop.Adapter(name) is null)
                 : !Stdio.HasGlobal(name) && !Cxx.HasGlobal(name);
             if (result && Host is not null && !(function && !Host.IsSystem(value)))
@@ -214,7 +214,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         }
         if (name == "__llvmnet_run_constructors")
             return Methods[function] = constructors;
-        if (!runtimeExports.TryGetValue(name, out method) || PortableAbi.Libc is not null && !MuslVisible(name, method))
+        if (!runtimeExports.TryGetValue(name, out method) || options.Runtime == "portable" && !MuslVisible(name, method))
             throw new NotSupportedException($"Unresolved function: {name}");
         if (Types.Map(Llvm.LLVMGetReturnType(signature)) != method.ReturnType ||
             !Types.Parameters(signature).SequenceEqual(method.GetParameters().Select(parameter => parameter.ParameterType)))
@@ -236,7 +236,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         using var types = new TypeSystem(module, cilModule, options.Simd128);
         Types = types;
         constructors = Program.DefineMethod("__llvmnet_run_constructors", MethodAttributes.Public | MethodAttributes.Static, typeof(void), Type.EmptyTypes);
-        // With musl (--portable-libc), its start object calls main and exit and runs constructors after __init_libc.
+        // In portable mode musl's start object calls main and exit and runs constructors after __init_libc.
         libcMain = Llvm.LLVMGetNamedFunction(module, "__llvmnet_libc_main");
         if (libcMain != 0 && Llvm.LLVMIsDeclaration(libcMain) != 0) libcMain = 0;
         libcFinalizer = Llvm.LLVMGetNamedFunction(module, "__llvmnet_register_finalizer");

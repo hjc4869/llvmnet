@@ -1,4 +1,4 @@
-/* musl libm on dotnet64-v1: double and float results must equal native musl bit for bit, since the same C
+/* musl libm on the portable ABI: double and float results must equal native musl bit for bit, since the same C
  * implementations are compiled. long double functions are printed rounded, because native x86-64 musl
  * implements several of them with x87 assembly while the port uses the generic C versions. */
 #include <math.h>

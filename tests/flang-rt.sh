@@ -2,27 +2,20 @@
 # tags: core libc fortran aot
 # requires: flang
 # timeout: 3600
-# Upstream flang-rt 22.1.8 on musl and libc++ (FT-01 spike): every single-file Fortran fixture is compiled with
+# Upstream flang-rt 22.1.8 on musl and libc++ (FT-01, FT-05): every single-file Fortran fixture is compiled with
 # llvmnet against flang-rt and compared with native Flang, plus one NativeAOT build. Excluded: fixtures needing
-# extra sources or OpenMP flags (arithmetic, concurrent, module-main, portable-interop) and random, whose
-# REAL(4) stream depends on uint_fast32_t, which is 64-bit in glibc but 32-bit in musl.
+# extra sources or OpenMP flags (arithmetic, concurrent, module-main, portable-interop).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"
-libc="$test_output/libc"
-bash "$root/scripts/build-portable-libc.sh" "$libc" >"$test_output/libc.log"
-bash "$root/scripts/build-portable-cxx.sh" "$libc" >"$test_output/cxx.log"
-bash "$root/scripts/build-portable-flang-rt.sh" "$libc" >"$test_output/flang-rt.log"
-tail -n 1 "$test_output/flang-rt.log"
-if [[ -s "$libc/build-flang-rt/failures.tsv" ]]; then cat "$libc/build-flang-rt/failures.tsv" >&2; exit 1; fi
-export test_output libc llvmnet root
+export test_output llvmnet root
 check() {
     local name="$1" source_file="$root/tests/fortran/$1.f90" directory="$test_output/$1"
     mkdir -p "$directory/native" "$directory/llvmnet"
     flang-22 -O1 -module-dir "$directory/native" "$source_file" -o "$directory/native/program" >/dev/null 2>&1
     local native=0 managed=0
     (cd "$directory/native" && timeout 60 ./program >out.txt 2>/dev/null) || native=$?
-    "$llvmnet" --runtime=portable --portable-libc "$libc" -O1 -module-dir "$directory/llvmnet" "$source_file" -o "$directory/llvmnet/program.dll" >"$directory/build.log" 2>&1 ||
+    "$llvmnet" --runtime=portable -O1 -module-dir "$directory/llvmnet" "$source_file" -o "$directory/llvmnet/program.dll" >"$directory/build.log" 2>&1 ||
         { printf 'FAIL: %s did not compile\n' "$name"; return 1; }
     (cd "$directory/llvmnet" && timeout 120 dotnet program.dll >out.txt 2>err.txt) || managed=$?
     if [[ "$native" != "$managed" ]] || ! cmp -s "$directory/native/out.txt" "$directory/llvmnet/out.txt"; then
@@ -33,9 +26,9 @@ check() {
 }
 export -f check
 mapfile -t fixtures < <(for source in "$root"/tests/fortran/*.f90; do basename "$source" .f90; done |
-    grep -v -x -E 'arithmetic|concurrent|module-main|portable-interop|random')
+    grep -v -x -E 'arithmetic|concurrent|module-main|portable-interop')
 printf '%s\n' "${fixtures[@]}" | xargs -P "${JOBS:-8}" -I{} bash -c 'check "$1"' _ {}
-"$llvmnet" --runtime=portable --portable-libc "$libc" -O1 -module-dir "$test_output" --nativeaot "$root/tests/fortran/namelist.f90" -o "$test_output/namelist-aot" >"$test_output/aot.log" 2>&1
+"$llvmnet" --runtime=portable -O1 -module-dir "$test_output" --nativeaot "$root/tests/fortran/namelist.f90" -o "$test_output/namelist-aot" >"$test_output/aot.log" 2>&1
 (cd "$test_output/namelist/native" && timeout 60 "$test_output/namelist-aot" >aot.txt)
 cmp "$test_output/namelist/native/out.txt" "$test_output/namelist/native/aot.txt"
 printf 'PASS: flang-rt on musl and libc++: %d Fortran fixtures match native Flang, namelist also under NativeAOT\n' "${#fixtures[@]}"

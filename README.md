@@ -72,7 +72,7 @@ bash scripts/package-toolchain.sh /path/toolchain --self-contained --bundle-llvm
 /path/toolchain/bin/llvmnet-flang --runtime=portable source.f90 -o fortran.dll
 ```
 
-`system` uses the native Linux x86-64 ABI and libc/pthread interfaces. `portable` uses the bundled, versioned `dotnet64-v1` ABI and managed adapters, with libc++ headers/support bitcode included. The existing `managed-host` default remains a legacy compatibility mode, not a cross-platform ABI. Objects and managed references from different modes are rejected.
+`system` uses the native Linux x86-64 ABI and libc/pthread interfaces. `portable` uses the versioned `dotnet64-v2` ABI with musl, libc++ and flang-rt from the toolchain sysroot (see below). The existing `managed-host` default remains a legacy compatibility mode, not a cross-platform ABI. Objects and managed references from different modes are rejected.
 
 Outputs without `.dll` are ordinary Unix executable launchers plus a payload directory; `--nativeaot` produces a native executable with .NET runtime code included. NativeAOT publishing needs the .NET 10 SDK and native linker even when the compiler installation is self-contained. Cross-platform execution of portable CIL is a release goal with a fixed ABI, but has only been tested on Linux x86-64 so far.
 
@@ -116,18 +116,16 @@ The runner builds once, runs tests in parallel, and writes per-test logs, `summa
 - `--check-indirect-calls` verifies every indirect call against its target's signature; see [docs/dev/calling-convention.md](docs/dev/calling-convention.md).
 - [docs/user/support-matrix.md](docs/user/support-matrix.md) lists which LLVM types, instructions and intrinsics are translated.
 
-## Experimental: Upstream C, C++ and Fortran Runtimes
+## Portable C, C++ and Fortran Runtimes
 
-`--portable-libc <prefix>` compiles portable programs against unmodified musl 1.2.5, libc++/libc++abi and flang-rt 22.1.8 built for dotnet64-v1, instead of the hand-written runtime. See [docs/plan](docs/plan/README.md) (milestones M2 and M3) and [ports/musl](ports/musl/README.md).
+Portable programs (`--runtime=portable`, ABI tag `dotnet64-v2`) use unmodified musl 1.2.5, libc++/libc++abi and flang-rt 22.1.8, compiled to LLVM bitcode by llvmnet itself and installed as the toolchain's sysroot `sysroot/dotnet64-v2`. The libraries reach the operating system only through a small host layer in `LlvmNet.Runtime` ([docs/dev/host-abi.md](docs/dev/host-abi.md)). `scripts/ensure-built.sh` builds the sysroot (about 35 seconds) and rebuilds it only when its inputs change; see [ports/musl](ports/musl/README.md) for the port.
 
 ```sh
-bash scripts/build-portable-libc.sh artifacts/portable-libc
-bash scripts/build-portable-cxx.sh artifacts/portable-libc
-bash scripts/build-portable-flang-rt.sh artifacts/portable-libc
-bin/llvmnet --runtime=portable --portable-libc artifacts/portable-libc program.cpp -o program.dll
+bash scripts/build-sysroot.sh              # normally run by scripts/ensure-built.sh
+bin/llvmnet --runtime=portable program.cpp -o program.dll
 ```
 
-The musl headers differ from the default portable headers in a few layouts, so do not mix objects built with and without this option.
+Objects built for the earlier `dotnet64-v1` headers are rejected at link time; recompile them.
 
 ## Safety and Portability
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Build musl 1.2.5 for the dotnet64-v1 ABI as LLVM bitcode (plan item LC-01, spike stage).
-#   scripts/build-portable-libc.sh [prefix]     default artifacts/portable-libc
-# Produces <prefix>/include (musl headers for dotnet64-v1), <prefix>/lib/libc.a (bitcode archive) and
+# Build musl 1.2.5 for the dotnet64-v2 ABI as LLVM bitcode (plan items LC-01, LC-15); the first step of
+# scripts/build-sysroot.sh, which installs the result as the toolchain's portable sysroot.
+#   scripts/build-portable-libc.sh [prefix]     default artifacts/sysroot-build/dotnet64-v2
+# Produces <prefix>/include (musl headers), <prefix>/lib/libc.a (bitcode archive), <prefix>/lib/crt1.o and
 # <prefix>/build/failures.tsv (one row per source file llvmnet could not compile, with the first error).
 # Upstream sources are not modified: arch/x86_64 is copied to arch/llvmnet and ports/musl is overlaid.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-prefix="$(realpath -m "${1:-$root/artifacts/portable-libc}")"
+prefix="$(realpath -m "${1:-$root/artifacts/sysroot-build/dotnet64-v2}")"
 upstream="$("$root/scripts/fetch-sources.sh" --path musl)"
 bash "$root/scripts/ensure-built.sh"
 build="$prefix/build"
@@ -23,13 +24,20 @@ sed -f tools/mkalltypes.sed arch/llvmnet/bits/alltypes.h.in include/alltypes.h.i
 cp arch/llvmnet/bits/syscall.h.in obj/include/bits/syscall.h
 sed -n -e s/__NR_/SYS_/p <arch/llvmnet/bits/syscall.h.in >>obj/include/bits/syscall.h
 printf '#define VERSION "1.2.5-llvmnet"\n' >obj/src/internal/version.h
+# Install the public headers first: the musl sources themselves compile against this prefix as their sysroot.
+cp -a include/. "$prefix/include/"
+mkdir -p "$prefix/include/bits"
+cp arch/generic/bits/*.h "$prefix/include/bits/"
+cp arch/llvmnet/bits/*.h "$prefix/include/bits/"
+cp obj/include/bits/alltypes.h obj/include/bits/syscall.h "$prefix/include/bits/"
+cp -a "$root/ports/musl/include/." "$prefix/include/"
 # Source selection as in musl's Makefile with ARCH=llvmnet: generic C in src/*/ and src/malloc/mallocng/,
 # where a src/<dir>/llvmnet/<name>.c from ports/musl replaces src/<dir>/<name>.c.
 mapfile -t sources < <(
     { ls src/*/*.c src/malloc/mallocng/*.c; ls src/*/llvmnet/*.c 2>/dev/null || true; } | sort |
     awk '{ key = $0; sub("/llvmnet/", "/", key); chosen[key] = (index($0, "/llvmnet/") || !(key in chosen)) ? $0 : chosen[key] } END { for (k in chosen) print chosen[k] }' | sort)
 printf '%s\n' "${sources[@]}" >"$build/sources.txt"
-flags=(--runtime=portable -c -O2 -std=c99 -ffreestanding -nostdinc -D_XOPEN_SOURCE=700
+flags=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -std=c99 -ffreestanding -nostdinc -D_XOPEN_SOURCE=700
     -I"$tree/arch/llvmnet" -I"$tree/arch/generic" -I"$tree/obj/src/internal" -I"$tree/src/include"
     -I"$tree/src/internal" -I"$tree/obj/include" -I"$tree/include"
     -fexcess-precision=standard -fno-strict-aliasing -Wno-everything)
@@ -54,12 +62,6 @@ find "$build/obj" -name '*.o' | sort >"$build/objects.txt"
 llvm-ar-22 rcs "$prefix/lib/libc.a" @"$build/objects.txt"
 mapfile -t start_flags <"$build/flags.txt"
 "$root/bin/llvmnet" "${start_flags[@]}" "$root/ports/musl/crt/llvmnet-start.c" -o "$prefix/lib/crt1.o"
-cp -a include/. "$prefix/include/"
-mkdir -p "$prefix/include/bits"
-cp arch/generic/bits/*.h "$prefix/include/bits/"
-cp arch/llvmnet/bits/*.h "$prefix/include/bits/"
-cp obj/include/bits/alltypes.h obj/include/bits/syscall.h "$prefix/include/bits/"
-cp -a "$root/ports/musl/include/." "$prefix/include/"
 cp COPYRIGHT "$prefix/COPYRIGHT"
-printf 'musl for dotnet64-v1: %d of %d sources compiled; failures in %s\n' \
+printf 'musl for dotnet64-v2: %d of %d sources compiled; failures in %s\n' \
     "$(wc -l <"$build/objects.txt")" "${#sources[@]}" "$build/failures.tsv"
