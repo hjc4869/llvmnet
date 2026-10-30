@@ -8,7 +8,7 @@ In portable mode (`--runtime=portable`, ABI `dotnet64-v2`), SPEC CPU 2017 and CP
 | [Platform code selected by `__linux__`](#linux-platform-detection) | 523.xalancbmk_r, 623.xalancbmk_s, 723.llvm_r, 823.llvm_s, 735.gem5_r, 835.gem5_s, 772.marian_r, 872.marian_s |
 | [glibc behavior that musl does not share](#glibc-behavior) | 507.cactuBSSN_r, 737.gmsh_r, 748.flightdm_r, 767.nest_r |
 | [`fork`](#fork) | 500.perlbench_r, 600.perlbench_s, 827.cppcheck_s |
-| [Portable ABI restrictions](#portable-abi-restrictions) | 526.blender_r, 722.palm_r |
+| [Portable ABI restrictions](#portable-abi-restrictions) | 722.palm_r |
 | [C++17 special math functions](#c17-special-math-functions) | 766.femflow_r |
 
 All other CPU 2017 and CPU 2026 entries pass in portable mode.
@@ -50,7 +50,6 @@ These programs rely on glibc behavior; built natively against musl, they fail th
 
 ## Portable ABI restrictions
 
-- **526.blender_r** requires `-funsigned-char`. Plain `char` is signed in `dotnet64-v2`, and the driver rejects the option: `-funsigned-char cannot change the versioned portable ABI`.
 - **722.palm_r** declares `open` with a fixed four-argument prototype, while the C library defines it as variadic. The compiler rejects the call (`Incompatible direct call signature for open`); see [dev/calling-convention.md](dev/calling-convention.md#direct-calls). 822.palm_s fails on OpenMP first.
 
 ## C++17 special math functions
@@ -65,6 +64,7 @@ These programs rely on glibc behavior; built natively against musl, they fail th
 | --- | --- | --- |
 | 500.perlbench_r, 600.perlbench_s | `-DSPEC_NO_USE_STDIO_PTR -DSPEC_NO_USE_STDIO_BASE -DI_FCNTL` | With `SPEC_LINUX_X64`, perl reads glibc's private `FILE` fields and assumes that `sys/file.h` includes `fcntl.h`. musl's `FILE` is opaque; these are perl's own switches for both. |
 | 525.x264_r, 625.x264_s | `-include string.h -include stdlib.h` | x264's bundled `getopt.c` includes these headers only when it sees glibc's `__GNU_LIBRARY__`. |
+| 526.blender_r | `-DSPEC_NO_ISFINITE` | Blender calls `std::isfinite` after including only `<math.h>`, which declares it in libstdc++ but not in libc++. The switch, documented by SPEC, makes it call `finite` instead. |
 | 710.omnetpp_r | `-DUSE_PORTABLE_COROUTINES` | musl has no `swapcontext`. omnetpp's setjmp-based coroutines only need to link, because the model creates none. |
 | 714.cpython_r | `-include sys/types.h` | CPython's pthread stubs need the pthread types, which glibc's `stdlib.h` declares through `sys/types.h`. |
 | 777.zstd_r | `-DPLATFORM_POSIX_VERSION=200809L` | zstd detects POSIX through `__unix__`; this is its documented override. |
@@ -89,4 +89,4 @@ bash scripts/spec-portable-check.sh artifacts/spec-portable-current.tsv artifact
 
 Do not repackage the toolchain while a check uses it.
 
-`bash tests/portable-spec-causes.sh` checks the causes with small probes and needs no SPEC kit. The `linux/limits.h`, `machine/endian.h` and `omp.h` headers, `-fopenmp`, `-funsigned-char`, the four-argument `open` and `--system-library` must fail in portable mode with their diagnostic. Probes of headers and library functions that SPEC programs use (`sys/ioctl.h`, `locale.h`, `complex.h`, `system`, `dup2`, `freopen`, `cexp`, iostreams, `std::thread` and others) must build and exit like their native builds.
+`bash tests/portable-spec-causes.sh` checks the causes with small probes and needs no SPEC kit. The `linux/limits.h`, `machine/endian.h` and `omp.h` headers, `-fopenmp`, the four-argument `open` and `--system-library` must fail in portable mode with their diagnostic. Probes of headers and library functions that SPEC programs use (`sys/ioctl.h`, `locale.h`, `complex.h`, `system`, `dup2`, `freopen`, `cexp`, iostreams, `std::thread`, `-funsigned-char` and others) must build and exit like their native builds.

@@ -50,6 +50,7 @@ for probe in 1 2 3 4 5; do
     resolved "c-$probe" clang-22 "$root/tests/c/portable-spec-missing.c" "-DPROBE=$probe"
 done
 resolved c-7 clang-22 "$root/tests/c/portable-spec-missing.c" -DPROBE=7 -DSPEC
+resolved unsigned-char clang-22 "$root/tests/c/portable-spec-missing.c" -DPROBE=8 -funsigned-char
 # A call through a prototype that contradicts the C library's declaration is rejected, not miscompiled.
 expect_failure c-9 'Incompatible direct call signature for open' \
     "$llvmnet" --runtime=portable -O0 -fno-builtin -DPROBE=9 "$root/tests/c/portable-spec-missing.c" -o probe.dll
@@ -59,8 +60,6 @@ expect_failure openmp 'Unresolved function: __kmpc_fork_call' \
 for probe in 1 2 3 4 5; do
     resolved "cpp-$probe" clang++-22 "$root/tests/cpp/portable-spec-missing.cpp" -std=c++17 "-DPROBE=$probe"
 done
-expect_failure unsigned-char 'cannot change the versioned portable ABI' \
-    "$llvmnet" --runtime=portable -funsigned-char "$root/tests/c/portable-spec-missing.c" -o char.dll
 expect_failure native-openmp '--system-library requires --runtime=system' \
     "$llvmnet" --runtime=portable --system-library libomp.so.5 "$root/tests/c/portable-spec-missing.c" -o native.dll
-printf 'PASS: 17 recorded portable SPEC causes are resolved and match native; 7 remaining causes are still rejected\n'
+printf 'PASS: 18 recorded portable SPEC causes are resolved and match native; 6 remaining causes are still rejected\n'

@@ -47,7 +47,7 @@ The configuration applies these settings in both modes. The settings for portabl
 | 521.wrf_r, 621.wrf_s | `-DSPEC_CASE_FLAG`, `-fconvert=big-endian`, `--trap-missing-arguments` |
 | 523.xalancbmk_r, 623.xalancbmk_s | `-DSPEC_LINUX`, `-fdelayed-template-parsing` |
 | 525.x264_r, 625.x264_s | `-fcommon` |
-| 526.blender_r | `-funsigned-char` (rejected in portable mode) |
+| 526.blender_r | `-funsigned-char` |
 | 527.cam4_r, 627.cam4_s | `-std=gnu89 -DSPEC_CASE_FLAG`, `-Inetcdf` |
 | 628.pop2_s | `-DSPEC_CASE_FLAG`, `-Inetcdf -fconvert=big-endian` |
 | 735.gem5_r, 835.gem5_s | `-Ulinux` |

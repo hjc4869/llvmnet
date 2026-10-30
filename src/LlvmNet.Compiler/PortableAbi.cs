@@ -24,8 +24,10 @@ internal static class PortableAbi
 
     internal static List<string> Arguments(IReadOnlyList<string> frontend, bool fortran, bool cpp)
     {
+        // Plain char's signedness changes no layout, so -funsigned-char objects link with the signed-char sysroot as
+        // they do natively; each side reads a char argument or result with its own signedness (ADR-09).
         foreach (string argument in frontend)
-            if (argument is "-target" or "--sysroot" or "-isysroot" or "-fshort-wchar" or "-fshort-enums" or "-funsigned-char" or "-fno-signed-char" || argument.StartsWith("-fpack-struct", StringComparison.Ordinal) || argument.StartsWith("--target=", StringComparison.Ordinal) || argument.StartsWith("--sysroot=", StringComparison.Ordinal) || argument.StartsWith("-m", StringComparison.Ordinal) && !argument.StartsWith("-module", StringComparison.Ordinal))
+            if (argument is "-target" or "--sysroot" or "-isysroot" or "-fshort-wchar" or "-fshort-enums" || argument.StartsWith("-fpack-struct", StringComparison.Ordinal) || argument.StartsWith("--target=", StringComparison.Ordinal) || argument.StartsWith("--sysroot=", StringComparison.Ordinal) || argument.StartsWith("-m", StringComparison.Ordinal) && !argument.StartsWith("-module", StringComparison.Ordinal))
                 throw new ArgumentException($"{argument} cannot change the versioned portable ABI; use --runtime=system for a native target.");
         RequireSysroot();
         string include = Path.Combine(Sysroot, "include");

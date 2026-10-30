@@ -29,6 +29,18 @@ typedef struct { void *storage; } pthread_mutex_t;
 #endif
 pthread_mutex_t mutex;
 int main(void) { return 0; }
+#elif PROBE == 8
+/* 526.blender_r builds with -funsigned-char against the C library's signed char. */
+#include <limits.h>
+#include <stdio.h>
+#include <string.h>
+int main(void) {
+    char c = (char)0xe9;
+    char text[] = "caf\xe9";
+    char buffer[8];
+    snprintf(buffer, sizeof buffer, "%c", c);
+    return !(c > 0 && CHAR_MIN == 0 && CHAR_MAX == 255 && strchr(text, c) == text + 3 && (unsigned char)buffer[0] == 0xe9);
+}
 #elif PROBE == 9
 extern int open(const char *, int, int, long);
 int main(void) { return open("probe.txt", 0, 0, 9); }

@@ -80,7 +80,7 @@ The backend is the part of llvmnet that must be kept. This workstream makes it p
 ### Vectors
 
 - [x] **BE-31** (S, P0) Scalarization remains the default. Fuzz the C fixtures with `-O3 -fvectorize -fslp-vectorize` and confirm every vector type LLVM produces either scalarizes or is rejected, never miscompiled. — **Done** (`6fd80c9`): `tests/vector-sweep.sh`; masked memory intrinsics now scalarized.
-- [ ] **BE-41** (S, P1) Accept `-funsigned-char` and `-fno-signed-char` in portable mode ([ADR-09](decisions.md#adr-09-portable-abi-evolution)): remove them from the rejected options in `PortableAbi.cs`, link mixed signedness without a check, change `tests/modes.sh` and `tests/portable-spec-causes.sh` to expect success, and rerun 526.blender_r.
+- [x] **BE-41** (S, P1) Accept `-funsigned-char` and `-fno-signed-char` in portable mode ([ADR-09](decisions.md#adr-09-portable-abi-evolution)): remove them from the rejected options in `PortableAbi.cs`, link mixed signedness without a check, change `tests/modes.sh` and `tests/portable-spec-causes.sh` to expect success, and rerun 526.blender_r. — **Done** (this commit): `tests/modes.sh` links a `-funsigned-char` object with a signed-`char` one and matches native `-O0` output; `tests/portable-spec-causes.sh` runs blender's case against the sysroot. 526.blender_r passes in portable mode, with SPEC's `-DSPEC_NO_ISFINITE` because libc++'s `<math.h>` does not declare `std::isfinite`. libc++'s two `-funsigned-char` lit tests (`formatter.char.funsigned-char`, `make_format_args.sh`) pass.
 - [ ] **BE-32** (L, P2) General fixed-vector lowering to `Vector128`/`Vector256` ([ADR-10](decisions.md#adr-10-simd-strategy)). Post-1.0.
 
 ## Exit criteria for M1

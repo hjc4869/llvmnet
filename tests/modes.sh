@@ -21,7 +21,6 @@ reject 'Managed reference ABI mismatch' --runtime=portable "$root/tests/c/link-m
 reject 'cannot contain native imports' --runtime=portable "$root/tests/c/smoke.c" --native-import 'abs=libc.so.6!abs' -o "$output/bad.dll"
 reject 'requires --runtime=system' --runtime=portable "$root/tests/c/smoke.c" --system-library libc.so.6 -o "$output/bad.dll"
 reject 'cannot change the versioned portable ABI' --runtime=portable -fshort-wchar "$root/tests/c/smoke.c" -o "$output/bad.dll"
-reject 'cannot change the versioned portable ABI' --runtime=portable -funsigned-char "$root/tests/c/smoke.c" -o "$output/bad.dll"
 reject 'requires an executable link' --nativeaot -c "$root/tests/c/smoke.c" -o "$output/bad.o"
 reject 'require --nativeaot' --aot-debug "$root/tests/c/smoke.c" -o "$output/bad"
 reject 'managed-host was removed' --runtime=managed-host "$root/tests/c/smoke.c" -o "$output/bad.dll"
@@ -51,4 +50,14 @@ for source_file in "$root/tests/c/runtime.c" "$root/tests/cpp/streams.cpp"; do
         exit 1
     fi
 done
+# Plain char signedness may differ between portable objects and from the sysroot's (ADR-09). Unoptimized native code
+# reads a char argument or result with the receiver's signedness, as llvmnet always does.
+char_source="$root/tests/c/char-signedness.c"
+"$root/bin/llvmnet" --runtime=portable -c -DLIBRARY "$char_source" -o "$output/char-library.o"
+"$root/bin/llvmnet" --runtime=portable -c -funsigned-char "$char_source" -o "$output/char-main.o"
+"$root/bin/llvmnet" --runtime=portable "$output/char-main.o" "$output/char-library.o" -o "$output/char.dll"
+clang-22 -O0 -c -DLIBRARY "$char_source" -o "$output/char-library-native.o"
+clang-22 -O0 -c -funsigned-char "$char_source" -o "$output/char-main-native.o"
+clang-22 "$output/char-main-native.o" "$output/char-library-native.o" -o "$output/char-native"
+diff <("$output/char-native") <(dotnet "$output/char.dll")
 printf 'PASS: compatible portable CIL linking and explicit rejection of ABI/output mode conflicts\n'

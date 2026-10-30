@@ -63,12 +63,12 @@ llvmnet-clang --runtime=portable --nativeaot source.c -o native-program
 
 Tag: `dotnet64-v2`, the default mode. Sources compile with `-nostdinc` against the sysroot's headers: musl 1.2.5 for C and libc++ 22.1.8 for C++. Executables link musl, libc++, libc++abi, flang-rt 22.1.8 and the compiler-rt builtins from the sysroot as bitcode, compiled into the program's CIL. `-nostdlib`, `-nodefaultlibs` and `-nostartfiles` leave them out; `-lc`, `-lm`, `-lpthread`, `-ldl`, `-lrt`, `-lc++` and the Fortran runtime names are accepted and need no archive. `--portable-sysroot <dir>` selects another sysroot.
 
-The LLVM target is a fixed `x86_64-unknown-none` layout that defines the data ABI; it does not generate x86 instructions. Host OS and CPU macros (`__linux__`, `__unix__`, `__x86_64__`, `__SSE__` and similar) are not defined; programs see `__LLVMNET__`, `__LLVMNET_PORTABLE__` and `__LLVMNET_ABI_VERSION`. Options that would change the ABI (`-target`, `--sysroot`, `-m*`, `-fshort-wchar`, `-fshort-enums`, `-funsigned-char`, `-fpack-struct`) are rejected.
+The LLVM target is a fixed `x86_64-unknown-none` layout that defines the data ABI; it does not generate x86 instructions. Host OS and CPU macros (`__linux__`, `__unix__`, `__x86_64__`, `__SSE__` and similar) are not defined; programs see `__LLVMNET__`, `__LLVMNET_PORTABLE__` and `__LLVMNET_ABI_VERSION`. Options that would change the ABI (`-target`, `--sysroot`, `-m*`, `-fshort-wchar`, `-fshort-enums`, `-fpack-struct`) are rejected. `-funsigned-char` is accepted: it changes no layout, so objects built with either signedness link together and with the signed-`char` sysroot, as they do natively, and each side reads a `char` argument or result with its own signedness.
 
 | Type or interface | `dotnet64-v2` |
 | --- | --- |
 | Byte order / address space | little-endian / 64-bit |
-| `char`, `short`, `int`, `long`, `long long` | 8, 16, 32, 64, 64 bits; plain `char` signed |
+| `char`, `short`, `int`, `long`, `long long` | 8, 16, 32, 64, 64 bits; plain `char` signed unless `-funsigned-char` |
 | `size_t`, `ptrdiff_t`, pointers | 64 bits |
 | `int_fast16_t`, `int_fast32_t` and unsigned forms | 64 bits, as in glibc |
 | `wchar_t` | signed 32-bit |
