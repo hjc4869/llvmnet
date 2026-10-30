@@ -55,7 +55,7 @@ internal static class Driver
                 "  --system-library <file>  Additional native library in system ABI mode",
                 "  --runtime <mode>         portable (default) or system",
                 "  --simd128                Enable architecture-neutral SIMD128 helper calls",
-                "  --trap-missing-arguments Trap invalid void calls with missing arguments (system only)",
+                "  --trap-missing-arguments Trap invalid void calls with missing arguments",
                 "  --diagnose-limits        Report per-function IL size, locals and JIT optimization thresholds",
                 "  --check-indirect-calls   Debug: verify each indirect call's CIL signature against its target",
                 "  --portable-sysroot <dir> Use another portable sysroot (default: the toolchain's sysroot/" + PortableAbi.Tag + ")",
@@ -198,7 +198,6 @@ internal static class Driver
         if (options.Runtime == "portable" && options.NativeImports.Count != 0)
             throw new ArgumentException("Portable ABI mode cannot contain native imports; use a managed CIL reference or --runtime=system.");
         if (options.Runtime != "system" && options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
-        if (options.Runtime != "system" && options.TrapMissingArguments) throw new ArgumentException("--trap-missing-arguments requires --runtime=system.");
         if (PortableAbi.SysrootOverride is not null && options.Runtime != "portable") throw new ArgumentException("--portable-sysroot requires --runtime=portable.");
         if (options.Runtime == "system" && runtimeId is not null && runtimeId != "linux-x64")
             throw new ArgumentException("The current system ABI profile requires NativeAOT RID linux-x64.");

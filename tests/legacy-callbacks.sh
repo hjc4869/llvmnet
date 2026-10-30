@@ -65,9 +65,13 @@ if "$output/missing-aot" invoke > "$output/missing-aot.log" 2>&1; then
     exit 1
 fi
 grep -q 'Invalid direct call with missing arguments' "$output/missing-aot.log"
-if "$root/bin/llvmnet" --runtime=portable --trap-missing-arguments "$output/registers-portable.bc" -o "$output/missing-portable.dll" > "$output/missing-portable.log" 2>&1; then
-    printf 'FAIL: portable mode accepted the invalid-call trap option\n' >&2
+"$root/bin/llvmnet" --runtime=portable -x ir -O0 -c "$output/missing.input" -o "$output/missing-portable.bc"
+"$root/bin/llvmnet" --runtime=portable --trap-missing-arguments "$output/missing-portable.bc" -o "$output/missing-portable.dll" 2> "$output/missing-portable-build.log"
+grep -q 'emitting runtime trap' "$output/missing-portable-build.log"
+dotnet "$output/missing-portable.dll"
+if dotnet "$output/missing-portable.dll" invoke > "$output/missing-portable.log" 2>&1; then
+    printf 'FAIL: invalid call did not trap in portable mode\n' >&2
     exit 1
 fi
-grep -q -- '--trap-missing-arguments requires --runtime=system' "$output/missing-portable.log"
-printf 'PASS: opt-in missing-argument traps fail on execution in JIT/NativeAOT; strict defaults retained\n'
+grep -q 'Invalid direct call with missing arguments' "$output/missing-portable.log"
+printf 'PASS: opt-in missing-argument traps fail on execution in both modes under JIT/NativeAOT; strict defaults retained\n'

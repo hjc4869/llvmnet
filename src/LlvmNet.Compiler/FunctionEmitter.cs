@@ -902,7 +902,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             nint definition = Llvm.LLVMGlobalGetValueType(target);
             uint arguments = Llvm.LLVMGetNumArgOperands(instruction);
             uint parameters = Llvm.LLVMCountParamTypes(definition);
-            if (Compiler.Host is not null && Compiler.TrapMissingArguments && parameters > arguments &&
+            if (Compiler.TrapMissingArguments && parameters > arguments &&
                 Llvm.LLVMIsDeclaration(target) == 0 && Llvm.LLVMIsFunctionVarArg(definition) == 0 &&
                 TypeSystem.Kind(Llvm.LLVMGetReturnType(signature)) == 0 && TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) == 0)
             {

@@ -24,7 +24,7 @@ The callee's definition is known, so llvmnet checks the call site against it at 
 - A call site whose LLVM type is variadic, as produced by a K&R or no-prototype call, may call a fixed-arity definition when the leading argument types match. Unused trailing arguments, including Flang's hidden character lengths, are dropped.
 - A `void` call site may call a definition that returns a value; the value is discarded. A non-`void` call site may call a `void` definition only when the result is unused.
 - In both modes, these x86-64 SysV register-slot equivalences are accepted, because native C and Fortran code relies on them (BE-39 extended them to portable mode, whose `dotnet64-v2` ABI follows x86-64's): `i32` and `i64` integer arguments in register positions, `i1` and `i8`, and `ptr` and `i64`. Flang passes hidden character lengths as `i64` to C functions declared with `int`, for example. Aggregates, `byval`, `sret`, `inreg` and `signext` parameters, and non-C calling conventions are never adjusted.
-- Calling with fewer arguments than the definition requires is a compile error. `--trap-missing-arguments` (system mode only) instead emits a trap at such a `void` call so a program whose invalid path is never executed can still be built.
+- Calling with fewer arguments than the definition requires is a compile error. `--trap-missing-arguments` instead emits a trap at such a `void` call so a program whose invalid path is never executed can still be built.
 - Every other difference is a compile error ("Incompatible direct call signature").
 
 ## Indirect calls

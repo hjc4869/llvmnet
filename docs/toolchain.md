@@ -73,7 +73,7 @@ Defined LLVM TLS globals now use lazy per-thread initialized storage; external n
 
 Empty or whole-line comment-only void inline assembly preserves ordering through a managed memory barrier. System mode additionally recognizes the exact x86 `int3` debugger trap and register-checked CPUID/XGETBV forms used by LLVM and Eigen host detection. CPU queries execute in LLVM-generated native thunks and are checked against native output; the trap delivers SIGTRAP. Other executable or value-producing assembly remains rejected, and portable mode rejects CPU-query assembly. This is not a general inline assembler.
 
-`--trap-missing-arguments` is a system-only diagnostic option for invalid void calls to translated functions with fewer arguments than their definition requires. The default remains a compile error. Opting in emits a build diagnostic and an `InvalidProgramException` at the call site; entering that path fails rather than inventing values. WRF selects it for a legacy implicit-interface error outside the validated input path. Build success with this option is not proof that every program path is supported.
+`--trap-missing-arguments` is a diagnostic option, in both modes, for invalid void calls to translated functions with fewer arguments than their definition requires. The default remains a compile error. Opting in emits a build diagnostic and an `InvalidProgramException` at the call site; entering that path fails rather than inventing values. WRF selects it for a legacy implicit-interface error outside the validated input path. Build success with this option is not proof that every program path is supported.
 
 ### Optional System C++ Library
 
