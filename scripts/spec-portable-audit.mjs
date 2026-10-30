@@ -48,8 +48,13 @@ for (const { row, file, started } of [...latest.values()].sort((left, right) => 
             const text = fs.readFileSync(row.log, 'utf8');
             const miscompare = text.match(/\*\*\* Miscompare of (\S+?);/);
             const status = text.match(/Error with '.*?specinvoke[^\n]*\n\s*Command returned exit code (\d+)/);
-            if (miscompare) diagnostic = `run: miscompare of ${miscompare[1]}`;
-            else if (/TIMEOUT|timed out/i.test(text) || row.result === 'TIMEOUT') diagnostic = 'run: timeout';
+            const harness = text.match(/FATAL ERROR: ([^\n]+)/);
+            // A failed copy reports its exit code and then the contents of its standard error file.
+            const crashed = text.match(/non-zero return code \(exit code=(\d+)[^\n]*\n[\s\S]*?Contents of \S+\.err\n\*+\n([^\n]*)/);
+            if (harness) diagnostic = `harness: ${harness[1]}`;
+            else if (miscompare) diagnostic = `run: miscompare of ${miscompare[1]}`;
+            else if (crashed) diagnostic = `run: exit code ${crashed[1]}: ${crashed[2]}`;
+            else if (/\btimed out\b/i.test(text) || row.result === 'TIMEOUT') diagnostic = 'run: timeout';
             else if (status) diagnostic = `run: exit code ${status[1]}`;
         }
         if (!diagnostic) throw new Error(`Unclassified failure: ${row.benchmark} (${row.log})`);
