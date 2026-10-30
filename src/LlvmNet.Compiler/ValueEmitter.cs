@@ -66,7 +66,13 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
         else if (Llvm.LLVMIsAConstantFP(value) != 0)
         {
             byte[] bits = Llvm.Bits(value);
-            if (TypeSystem.Kind(type) == 2)
+            if (TypeSystem.Kind(type) == 2 && BinaryPrimitives.ReadInt32LittleEndian(bits) is int single &&
+                (single & 0x7fc00000) == 0x7f800000 && (single & 0x003fffff) != 0)
+            {
+                Il.Emit(OpCodes.Ldc_I4, single);
+                Il.Emit(OpCodes.Call, typeof(MathIntrinsics).GetMethod(nameof(MathIntrinsics.SingleFromBits))!);
+            }
+            else if (TypeSystem.Kind(type) == 2)
                 Il.Emit(OpCodes.Ldc_R4, BinaryPrimitives.ReadSingleLittleEndian(bits));
             else if (TypeSystem.Kind(type) == 3)
                 Il.Emit(OpCodes.Ldc_R8, BinaryPrimitives.ReadDoubleLittleEndian(bits));

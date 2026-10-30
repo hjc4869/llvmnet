@@ -41,6 +41,8 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 ### Fixed
 
 - Out-of-range `long double` to integer conversions threw instead of producing the x87 integer-indefinite value.
+- Zero-size `alloca` returned a null pointer, which flang-rt read as an unallocated zero-length character variable.
+- Signaling NaN `float` constants were quieted by the .NET JIT at `-O0`.
 
 - System-mode `exit()` skipped `atexit` handlers and all destructors.
 - `long double` stores overwrote the 6 bytes after the value.

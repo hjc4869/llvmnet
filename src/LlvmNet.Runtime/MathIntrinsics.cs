@@ -11,6 +11,11 @@ public static class MathIntrinsics
         return getRounding() switch { 0 => 1, 0x400 => 3, 0x800 => 2, 0xc00 => 0, _ => -1 };
     }
 
+    /// <summary>A float constant from its bits, used for signaling NaNs: the JIT keeps float constants as doubles, and the
+    /// widening quiets them. Not inlined, so the bits are never a foldable constant.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    public static float SingleFromBits(int bits) => BitConverter.Int32BitsToSingle(bits);
+
     public static double Round(double value) => Math.Round(value, MidpointRounding.AwayFromZero);
     public static float RoundF(float value) => MathF.Round(value, MidpointRounding.AwayFromZero);
     public static long Lrint(double value) => (long)Math.Round(value);
