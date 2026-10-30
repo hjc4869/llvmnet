@@ -48,6 +48,9 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - An exception no handler catches now calls `std::terminate` and the installed handler instead of ending as an unhandled managed exception.
 - System-mode pointer handlers received the address of the thrown pointer instead of its value, and did not accept added `const` or base-class pointers.
 - Programs with more than about 65,000 globals, constants and data blocks failed to load ("too many fields").
+- Portable paths with a trailing slash (`mkdir("dir/")`) or repeated slashes failed with `ENOENT`.
+- `std::filesystem::copy_file` failed for every file in portable mode: the host now implements `sendfile` and `copy_file_range`.
+- Timed futex waits and `nanosleep` could end up to a millisecond early, so `condition_variable::wait_for` reported no timeout and callers waiting for one never returned.
 
 - System-mode `exit()` skipped `atexit` handlers and all destructors.
 - `long double` stores overwrote the 6 bytes after the value.
