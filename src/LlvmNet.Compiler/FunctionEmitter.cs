@@ -271,7 +271,9 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Il.Emit(OpCodes.Ldc_I8, Types.Size(allocated));
                 Il.Emit(OpCodes.Conv_U);
                 Il.Emit(OpCodes.Mul_Ovf_Un);
-                Offset(alignment - 1);
+                // One spare byte: a zero-size alloca must still yield a non-null address, as on a native stack (localloc 0
+                // returns null, which flang-rt reads as an unallocated zero-length character variable).
+                Offset(alignment);
                 if (stackMemory is not null)
                     Il.Emit(OpCodes.Callvirt, typeof(StackMemory).GetMethod(nameof(StackMemory.Allocate))!);
                 else
