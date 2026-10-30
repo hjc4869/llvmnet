@@ -24,6 +24,23 @@ Portable programs (`dotnet64-v2`) contain musl, libc++ and flang-rt compiled to 
 
 The entry points and their semantics are versioned with the ABI tag. Implementing an additional system call is compatible. Changing an entry point's signature, or the meaning of an implemented call in a way musl depends on, requires a new ABI tag (ADR-09).
 
+## Calls into translated code
+
+The CLR calls through a function pointer by the call site's CIL signature and does not check the target (BE-18), so every place where the runtime calls a C function pointer it was handed is listed here with the signature it assumes (plan item LC-18). Calls between translated functions, such as musl calling `atexit` handlers or `qsort` comparators and `__libc_start_main` calling `main` through the compiler's `__llvmnet_main3` adapter, are compiled code and follow [calling-convention.md](calling-convention.md).
+
+| Site | Mode | Signature called | Pointer comes from | Mismatch |
+| --- | --- | --- | --- | --- |
+| `HostThreads.Clone` | portable | `int (void *)` | musl's `pthread_create` and `thrd_create` (`start`, `start_c11`) | Cannot occur: only musl's own functions are passed. |
+| `HostProcess` signal delivery | portable | `void (int)`, or `void (int, siginfo_t *, void *)` with `SA_SIGINFO` | the program, through `sigaction` and `signal` | A handler whose type does not match `SA_SIGINFO` is undefined in C too; native x86-64 tolerates it and the CLR does not. `--check-indirect-calls` does not cover this site. |
+| `Cxx.Terminate` | both | `void (void)` | `std::set_terminate` | The C++ type `terminate_handler` fixes it. |
+| `Cxx` catch matching | portable | `int (const type_info *, const type_info *, void **)` | `__llvmnet_cxx_can_catch` in libc++abi, registered by the image initializer | Cannot occur: llvmnet's own function. |
+| `Cxx` exception destructors | system | `void (void *)` | `__cxa_throw` | The Itanium ABI fixes it. |
+| `ExitHandlers` (`atexit`, `__cxa_atexit`, `__cxa_finalize`) | system | `void (void)`, `void (void *)` | the program; C++ static destructors | C's and the Itanium ABI's types fix it. |
+| `ThreadStorage` (`__cxa_thread_atexit`) | system | `void (void *)` | C++ `thread_local` destructors | The Itanium ABI fixes it. |
+| `SystemThreads.Start` | system | `void *(void *)`, called as a native function | `pthread_create` | Native code: the x86-64 convention applies. |
+
+In system mode a callback may be a native function or a translated one. `SystemAbi.ResolveCallback` maps the native entry points the runtime created for translated functions back to them, and a pointer it does not know is called as native code. In portable mode every pointer is a translated function, because portable images contain no native code.
+
 ## System calls
 
 | Area | Implemented | Not available |
