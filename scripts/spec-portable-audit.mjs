@@ -43,6 +43,15 @@ for (const { row, file, started } of [...latest.values()].sort((left, right) => 
                 break;
             }
         }
+        // Built but failed at run time: a miscompare of an output file, a run that exited with an error, or a timeout.
+        if (!diagnostic && fs.existsSync(row.log)) {
+            const text = fs.readFileSync(row.log, 'utf8');
+            const miscompare = text.match(/\*\*\* Miscompare of (\S+?);/);
+            const status = text.match(/Error with '.*?specinvoke[^\n]*\n\s*Command returned exit code (\d+)/);
+            if (miscompare) diagnostic = `run: miscompare of ${miscompare[1]}`;
+            else if (/TIMEOUT|timed out/i.test(text) || row.result === 'TIMEOUT') diagnostic = 'run: timeout';
+            else if (status) diagnostic = `run: exit code ${status[1]}`;
+        }
         if (!diagnostic) throw new Error(`Unclassified failure: ${row.benchmark} (${row.log})`);
     }
     console.log([row.benchmark, row.result, diagnostic, file, evidence, started, row.threads ?? '1',
