@@ -168,23 +168,29 @@ public readonly struct Float80
 
     public static double ToDouble(Float80 value) => BitConverter.Int64BitsToDouble(unchecked((long)value.IeeeBits(53, -1022, 1023, 11)));
     public static float ToSingle(Float80 value) => BitConverter.Int32BitsToSingle(unchecked((int)value.IeeeBits(24, -126, 127, 8)));
+    // Out-of-range conversions are poison in LLVM (C leaves them undefined, lrintl and friends raise FE_INVALID);
+    // like the x87 instructions native code uses, they produce the "integer indefinite" value 0x8000000000000000.
+    private const long IntegerIndefinite = long.MinValue;
+
     public static long ToSigned(Float80 value)
     {
-        if (value.IsNan || value.IsInfinity)
-            throw new ArithmeticException("Undefined out-of-range floating to integer conversion.");
+        if (value.IsNan || value.IsInfinity) return IntegerIndefinite;
         BigInteger integer = value.Scale >= 0 ? (BigInteger)value.Significand << value.Scale : (BigInteger)value.Significand >> -value.Scale;
-        return checked((long)(value.Negative ? -integer : integer));
+        if (value.Negative) integer = -integer;
+        return integer >= long.MinValue && integer <= long.MaxValue ? (long)integer : IntegerIndefinite;
     }
     public static long ToUnsigned(Float80 value)
     {
-        if (value.IsNan || value.IsInfinity)
-            throw new ArithmeticException("Undefined out-of-range floating to integer conversion.");
+        if (value.IsNan || value.IsInfinity) return IntegerIndefinite;
         BigInteger integer = value.Scale >= 0 ? (BigInteger)value.Significand << value.Scale : (BigInteger)value.Significand >> -value.Scale;
-        return unchecked((long)checked((ulong)(value.Negative ? -integer : integer)));
+        if (value.Negative) integer = -integer;
+        return integer >= 0 && integer <= ulong.MaxValue ? unchecked((long)(ulong)integer) : IntegerIndefinite;
     }
 
     public static Float80 Negate(Float80 value) => new(unchecked((long)value.Significand), value.SignExponent ^ 0x8000);
     public static Float80 Abs(Float80 value) => new(unchecked((long)value.Significand), value.SignExponent & 0x7fff);
+    public static Float80 CopySign(Float80 magnitude, Float80 sign) =>
+        new(unchecked((long)magnitude.Significand), magnitude.SignExponent & 0x7fff | sign.SignExponent & 0x8000);
     public static Float80 Floor(Float80 value)
     {
         if (value.IsNan) return Nan;
@@ -233,6 +239,7 @@ public readonly struct Float80
         BigInteger divisor = right.Signed << (right.Scale - scale);
         return Pack(numerator % divisor, BigInteger.One, scale, left.Negative);
     }
+    public static Float80 MultiplyAdd(Float80 left, Float80 right, Float80 addend) => Add(Multiply(left, right), addend);
     public static Float80 FusedMultiplyAdd(Float80 left, Float80 right, Float80 addend)
     {
         if (left.IsInfinity || left.IsNan || right.IsInfinity || right.IsNan || addend.IsInfinity || addend.IsNan)

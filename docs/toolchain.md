@@ -9,7 +9,7 @@ The Linux distribution has conventional compiler entry points:
 - `bin/llvmnet` for extension-based frontend selection.
 - `lib/llvmnet/` for the compiler and its managed runtime libraries.
 - `libexec/llvm/` for optional bundled LLVM, Clang, Flang, builtin headers, and intrinsic Fortran modules.
-- `sysroot/dotnet64-v1/` for versioned portable headers and C++ support bitcode.
+- `sysroot/dotnet64-v2/` for the portable sysroot: musl, libc++, libc++abi and flang-rt headers and LLVM bitcode archives, built by `scripts/build-sysroot.sh`; `sysroot/simd128/` for the SIMD128 header.
 - `share/llvmnet/` for documentation, SPEC configuration, and redistribution notices.
 
 Build a thin installation or bundle the compiler's .NET runtime and LLVM tools:
@@ -51,7 +51,7 @@ NativeAOT options include `--runtime-id <rid>`, `--aot-optimize Balanced|Speed|S
 
 ## Runtime Modes
 
-Choose the same mode for every source, object, archive, and managed reference in one program. LLVM module flags and managed assembly metadata carry the ABI identity. Incompatible combinations fail at link time, and incompatible loaded modules cannot share runtime state. Untagged legacy LLVM input is accepted only in `managed-host` mode.
+Choose the same mode for every source, object, archive, and managed reference in one program. LLVM module flags and managed assembly metadata carry the ABI identity. Incompatible combinations fail at link time, and incompatible loaded modules cannot share runtime state. Untagged LLVM input is rejected; `llvmnet --runtime=<mode> -x ir -c input.ll` compiles LLVM IR for a mode and records its tag.
 
 ### System ABI
 
@@ -109,39 +109,40 @@ dotnet portable.dll
 llvmnet-clang --runtime=portable --nativeaot source.c -o native-program
 ```
 
-Identity: `dotnet64-v1`. Source compiles against toolchain-owned headers with `-nostdinc`; libc++ wrappers precede those C headers. Host OS/CPU feature macros are absent. The LLVM target is a fixed internal `x86_64-unknown-none` layout used to define the ABI, not to generate x86 machine instructions for CIL output. ABI-changing target, wchar, enum, and packing flags are rejected.
+Identity: `dotnet64-v2`, the default mode. Source compiles against the sysroot's headers with `-nostdinc`: musl 1.2.5 for C, libc++ 22.1.8 for C++, and the C library, the C++ runtime (libc++, libc++abi) and the Fortran runtime (flang-rt 22.1.8) are linked from the sysroot as LLVM bitcode and compiled into the program's CIL. `-nostdlib`, `-nodefaultlibs` and `-nostartfiles` leave them out; `-lc`, `-lm`, `-lpthread`, `-ldl`, `-lrt`, `-lc++` and the Fortran runtime names are accepted and need nothing. Host OS/CPU feature macros are absent (`__linux__`, `__unix__` and `__x86_64__` are not defined; ADR-14). The LLVM target is a fixed internal `x86_64-unknown-none` layout used to define the ABI, not to generate x86 machine instructions for CIL output. ABI-changing target, wchar, enum, and packing flags are rejected.
 
 The versioned contract includes:
 
-| Type or Surface | v1 Contract |
+| Type or Surface | v2 Contract |
 | --- | --- |
 | Byte order / address space | little-endian / 64-bit |
 | `char`, `short`, `int`, `long`, `long long` | 8, 16, 32, 64, 64 bits; plain `char` signed |
 | `size_t`, `ptrdiff_t`, pointers | 64 bits |
+| `int_fast16_t`, `int_fast32_t` and unsigned forms | 64 bits, as in glibc |
 | `wchar_t` | signed 32-bit code unit |
 | `float`, `double` | IEEE binary32 / binary64 |
 | `long double` | 80-bit extended precision in 16-byte storage, software CIL operations on every host |
 | `__int128` | 128-bit integer storage and helpers |
 | Varargs | fixed software SysV-style register/overflow representation, independent of host .NET calling convention |
-| C++ objects | fixed Itanium layout and pinned libc++ ABI namespace/version |
+| C library structures | musl 1.2.5 x86-64 layouts (`FILE`, `jmp_buf`, `struct stat`, pthread types, `sigset_t`) |
+| C++ objects | fixed Itanium layout and libc++ ABI version 1 (`std::__1`) |
 | Fortran descriptors | Flang 22 CFI version 20240719 and fixed byte-stride layout |
-| `FILE` | opaque runtime handle; never the host libc `FILE` layout |
-| pthread objects | toolchain-owned sizes and managed synchronization state |
-| errno | fixed numeric constants and invariant English error text |
+| errno and error text | Linux numbering; musl's messages |
+| System services | Linux x86-64 system-call semantics implemented over .NET ([dev/host-abi.md](dev/host-abi.md)) |
 
 The same portable CIL image is intended for little-endian 64-bit .NET hosts, including Windows/macOS/Linux and x64/ARM64. These cross-OS/architecture executions have not yet been validated here. Cross-platform conformance remains a required release gate, not an inferred result from IL-only metadata.
 
-Runtime OS services are implemented through .NET APIs, which may themselves use the platform's C libraries. That implementation detail does not expose platform-specific ABI structures to compiled programs. Paths, filesystem capabilities, timezones, available resources, floating-point library last-bit details, and explicitly unsupported APIs can still vary; stable ABI does not mean every OS operation has identical availability.
+The host layer implements system calls with .NET APIs, so compiled programs see Linux semantics and structure layouts on every host. Paths, file-system capabilities, time-zone data, available resources and explicitly unsupported services (`fork`, `exec`, sockets, hard links) still vary or fail with documented errors; [dev/host-abi.md](dev/host-abi.md) lists them.
 
-The portable C library is a growing subset. Native C libraries or host-header bitcode cannot be injected with `--native-import` or `--system-library`. Recompile dependencies with the portable sysroot, or provide an ABI-matched managed interface. Unimplemented functions fail rather than falling back to native ABI calls. Cross-assembly CIL aggregate signatures are not yet a stable managed public API; use scalar/pointer exports with the documented C layout.
+Native C libraries or host-header bitcode cannot be injected with `--native-import` or `--system-library`. Recompile dependencies for portable mode, or provide an ABI-matched managed interface. A function the sysroot does not provide fails at link time rather than falling back to a native call. Portable libraries (`-shared`) do not link the C library: musl's process state (thread pointer, heap, stdio) belongs to the program image, so a library that calls the C library must be linked into the program as bitcode. Cross-assembly CIL aggregate signatures are not yet a stable managed public API; use scalar/pointer exports with the documented C layout.
 
-### Legacy Managed Host
+### Removed: managed-host
 
-`--runtime=managed-host` remains the default for compatibility with the original ffmpeg artifacts. It combines Linux host headers with managed libc adapters and is not portable. New deployments should explicitly choose `system` or `portable`; no existing artifact is silently reclassified as portable.
+`--runtime=managed-host`, the original default that combined Linux host headers with a hand-written managed C library, was removed (ADR-04). Choose `portable` (the default) or `system`. Objects and archives built for it carry no ABI tag and are rejected; recompile them.
 
 ## Managed and Native Libraries
 
-`-L/-l` continues to mean bitcode libraries in all modes. `--cil-reference` means an assembly with public `CExport` methods and matching ABI metadata. `--system-library` explicitly selects a native shared library for system-mode symbol resolution. The older `--native-import symbol=library!entrypoint` supports explicit scalar P/Invoke mappings in nonportable modes. These operations stay distinct to avoid accidental ABI mixing.
+`-L/-l` continues to mean bitcode libraries in all modes. `--cil-reference` means an assembly with public `CExport` methods and matching ABI metadata. `--system-library` explicitly selects a native shared library for system-mode symbol resolution. The older `--native-import symbol=library!entrypoint` supports explicit scalar P/Invoke mappings in system mode. These operations stay distinct to avoid accidental ABI mixing.
 
 ## Standard SPEC Configuration
 

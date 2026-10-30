@@ -71,7 +71,7 @@ bash scripts/package-toolchain.sh /path/toolchain --self-contained --bundle-llvm
 /path/toolchain/bin/llvmnet-flang --runtime=portable source.f90 -o fortran.dll
 ```
 
-`system` uses the native Linux x86-64 ABI and libc/pthread interfaces. `portable` uses the versioned `dotnet64-v2` ABI with musl, libc++ and flang-rt from the toolchain sysroot (see below). The existing `managed-host` default remains a legacy compatibility mode, not a cross-platform ABI. Objects and managed references from different modes are rejected.
+`system` uses the native Linux x86-64 ABI and libc/pthread interfaces. `portable` uses the versioned `dotnet64-v2` ABI with musl, libc++ and flang-rt from the toolchain sysroot (see below). `portable` is the default; the earlier `managed-host` mode was removed. Objects and managed references from different modes are rejected.
 
 Outputs without `.dll` are ordinary Unix executable launchers plus a payload directory; `--nativeaot` produces a native executable with .NET runtime code included. NativeAOT publishing needs the .NET 10 SDK and native linker even when the compiler installation is self-contained. Cross-platform execution of portable CIL is a release goal with a fixed ABI, but has only been tested on Linux x86-64 so far.
 

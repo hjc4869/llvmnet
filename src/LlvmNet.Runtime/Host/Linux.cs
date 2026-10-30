@@ -12,7 +12,7 @@ internal static class Linux
         ECHILD = 10, EAGAIN = 11, ENOMEM = 12, EACCES = 13, EFAULT = 14, EBUSY = 16, EEXIST = 17, EXDEV = 18, ENODEV = 19,
         ENOTDIR = 20, EISDIR = 21, EINVAL = 22, ENFILE = 23, EMFILE = 24, ENOTTY = 25, EFBIG = 27, ENOSPC = 28, ESPIPE = 29,
         EROFS = 30, EMLINK = 31, EPIPE = 32, ERANGE = 34, ENAMETOOLONG = 36, ENOSYS = 38, ENOTEMPTY = 39, ELOOP = 40,
-        EOPNOTSUPP = 95, ETIMEDOUT = 110;
+        EDEADLK = 35, EOPNOTSUPP = 95, ETIMEDOUT = 110;
 
     // open(2) flags.
     internal const int O_ACCMODE = 3, O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200,
@@ -39,14 +39,17 @@ internal static class Linux
     internal const long PageSize = 4096;
 
     // futex(2), clone(2).
-    internal const int FUTEX_WAIT = 0, FUTEX_WAKE = 1, FUTEX_REQUEUE = 3, FUTEX_CMP_REQUEUE = 4, FUTEX_WAIT_BITSET = 9,
-        FUTEX_WAKE_BITSET = 10, FUTEX_CMD_MASK = 127, FUTEX_CLOCK_REALTIME = 256;
+    internal const int FUTEX_WAIT = 0, FUTEX_WAKE = 1, FUTEX_REQUEUE = 3, FUTEX_CMP_REQUEUE = 4, FUTEX_LOCK_PI = 6,
+        FUTEX_UNLOCK_PI = 7, FUTEX_TRYLOCK_PI = 8, FUTEX_WAIT_BITSET = 9, FUTEX_WAKE_BITSET = 10, FUTEX_CMD_MASK = 127,
+        FUTEX_CLOCK_REALTIME = 256;
+    internal const int FUTEX_TID_MASK = 0x3fffffff, FUTEX_OWNER_DIED = 0x40000000, FUTEX_WAITERS = unchecked((int)0x80000000);
     internal const int CLONE_SETTLS = 0x80000, CLONE_PARENT_SETTID = 0x100000, CLONE_CHILD_CLEARTID = 0x200000;
     internal const long ARCH_SET_FS = 0x1002;
 
     // Signals.
-    internal const int SIGHUP = 1, SIGINT = 2, SIGQUIT = 3, SIGABRT = 6, SIGKILL = 9, SIGPIPE = 13, SIGTERM = 15, SIGCHLD = 17,
-        SIGCONT = 18, SIGSTOP = 19, SIGURG = 23, SIGWINCH = 28, NSIG = 64;
+    internal const int SIGHUP = 1, SIGINT = 2, SIGQUIT = 3, SIGILL = 4, SIGTRAP = 5, SIGABRT = 6, SIGBUS = 7, SIGFPE = 8,
+        SIGKILL = 9, SIGSEGV = 11, SIGPIPE = 13, SIGTERM = 15, SIGCHLD = 17, SIGCONT = 18, SIGSTOP = 19, SIGURG = 23,
+        SIGWINCH = 28, SIGCANCEL = 33, NSIG = 64;
     internal const nint SIG_DFL = 0, SIG_IGN = 1;
     internal const int SIG_BLOCK = 0, SIG_UNBLOCK = 1, SIG_SETMASK = 2;
     internal const ulong SA_SIGINFO = 4, SA_RESETHAND = 0x80000000;
@@ -61,7 +64,8 @@ internal static class Linux
     internal const short POLLIN = 1, POLLOUT = 4, POLLERR = 8, POLLHUP = 0x10, POLLNVAL = 0x20, POLLRDNORM = 0x40, POLLWRNORM = 0x100;
 
     internal const int WNOHANG = 1;
-    internal const int RLIMIT_STACK = 3, RLIMIT_NOFILE = 7;
+    internal const int RLIMIT_DATA = 2, RLIMIT_STACK = 3, RLIMIT_NOFILE = 7, RLIMIT_AS = 9, RLIMIT_COUNT = 16;
+    internal const ulong RLIM_INFINITY = ulong.MaxValue;
     internal const int R_OK = 4, W_OK = 2, X_OK = 1;
 
     /// <summary>The identity every portable program sees on every host (LC-12): one user and group, number 1000.</summary>
@@ -86,7 +90,7 @@ internal static class Linux
         ClockGettime = 228, ClockGetres = 229, ClockNanosleep = 230, ExitGroup = 231, Tgkill = 234, Utimes = 235,
         Openat = 257, Mkdirat = 258, Mknodat = 259, Fchownat = 260, Newfstatat = 262, Unlinkat = 263, Renameat = 264,
         Linkat = 265, Symlinkat = 266, Readlinkat = 267, Fchmodat = 268, Faccessat = 269, Pselect6 = 270, Ppoll = 271,
-        Utimensat = 280, Fallocate = 285, Dup3 = 292, Pipe2 = 293, Preadv = 295, Pwritev = 296, Prlimit64 = 302,
+        SetRobustList = 273, GetRobustList = 274, Utimensat = 280, Fallocate = 285, Dup3 = 292, Pipe2 = 293, Preadv = 295, Pwritev = 296, Prlimit64 = 302,
         Syncfs = 306, Renameat2 = 316, Getrandom = 318, Membarrier = 324, Preadv2 = 327, Pwritev2 = 328, Faccessat2 = 439,
     }
 

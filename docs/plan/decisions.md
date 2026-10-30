@@ -7,17 +7,17 @@ Each decision is recorded in the style of an architecture decision record: conte
 | ADR-01 | Portable C library strategy | M2 → M3 | Accepted 2026-10-30 (spike evidence) |
 | ADR-02 | C++ runtime strategy | M2 → M4 | Accepted 2026-10-30 (spike evidence) |
 | ADR-03 | Fortran runtime strategy | M2 → M5 | Accepted 2026-10-30 (spike evidence) |
-| ADR-04 | Retire `managed-host` mode and the scalar `--native-import` path | M3 | Proposed |
+| ADR-04 | Retire `managed-host` mode and the scalar `--native-import` path | M3 | Accepted 2026-10-30 for `managed-host` (implemented on `m3-m5`); `--native-import` stays for system mode until SA-01 |
 | ADR-05 | Supported platforms for 1.0 | M6 | Proposed |
 | ADR-06 | LLVM version policy | M1 | Proposed |
 | ADR-07 | Portable threading model | M2 → M3 | Accepted 2026-10-30 (spike evidence) |
 | ADR-08 | Performance target | M8 | Proposed |
-| ADR-09 | Portable ABI evolution (`dotnet64-v1` freeze, managed library surface) | M3 (tag), M7 | Proposed, updated with measurements |
+| ADR-09 | Portable ABI evolution (`dotnet64-v1` freeze, managed library surface) | M3 (tag), M7 | Tag: working decision 2026-10-30 (`dotnet64-v2`), owner to confirm; freeze and library surface: Proposed |
 | ADR-10 | SIMD strategy | post-1.0 | Proposed |
 | ADR-11 | Driver defaults | M7 | Proposed |
 | ADR-12 | Debug information in 1.0 | M7 | Proposed |
 | ADR-13 | License | M0 | Accepted 2026-10-30 (owner) |
-| ADR-14 | Linux identity of the portable target | M3 | Proposed |
+| ADR-14 | Linux identity of the portable target | M3 | Working decision 2026-10-30 (option 3), owner to confirm |
 
 ## ADR-01: Portable C library strategy
 
@@ -68,6 +68,8 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Consequences.** Untagged bitcode becomes an error with guidance. Two ABI tags remain: `system-linux-x64-v1` and `dotnet64-v1`.
 
+**Decision (2026-10-30).** Accepted and implemented for `managed-host` on the `m3-m5` branch, as part of the M3 work the owner asked for: `--runtime` defaults to `portable`, `--runtime=managed-host` fails with guidance, untagged link inputs are rejected (`llvmnet --runtime=<mode> -x ir -c` tags LLVM IR), and the tests that used the default now run in both remaining modes. The ffmpeg artifacts are rebuilt in system and portable mode. The remaining tags are `system-linux-x64-v1` and `dotnet64-v2` (ADR-09). `--native-import` stays as a system-mode escape hatch until SA-01.
+
 ## ADR-05: Supported platforms for 1.0
 
 **Context.** Portable images are designed for every little-endian 64-bit .NET host; only Linux x86-64 has executed them. Running the compiler itself on Windows and macOS requires more work than running its outputs there.
@@ -106,6 +108,8 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Measurement (2026-10-30).** The musl sysroot is layout-compatible with the hand-written v1 headers for 23 of 29 checked types (including `stat`, `tm`, `dirent`, `timespec` and the pthread types) but not for `int_fast16_t`, `int_fast32_t` and `uint_fast32_t` (8 versus 4 bytes), `jmp_buf` (144 versus 200), `fpos_t` (8 versus 16) and `BUFSIZ`; v1 also lacked `sigset_t`. The recommendation is therefore to tag the musl sysroot `dotnet64-v2` when it becomes the default (LC-17, LC-26), so v1 objects are rejected rather than mixed, and to freeze v2 at 1.0.
 
+**Working decision (2026-10-30), owner to confirm.** The musl sysroot is tagged `dotnet64-v2` (LC-26) and became the only portable sysroot; `dotnet64-v1` objects are rejected at link time and `__LLVMNET_ABI_VERSION` is 2. v2 is musl's x86-64 layout with one change that keeps glibc's (and v1's) choice: `int_fast16_t`, `int_fast32_t` and their unsigned forms are 64-bit, so programs whose results depend on them behave as native glibc builds do (flang-rt's `REAL(4)` random numbers did not). `jmp_buf`, `fpos_t` and `BUFSIZ` follow musl. The host interface (`docs/dev/host-abi.md`) is versioned with the tag.
+
 **Recommendation.** Freeze `dotnet64-v1` at 1.0 exactly as documented, including the musl-derived header set and the host import table. Any incompatible change (varargs simplification, `wchar_t` width, struct layout) becomes `dotnet64-v2` with explicit mixed-mode rejection, no earlier than 1.x. The managed public surface for 1.0 is scalar and pointer `CExport` methods only, strong-named and versioned (TC-09).
 
 ## ADR-10: SIMD strategy
@@ -141,4 +145,6 @@ Each decision is recorded in the style of an architecture decision record: conte
 **Options.** (1) Define `__linux__` and `__unix__` for all portable code, which makes typical POSIX software take its Linux paths and requires the host to emulate whatever those paths use (`/proc`, `epoll`, `linux/*` headers). (2) Define `__unix__` only, presenting a generic POSIX system. (3) Keep both undefined for user code and define them only when building the runtimes.
 
 **Recommendation.** (3) for 1.0, revisited with the WG-07 ecosystem builds: programs keep a portable identity and do not depend on Linux-only interfaces the host may not provide on Windows or macOS, while the runtimes, which are tested against the host layer, use their Linux code paths.
+
+**Working decision (2026-10-30), owner to confirm.** Option 3, which is what the toolchain does: the sysroot's libc++, libc++abi and flang-rt are built with `-D__linux__ -D__unix__`, while user code sees neither (checked by `tests/c/portable.c`). C++ user code gets `_GNU_SOURCE`, as clang++ defines it on Linux targets.
 

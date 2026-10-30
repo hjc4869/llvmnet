@@ -5,7 +5,8 @@
 # musl's libc-test (LC-19) in portable mode: the functional, regression, math and musl-internal tests, plus the
 # api headers check, each built against the portable sysroot with llvmnet and statically against native musl 1.2.5
 # (scripts/musl-native-cc.sh). A test passes when it exits with 0; a test counts when it passes natively, so the
-# pass rate measures parity with native musl. Tests that need dynamic loading (dlopen, DSOs) are not built.
+# pass rate measures parity with native musl. Tests that need dynamic loading (dlopen, DSOs) are not built, and
+# the math tests check values in round-to-nearest without exception flags, the only environment CIL has.
 #   tests/libc-conformance.sh [functional] [regression] [math] [musl] [api]    default: all
 #   LIBC_CONFORMANCE_JOBS=16                                                    parallel tests (default: nproc)
 # Results: artifacts/tests/libc-conformance/{summary.tsv,results.tsv,failures.txt}; fails below LIBC_THRESHOLD
@@ -27,6 +28,20 @@ stage="${LLVMNET_VENDOR_DIR:-$root/artifacts/vendor}/musl-native/root"
 options clang-22 -nostdinc -isystem "$stage/usr/include/x86_64-linux-musl" -isystem "$(clang-22 -print-resource-dir)/include" \
     >"$test_output/native/include/options.h"
 options "$llvmnet" --runtime=portable >"$test_output/llvmnet/include/options.h"
+# CIL rounds to nearest and has no floating-point exception flags (ports/musl/src/fenv/llvmnet/fenv.c). libc-test's
+# mtest.h skips the modes and flags <fenv.h> does not name, so with this header the math tests check results in
+# round-to-nearest; both builds get it. math/fenv still tests the environment itself.
+cat >"$test_output/fp-environment.h" <<'EOF'
+#include <fenv.h>
+#undef FE_INEXACT
+#undef FE_INVALID
+#undef FE_DIVBYZERO
+#undef FE_UNDERFLOW
+#undef FE_OVERFLOW
+#undef FE_DOWNWARD
+#undef FE_UPWARD
+#undef FE_TOWARDZERO
+EOF
 python3 - "$suite" "$test_output" "$llvmnet" "$root/scripts/musl-native-cc.sh" "$stage" "${LIBC_THRESHOLD:-0}" "${groups[*]}" "${flags[@]}" <<'PYEOF'
 import concurrent.futures, glob, os, shutil, subprocess, sys
 
@@ -48,6 +63,8 @@ def run(command, cwd, timeout):
 def build(kind, directory, sources, compile_only):
     os.makedirs(directory, exist_ok=True)
     include = ['-I', f'{output}/{kind}/include', '-I', f'{suite}/src/common', '-I', f'{suite}/src/math']
+    if os.path.basename(os.path.dirname(sources[0])) == 'math' and not sources[0].endswith('/fenv.c'):
+        include += ['-include', f'{output}/fp-environment.h']
     if kind == 'native':
         command = ['bash', native_cc] if not compile_only else \
             ['clang-22', '-c', '-nostdinc', '-isystem', f'{stage}/usr/include/x86_64-linux-musl', '-isystem', f'{resource}/include']

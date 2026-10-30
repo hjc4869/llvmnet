@@ -63,8 +63,8 @@ public static unsafe partial class HostSyscalls
                 Linux.Syscall.Exit => ExitThread((int)a),
                 Linux.Syscall.Wait4 => Wait((int)a, (int*)b, (int)c),
                 Linux.Syscall.Kill => (int)a == Environment.ProcessId || (int)a == 0 || (int)a == -1 ? Raise((int)b) : -ESRCH,
-                Linux.Syscall.Tkill => Raise((int)b),
-                Linux.Syscall.Tgkill => Raise((int)c),
+                Linux.Syscall.Tkill => SendSignal((int)a, (int)b),
+                Linux.Syscall.Tgkill => SendSignal((int)b, (int)c),
                 Linux.Syscall.Uname => Name((byte*)a),
                 Linux.Syscall.Fcntl => FileControl((int)a, (int)b, c),
                 Linux.Syscall.Flock => Lookup((int)a) is null ? -EBADF : 0,   // advisory locks always succeed in one process
@@ -119,8 +119,10 @@ public static unsafe partial class HostSyscalls
                 Linux.Syscall.Fstatfs => FileSystemStatusOf((int)a, 0, (FileSystemStatus*)b),
                 Linux.Syscall.Prctl => 0,
                 Linux.Syscall.ArchPrctl => b == ARCH_SET_FS ? SetThreadPointer((nint)b) : -EINVAL,
-                Linux.Syscall.Setrlimit => 0,
-                Linux.Syscall.Prlimit64 => ResourceLimit((int)b, (ulong*)d),
+                Linux.Syscall.Setrlimit => ResourceLimit((int)a, (ulong*)b, null),
+                Linux.Syscall.Prlimit64 => (int)a is 0 || (int)a == Environment.ProcessId ? ResourceLimit((int)b, (ulong*)c, (ulong*)d) : -ESRCH,
+                Linux.Syscall.SetRobustList => SetRobustList((nint)a, b),
+                Linux.Syscall.GetRobustList => GetRobustList((int)a, (nint*)b, (long*)c),
                 Linux.Syscall.Gettid => CurrentThreadId,
                 Linux.Syscall.Time => Time((long*)a),
                 Linux.Syscall.Futex => Futex((nint)a, (int)b, (int)c, (Timespec*)d),
@@ -145,6 +147,11 @@ public static unsafe partial class HostSyscalls
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or Win32Exception)
         {
             return -Errno(error);
+        }
+        catch (ThreadInterruptedException)
+        {
+            // A blocking call of a thread that pthread_cancel (SIGCANCEL) or pthread_kill woke up.
+            return -EINTR;
         }
     }
 

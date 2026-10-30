@@ -57,9 +57,12 @@ internal sealed class CilCompiler(CompilerOptions options)
         if (owner.Name.StartsWith("Fortran", StringComparison.Ordinal))
             return !PortableAbi.FlangRuntime;
         if (owner != typeof(Cxx)) return managedImports.Contains(name);
-        return name is "_Unwind_Resume" or "__clang_call_terminate" or "__dynamic_cast" or "__cxa_call_unexpected" ||
+        // libc++abi supplies type_info, __dynamic_cast and the bad_cast/bad_typeid helpers (private_typeinfo.cpp,
+        // cxa_aux_runtime.cpp); the bridge keeps throwing, catching and termination (docs/dev/cxx-eh-bridge.md).
+        return name is "_Unwind_Resume" or "__clang_call_terminate" or "__cxa_call_unexpected" ||
             name.StartsWith("__cxa_", StringComparison.Ordinal) && name is not ("__cxa_atexit" or "__cxa_finalize" or "__cxa_thread_atexit" or
-                "__cxa_thread_atexit_impl" or "__cxa_guard_acquire" or "__cxa_guard_release" or "__cxa_guard_abort") ||
+                "__cxa_thread_atexit_impl" or "__cxa_guard_acquire" or "__cxa_guard_release" or "__cxa_guard_abort" or
+                "__cxa_bad_cast" or "__cxa_bad_typeid" or "__cxa_throw_bad_array_new_length") ||
             name.Contains("terminate", StringComparison.Ordinal) || name.Contains("uncaught_exception", StringComparison.Ordinal) ||
             name.Contains("new_handler", StringComparison.Ordinal);
     }
@@ -448,6 +451,13 @@ internal sealed class CilCompiler(CompilerOptions options)
         il.Emit(OpCodes.Ldstr, options.AbiTag);
         il.Emit(OpCodes.Ldstr, BuildInfo.Version);
         il.Emit(OpCodes.Call, typeof(AbiContract).GetMethod(nameof(AbiContract.Require), [typeof(string), typeof(string)])!);
+        // libc++abi's catch matching (ports/libcxxabi/llvmnet-catch.cpp) replaces the bridge's type walk (CX-03).
+        nint catchMatcher = Llvm.LLVMGetNamedFunction(module, "__llvmnet_cxx_can_catch");
+        if (catchMatcher != 0 && Llvm.LLVMIsDeclaration(catchMatcher) == 0)
+        {
+            il.Emit(OpCodes.Ldftn, Methods[catchMatcher]);
+            il.Emit(OpCodes.Call, typeof(Cxx).GetMethod(nameof(Cxx.UseCatchMatcher))!);
+        }
         foreach ((nint global, FieldBuilder field) in Globals)
         {
             if (ThreadGlobals.ContainsKey(global)) continue;

@@ -58,12 +58,19 @@ public static unsafe partial class HostSyscalls
         lock (gate) return descriptors.GetValueOrDefault(descriptor)?.File;
     }
 
+    /// <summary>The lowest free descriptor at or above <paramref name="minimum"/>, or -EMFILE beyond RLIMIT_NOFILE.</summary>
     private static int Install(OpenFile file, bool closeOnExec, int minimum = 0)
     {
+        ulong limit = SoftLimit(RLIMIT_NOFILE);
         lock (gate)
         {
             int descriptor = minimum;
             while (descriptors.ContainsKey(descriptor)) descriptor++;
+            if ((ulong)descriptor >= limit)
+            {
+                if (file.References == 1 && file.Kind != FileKind.Console) file.Stream?.Dispose();
+                return -EMFILE;
+            }
             descriptors[descriptor] = new Descriptor(file, closeOnExec);
             return descriptor;
         }
@@ -215,9 +222,16 @@ public static unsafe partial class HostSyscalls
         lock (gate)
         {
             if (!descriptors.TryGetValue(descriptor, out Descriptor? source)) return -EBADF;
-            if (target >= 0 && descriptors.Remove(target, out Descriptor? old)) replaced = old.File;
+            ulong limit = SoftLimit(RLIMIT_NOFILE);
+            if (target >= 0 && (ulong)target >= limit) return -EBADF;
+            if (target < 0)
+            {
+                target = 0;
+                while (descriptors.ContainsKey(target)) target++;
+                if ((ulong)target >= limit) return -EMFILE;
+            }
+            if (descriptors.Remove(target, out Descriptor? old)) replaced = old.File;
             Retain(source.File);
-            if (target < 0) { target = 0; while (descriptors.ContainsKey(target)) target++; }
             descriptors[target] = new Descriptor(source.File, (flags & O_CLOEXEC) != 0);
             result = target;
         }
@@ -236,7 +250,9 @@ public static unsafe partial class HostSyscalls
         {
             case F_DUPFD or F_DUPFD_CLOEXEC:
                 if (argument is < 0 or > int.MaxValue) return -EINVAL;
-                return Install(Retain(file), command == F_DUPFD_CLOEXEC, (int)argument);
+                int duplicate = Install(Retain(file), command == F_DUPFD_CLOEXEC, (int)argument);
+                if (duplicate < 0) Release(file);
+                return duplicate;
             case F_GETFD:
                 return entry.CloseOnExec ? FD_CLOEXEC : 0;
             case F_SETFD:
@@ -528,8 +544,11 @@ public static unsafe partial class HostSyscalls
         var pipe = new Pipe();
         int status = flags & O_NONBLOCK;
         bool closeOnExec = (flags & O_CLOEXEC) != 0;
-        ends[0] = Install(new OpenFile(FileKind.Pipe, null, null, O_RDONLY | status) { Pipe = pipe }, closeOnExec);
-        ends[1] = Install(new OpenFile(FileKind.Pipe, null, null, O_WRONLY | status) { Pipe = pipe, PipeWriter = true }, closeOnExec);
+        int reader = Install(new OpenFile(FileKind.Pipe, null, null, O_RDONLY | status) { Pipe = pipe }, closeOnExec);
+        if (reader < 0) return reader;
+        int writer = Install(new OpenFile(FileKind.Pipe, null, null, O_WRONLY | status) { Pipe = pipe, PipeWriter = true }, closeOnExec);
+        if (writer < 0) { Close(reader); return writer; }
+        (ends[0], ends[1]) = (reader, writer);
         return 0;
     }
 

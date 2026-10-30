@@ -9,7 +9,8 @@ namespace LlvmNet.Runtime;
 /// <summary>
 /// Process services (plan items LC-08, LC-12): exit, signals, child processes, identity and limits. Signals raised
 /// inside the process are delivered synchronously on the raising thread, honoring masks; SIGINT, SIGTERM, SIGHUP and
-/// SIGQUIT from outside reach installed handlers on a .NET signal thread. fork and exec are not available;
+/// SIGQUIT (on Linux hosts every catchable signal below 32) from outside reach installed handlers on a .NET signal
+/// thread. fork and exec are not available;
 /// posix_spawn, system and popen start host processes through __llvmnet_spawn.
 /// </summary>
 public static unsafe partial class HostSyscalls
@@ -44,6 +45,10 @@ public static unsafe partial class HostSyscalls
             SIGTERM => PosixSignal.SIGTERM,
             SIGHUP => PosixSignal.SIGHUP,
             SIGQUIT => PosixSignal.SIGQUIT,
+            // Faults belong to the CLR, SIGCHLD to its process support, and real-time signals to its thread suspension.
+            SIGILL or SIGTRAP or SIGBUS or SIGFPE or SIGSEGV or SIGCHLD or > 31 => null,
+            // On Linux the host's signal numbers are the program's, so any other signal can be passed through raw.
+            _ when OperatingSystem.IsLinux() => (PosixSignal)signal,
             _ => null
         };
         if (external is null) return;
@@ -73,6 +78,17 @@ public static unsafe partial class HostSyscalls
         if (how is not (SIG_BLOCK or SIG_UNBLOCK or SIG_SETMASK)) return -EINVAL;
         DeliverPending();
         return 0;
+    }
+
+    /// <summary>The calling thread's signal mask, for sigsetjmp and siglongjmp in portable mode (NonLocalJumps).</summary>
+    internal static ulong BlockedSignals
+    {
+        get => blockedSignals;
+        set
+        {
+            blockedSignals = value & ~(Bit(SIGKILL) | Bit(SIGSTOP));
+            DeliverPending();
+        }
     }
 
     private static long PendingSignals(ulong* set)
@@ -120,6 +136,7 @@ public static unsafe partial class HostSyscalls
             if (signal is SIGCHLD or SIGCONT or SIGURG or SIGWINCH) return;      // default action: ignore
             Console.Out.Flush();
             Console.Error.WriteLine(signal == SIGABRT ? "Aborted" : $"Terminated by signal {signal}");
+            if (signal == SIGABRT) WriteCallStack();
             Environment.Exit(128 + signal);
         }
         ulong saved = blockedSignals;
@@ -146,11 +163,33 @@ public static unsafe partial class HostSyscalls
         DeliverPending();
     }
 
+    /// <summary>The translated (C, C++ or Fortran) frames of the current thread, innermost first, for abort (LC-08).</summary>
+    private static void WriteCallStack()
+    {
+        IEnumerable<string> frames = new StackTrace().GetFrames()
+            .Select(frame => frame.GetMethod())
+            .Where(method => method?.DeclaringType?.Name == "Program" && method.Module.Assembly != typeof(HostSyscalls).Assembly)
+            .Select(method => method!.Name).Take(64);
+        string text = string.Join(Environment.NewLine, frames.Select(name => "    at " + name));
+        if (text.Length > 0) Console.Error.WriteLine("C call stack:" + Environment.NewLine + text);
+    }
+
     private static long ExitProcess(int status)
     {
         Console.Out.Flush();
+        if (Environment.GetEnvironmentVariable("LLVMNET_CHECK_DESCRIPTORS") == "1") ReportOpenDescriptors();
         Environment.Exit(status & 0xff);
         return 0;
+    }
+
+    /// <summary>With LLVMNET_CHECK_DESCRIPTORS=1, descriptors above 2 still open at exit are reported (LC-05).</summary>
+    private static void ReportOpenDescriptors()
+    {
+        List<string> open;
+        lock (gate)
+            open = descriptors.Where(entry => entry.Key > 2)
+                .Select(entry => $"{entry.Key} ({entry.Value.File.Path ?? entry.Value.File.Kind.ToString().ToLowerInvariant()})").ToList();
+        if (open.Count > 0) Console.Error.WriteLine($"llvmnet: {open.Count} descriptors open at exit: {string.Join(", ", open)}");
     }
 
     private sealed class Child(Process process, Task[] pumps)
@@ -360,15 +399,36 @@ public static unsafe partial class HostSyscalls
         return 0;
     }
 
-    private static long ResourceLimit(int resource, ulong* old)
+    /// <summary>Soft and hard limits per resource. RLIMIT_NOFILE bounds descriptor numbers; RLIMIT_AS and RLIMIT_DATA bound mapped memory.</summary>
+    private static readonly ulong[,] resourceLimits = CreateLimits();
+
+    private static ulong[,] CreateLimits()
     {
-        if (old == null) return 0;
-        (old[0], old[1]) = resource switch
+        var limits = new ulong[RLIMIT_COUNT, 2];
+        for (int resource = 0; resource < RLIMIT_COUNT; resource++) limits[resource, 0] = limits[resource, 1] = RLIM_INFINITY;
+        limits[RLIMIT_STACK, 0] = 8UL << 20;
+        limits[RLIMIT_NOFILE, 0] = 1024;
+        limits[RLIMIT_NOFILE, 1] = 1UL << 20;
+        return limits;
+    }
+
+    internal static ulong SoftLimit(int resource)
+    {
+        lock (resourceLimits) return resourceLimits[resource, 0];
+    }
+
+    /// <summary>getrlimit, setrlimit and prlimit64 for this process; raising a hard limit is not permitted, as for an unprivileged user.</summary>
+    private static long ResourceLimit(int resource, ulong* limit, ulong* old)
+    {
+        if (resource is < 0 or >= RLIMIT_COUNT) return -EINVAL;
+        lock (resourceLimits)
         {
-            RLIMIT_STACK => (8UL << 20, ulong.MaxValue),
-            RLIMIT_NOFILE => (1024UL, 1UL << 20),
-            _ => (ulong.MaxValue, ulong.MaxValue)
-        };
+            if (old != null) (old[0], old[1]) = (resourceLimits[resource, 0], resourceLimits[resource, 1]);
+            if (limit == null) return 0;
+            if (limit[0] > limit[1]) return -EINVAL;
+            if (limit[1] > resourceLimits[resource, 1]) return -EPERM;
+            (resourceLimits[resource, 0], resourceLimits[resource, 1]) = (limit[0], limit[1]);
+        }
         return 0;
     }
 

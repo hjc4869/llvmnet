@@ -71,6 +71,18 @@ public static unsafe partial class HostSyscalls
                 if (file.Stream is MemoryStream memory) stat->Size = memory.Length;
                 return 0;
             }
+            else if (file.Stream is FileStream stream)
+            {
+                // An open file may already be unlinked (tmpfile), so its metadata comes from the handle.
+                stat->Device = 1;
+                stat->Inode = InodeOf(file.Path);
+                stat->Mode = S_IFREG | (OperatingSystem.IsWindows() ? 0x1a4u : (uint)File.GetUnixFileMode(stream.SafeFileHandle) & 0xfff);
+                stat->Size = RandomAccess.GetLength(stream.SafeFileHandle);
+                stat->Blocks = (stat->Size + 511) / 512;
+                stat->Access = Timespec.From(File.GetLastAccessTimeUtc(stream.SafeFileHandle));
+                stat->Modification = stat->Change = Timespec.From(File.GetLastWriteTimeUtc(stream.SafeFileHandle));
+                return 0;
+            }
             else path = file.Path;
         }
         else path = Resolve(directory, pathPointer);
@@ -247,6 +259,11 @@ public static unsafe partial class HostSyscalls
 
     private static long ChangeMode(int directory, nint pathPointer, int mode)
     {
+        if (pathPointer == 0 && Lookup(directory)?.Stream is FileStream stream && !OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(stream.SafeFileHandle, (UnixFileMode)(mode & 0xfff));
+            return 0;
+        }
         string? path = PathOf(directory, pathPointer, out long error);
         if (path is null) return error;
         if (Target(path) is not FileSystemInfo info) return Missing(path);
@@ -306,9 +323,16 @@ public static unsafe partial class HostSyscalls
     /// <summary>utimes (timeval pairs) and utimensat (timespec pairs, UTIME_NOW, UTIME_OMIT); a null path names the descriptor.</summary>
     private static long SetTimes(int directory, nint pathPointer, long* times, bool microseconds, int flags)
     {
-        string? path = PathOf(directory, pathPointer, out long error);
-        if (path is null) return error;
-        if (Target(path) is not FileSystemInfo info) return Missing(path);
+        // futimens on an open file works through its handle, even after the file was unlinked.
+        FileStream? handle = pathPointer == 0 ? Lookup(directory)?.Stream as FileStream : null;
+        FileSystemInfo? info = null;
+        if (handle is null)
+        {
+            string? path = PathOf(directory, pathPointer, out long error);
+            if (path is null) return error;
+            info = Target(path);
+            if (info is null) return Missing(path);
+        }
         DateTime now = DateTime.UtcNow;
         for (int index = 0; index < 2; index++)
         {
@@ -317,8 +341,10 @@ public static unsafe partial class HostSyscalls
             if (fraction == UTIME_OMIT) continue;
             if (fraction != UTIME_NOW && fraction is < 0 or >= 1_000_000_000) return -EINVAL;
             DateTime time = fraction == UTIME_NOW ? now : DateTime.UnixEpoch.AddTicks(seconds * TimeSpan.TicksPerSecond + fraction / 100);
-            if (index == 0) info.LastAccessTimeUtc = time;
-            else info.LastWriteTimeUtc = time;
+            if (handle is not null && index == 0) File.SetLastAccessTimeUtc(handle.SafeFileHandle, time);
+            else if (handle is not null) File.SetLastWriteTimeUtc(handle.SafeFileHandle, time);
+            else if (index == 0) info!.LastAccessTimeUtc = time;
+            else info!.LastWriteTimeUtc = time;
         }
         return 0;
     }

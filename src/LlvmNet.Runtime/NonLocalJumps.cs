@@ -16,13 +16,13 @@ public static unsafe class NonLocalJumps
 
     public static int Save(nint buffer, long frame, int site, int saveMask, int system, nint stackPosition)
     {
-        if (saveMask != 0 && system == 0)
-            throw new NotSupportedException("Saving signal masks with sigsetjmp is not implemented for the portable ABI.");
+        // Word 12 records the saved mask: 1 for the native one (system mode), 2 for the host's (portable mode).
         *(long*)buffer = frame;
         *(int*)(buffer + 8) = site;
-        *(int*)(buffer + 12) = saveMask != 0 && system != 0 ? 1 : 0;
+        *(int*)(buffer + 12) = saveMask == 0 ? 0 : system != 0 ? 1 : 2;
         *(nint*)(buffer + 16) = stackPosition;
-        if (*(int*)(buffer + 12) != 0)
+        if (*(int*)(buffer + 12) == 2) *(ulong*)(buffer + 24) = HostSyscalls.BlockedSignals;
+        else if (*(int*)(buffer + 12) == 1)
         {
             var signalMask = (delegate* unmanaged[Cdecl]<int, nint, nint, int>)SystemAbi.Symbol("libc.so.6", "pthread_sigmask");
             if (signalMask(0, 0, buffer + 24) != 0)
@@ -37,7 +37,8 @@ public static unsafe class NonLocalJumps
         long frame = *(long*)buffer;
         int site = *(int*)(buffer + 8);
         nint stackPosition = *(nint*)(buffer + 16);
-        if (*(int*)(buffer + 12) != 0)
+        if (*(int*)(buffer + 12) == 2) HostSyscalls.BlockedSignals = *(ulong*)(buffer + 24);
+        else if (*(int*)(buffer + 12) == 1)
         {
             var signalMask = (delegate* unmanaged[Cdecl]<int, nint, nint, int>)SystemAbi.Symbol("libc.so.6", "pthread_sigmask");
             if (signalMask(2, buffer + 24, 0) != 0)

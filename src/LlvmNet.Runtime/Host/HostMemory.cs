@@ -4,15 +4,19 @@ using static LlvmNet.Runtime.Linux;
 namespace LlvmNet.Runtime;
 
 /// <summary>
-/// Memory mappings (plan item LC-07) over NativeMemory. File mappings are copies: private ones read the file once,
-/// shared writable ones write their pages back on msync and munmap. There is no memory protection, MAP_FIXED works
-/// only inside an existing mapping, and partially unmapped memory is freed once its last page is unmapped.
+/// Memory mappings (plan item LC-07) over NativeMemory. New mappings come from calloc, which hands large blocks out as
+/// lazily zeroed pages, so a reservation costs no memory until it is touched, as with the kernel. File mappings are
+/// copies: private ones read the file once, shared writable ones write their pages back on msync and munmap. There is
+/// no memory protection, MAP_FIXED works only inside an existing mapping, and partially unmapped memory is freed once
+/// its last page is unmapped. All mappings together stay within the memory .NET reports as available, so exhausting
+/// the address space (as allocation-failure tests do) fails in mmap with ENOMEM while the runtime still has room.
 /// </summary>
 public static unsafe partial class HostSyscalls
 {
-    private sealed class Mapping(nint address, long length, bool shared, bool writable, OpenFile? file, long offset)
+    private sealed class Mapping(nint address, long length, bool shared, bool writable, OpenFile? file, long offset, nint allocation = 0)
     {
         internal readonly nint Address = address;
+        internal readonly nint Allocation = allocation;  // the block to free; 0 for a replacement inside another mapping
         internal readonly long Length = length;          // a multiple of the page size
         internal readonly bool Shared = shared;
         internal readonly bool Writable = writable;
@@ -25,6 +29,21 @@ public static unsafe partial class HostSyscalls
 
     private static readonly object mappingGate = new();
     private static readonly SortedList<nint, Mapping> mappings = [];
+    private static long mappedBytes;
+
+    private static readonly ulong mappingBudget = (ulong)Math.Max(1L << 30, GC.GetGCMemoryInfo().TotalAvailableMemoryBytes);
+
+    /// <summary>Reserves address space for a new mapping within RLIMIT_AS, RLIMIT_DATA and the mapping budget; false means ENOMEM.</summary>
+    private static bool Reserve(long size)
+    {
+        ulong limit = Math.Min(Math.Min(SoftLimit(RLIMIT_AS), SoftLimit(RLIMIT_DATA)), mappingBudget);
+        lock (mappingGate)
+        {
+            if ((ulong)(mappedBytes + size) > limit) return false;
+            mappedBytes += size;
+            return true;
+        }
+    }
 
     private static long PageRound(long length) => (length + PageSize - 1) & ~(PageSize - 1);
 
@@ -44,9 +63,18 @@ public static unsafe partial class HostSyscalls
         return result;
     }
 
-    private static void Fill(Mapping mapping, nint address, long length)
+    /// <summary>Page-aligned, lazily zeroed memory and the block to free later; 0 when calloc fails.</summary>
+    private static nint AllocatePages(long size, out nint allocation)
     {
-        NativeMemory.Clear((void*)address, (nuint)length);
+        // NativeMemory reports failure with OutOfMemoryException, which mmap must turn into ENOMEM.
+        try { allocation = (nint)NativeMemory.AllocZeroed((nuint)(size + PageSize)); }
+        catch (OutOfMemoryException) { allocation = 0; }
+        return allocation == 0 ? 0 : (allocation + (nint)PageSize - 1) & ~(nint)(PageSize - 1);
+    }
+
+    private static void Fill(Mapping mapping, nint address, long length, bool zeroed = false)
+    {
+        if (!zeroed) NativeMemory.Clear((void*)address, (nuint)length);
         if (mapping.File?.Stream is not FileStream stream) return;
         long fileOffset = mapping.Offset + (address - mapping.Address);
         long available = Math.Max(0, Math.Min(length, RandomAccess.GetLength(stream.SafeFileHandle) - fileOffset));
@@ -101,10 +129,11 @@ public static unsafe partial class HostSyscalls
                 return address;
             }
         }
-        nint memory = (nint)NativeMemory.AlignedAlloc((nuint)size, (nuint)PageSize);
-        if (memory == 0) return -ENOMEM;
-        var mapping = new Mapping(memory, size, type == MAP_SHARED, (protection & PROT_WRITE) != 0, file is null ? null : Retain(file), offset);
-        Fill(mapping, memory, size);
+        if (!Reserve(size)) return -ENOMEM;
+        nint memory = AllocatePages(size, out nint allocation);
+        if (memory == 0) { lock (mappingGate) mappedBytes -= size; return -ENOMEM; }
+        var mapping = new Mapping(memory, size, type == MAP_SHARED, (protection & PROT_WRITE) != 0, file is null ? null : Retain(file), offset, allocation);
+        Fill(mapping, memory, size, zeroed: true);
         lock (mappingGate) mappings[memory] = mapping;
         return memory;
     }
@@ -120,8 +149,9 @@ public static unsafe partial class HostSyscalls
             {
                 nint start = Math.Max(mapping.Address, address), end = Math.Min(mapping.End, address + (nint)size);
                 WriteBack(mapping, start, end - start);
+                // Unmapped pages leave the address-space budget at once, even while the rest of the block stays allocated.
                 for (long page = (start - mapping.Address) / PageSize; page < (end - mapping.Address) / PageSize; page++)
-                    if (!mapping.Unmapped[page]) { mapping.Unmapped[page] = true; mapping.UnmappedPages++; }
+                    if (!mapping.Unmapped[page]) { mapping.Unmapped[page] = true; mapping.UnmappedPages++; mappedBytes -= PageSize; }
                 if (mapping.UnmappedPages == mapping.Unmapped.Length)
                 {
                     mappings.Remove(mapping.Address);
@@ -131,7 +161,7 @@ public static unsafe partial class HostSyscalls
         }
         foreach (Mapping mapping in released)
         {
-            NativeMemory.AlignedFree((void*)mapping.Address);
+            NativeMemory.Free((void*)mapping.Allocation);
             if (mapping.File is not null) Release(mapping.File);
         }
         return 0;
@@ -166,10 +196,11 @@ public static unsafe partial class HostSyscalls
             return address;
         }
         if ((flags & MREMAP_MAYMOVE) == 0) return -ENOMEM;              // growing in place is not possible
-        nint memory = (nint)NativeMemory.AlignedAlloc((nuint)newSize, (nuint)PageSize);
-        if (memory == 0) return -ENOMEM;
-        var moved = new Mapping(memory, newSize, mapping.Shared, mapping.Writable, mapping.File is null ? null : Retain(mapping.File), mapping.Offset);
-        Fill(moved, memory, newSize);
+        if (!Reserve(newSize)) return -ENOMEM;
+        nint memory = AllocatePages(newSize, out nint allocation);
+        if (memory == 0) { lock (mappingGate) mappedBytes -= newSize; return -ENOMEM; }
+        var moved = new Mapping(memory, newSize, mapping.Shared, mapping.Writable, mapping.File is null ? null : Retain(mapping.File), mapping.Offset, allocation);
+        Fill(moved, memory, newSize, zeroed: true);
         Buffer.MemoryCopy((void*)address, (void*)memory, newSize, oldSize);
         lock (mappingGate) mappings[memory] = moved;
         Unmap(address, oldSize);

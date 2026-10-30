@@ -118,15 +118,38 @@ public static unsafe class Cxx
             }
         }
     }
+    /// <summary>libc++abi's __llvmnet_cxx_can_catch, registered by portable images (CX-03); system mode uses the walk above.</summary>
+    private static nint catchMatcher;
+    public static void UseCatchMatcher(nint matcher) => catchMatcher = matcher;
+
+    /// <summary>Whether a handler for <paramref name="clause"/> accepts the exception, and the object it then receives.</summary>
+    private static bool CanCatch(CxxException exception, nint clause, out nint adjusted)
+    {
+        if (catchMatcher != 0)
+        {
+            nint value = exception.Object;
+            bool caught = ((delegate* managed<nint, nint, nint, int>)catchMatcher)(clause, exception.TypeInfo, (nint)(&value)) != 0;
+            adjusted = value;
+            return caught;
+        }
+        List<nint> matches = Bases(exception.TypeInfo, exception.Object, clause);
+        adjusted = matches.Count == 1 ? matches[0] : 0;
+        return matches.Count == 1;
+    }
+
     public static int Selector(CxxException exception, nint[] clauses)
     {
         foreach (nint clause in clauses)
         {
-            List<nint> matches = clause == 0 ? [exception.Object] : Bases(exception.TypeInfo, exception.Object, clause);
-            if (matches.Count == 1)
+            if (clause == 0)
             {
-                exception.CaughtObject = matches[0];
-                return clause == 0 ? 1 : TypeId(clause);
+                exception.CaughtObject = exception.Object;
+                return 1;
+            }
+            if (CanCatch(exception, clause, out nint adjusted))
+            {
+                exception.CaughtObject = adjusted;
+                return TypeId(clause);
             }
         }
         return 0;
@@ -135,7 +158,7 @@ public static unsafe class Cxx
     public static int Filter(CxxException exception, nint[] allowed)
     {
         foreach (nint type in allowed)
-            if (type == 0 || Bases(exception.TypeInfo, exception.Object, type).Count == 1)
+            if (type == 0 || CanCatch(exception, type, out _))
                 return 0;
         return -1;
     }

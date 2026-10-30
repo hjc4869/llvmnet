@@ -3,9 +3,10 @@
 # the second step of scripts/build-sysroot.sh.
 #   scripts/build-portable-cxx.sh [prefix]    default artifacts/sysroot-build/dotnet64-v2 (must already contain musl)
 # Installs <prefix>/include/c++/v1 and <prefix>/lib/{libc++.a,libc++abi.a}; per-file failures go to
-# <prefix>/build-cxx/failures.tsv. Exceptions, RTTI matching, dynamic_cast and terminate handlers stay in the
-# managed bridge (src/LlvmNet.Runtime/Cxx.cs) because the CLR performs unwinding, so libc++abi's
-# cxa_exception, cxa_personality, private_typeinfo and handler sources are not compiled (see CX-02, CX-03).
+# <prefix>/build-cxx/failures.tsv. Throwing, catching and terminate handlers stay in the managed bridge
+# (src/LlvmNet.Runtime/Cxx.cs) because the CLR performs unwinding, so libc++abi's cxa_exception, cxa_personality
+# and handler sources are not compiled; type_info, dynamic_cast and catch matching come from private_typeinfo and
+# ports/libcxxabi/llvmnet-catch.cpp (docs/dev/cxx-eh-bridge.md, CX-02, CX-03).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 prefix="$(realpath -m "${1:-$root/artifacts/sysroot-build/dotnet64-v2}")"
@@ -38,7 +39,7 @@ cxx_sources=(algorithm any bind call_once charconv chrono error_category excepti
     future mutex_destructor mutex shared_mutex thread random fstream ios ios.instantiations iostream locale ostream
     regex strstream filesystem/directory_entry filesystem/directory_iterator filesystem/operations filesystem/int128_builtins)
 abi_sources=(abort_message cxa_aux_runtime cxa_demangle cxa_guard cxa_vector cxa_virtual cxa_thread_atexit
-    fallback_malloc stdlib_exception stdlib_new_delete stdlib_stdexcept stdlib_typeinfo)
+    fallback_malloc private_typeinfo stdlib_exception stdlib_new_delete stdlib_stdexcept stdlib_typeinfo llvmnet-catch)
 # musl is a Linux C library and the host implements Linux system-call semantics, so the runtimes are built
 # for a Linux userland (libc++abi only defines __cxa_thread_atexit under __linux__, for example).
 common=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -std=c++23 -nostdinc++ -isystem "$headers" -D__linux__ -D__unix__
@@ -50,6 +51,7 @@ export LLVMNET_SKIP_BUILD=1 build root llvm
 compile() {
     local library="$1" name="$2" source object
     if [[ "$library" == cxx ]]; then source="$llvm/libcxx/src/$name.cpp"; else source="$llvm/libcxxabi/src/$name.cpp"; fi
+    [[ "$name" == llvmnet-* ]] && source="$root/ports/libcxxabi/$name.cpp"
     object="$build/$library/$name.o"
     mkdir -p "$(dirname "$object")"
     mapfile -t flags <"$build/$library-flags.txt"

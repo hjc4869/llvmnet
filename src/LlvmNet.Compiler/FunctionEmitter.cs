@@ -1338,7 +1338,8 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) == 4)
         {
-            string helper = operation switch { "fmuladd" or "fma" => nameof(Float80.FusedMultiplyAdd), "fabs" => nameof(Float80.Abs), "floor" => nameof(Float80.Floor), _ => throw new NotSupportedException($"Unsupported extended floating intrinsic: {name}") };
+            // llvm.fmuladd may fuse or not; x87 has no fused multiply-add, so native code rounds the product first.
+            string helper = operation switch { "fmuladd" => nameof(Float80.MultiplyAdd), "fma" => nameof(Float80.FusedMultiplyAdd), "fabs" => nameof(Float80.Abs), "copysign" => nameof(Float80.CopySign), "floor" => nameof(Float80.Floor), _ => throw new NotSupportedException($"Unsupported extended floating intrinsic: {name}") };
             for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
                 Load(Llvm.LLVMGetOperand(instruction, index));
             Il.Emit(OpCodes.Call, typeof(Float80).GetMethod(helper)!);

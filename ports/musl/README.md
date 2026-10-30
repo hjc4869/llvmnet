@@ -8,6 +8,8 @@ This directory holds the llvmnet port of musl 1.2.5 (plan items LC-01, LC-02). `
 - `arch/llvmnet/crt_arch.h` and `reloc.h` drop the ELF entry point and the dynamic linker.
 - `src/process/llvmnet/posix_spawn.c` starts host processes through `__llvmnet_spawn` instead of `clone` and `execve`, so `posix_spawn`, `system` and `popen` work without `fork` (plan item LC-08).
 - `src/exit/llvmnet/exit.c` and `src/thread/llvmnet/__cxa_thread_atexit_impl.c` add the C++ `thread_local` destructor registry that glibc has and musl lacks, run at thread exit and at the start of `exit()` (plan item CX-12).
+- `src/thread/llvmnet/pthread_cancel.c` implements cancellation points without the assembly window: the host interrupts a cancelled thread's blocking call and the cancellation point checks the request before and after it.
+- `src/fenv/llvmnet/fenv.c` describes the CIL floating-point environment: round to nearest only and no exception flags; selecting another rounding mode or raising an exception fails.
 - The x86-64 `bits/` headers are used as they are (LP64, signed `char`, 32-bit `wchar_t`, 80-bit `long double`), except `bits/stdint.h`: the fast 16- and 32-bit integer types are 64-bit as in glibc.
 
 Assembly sources under `src/*/x86_64/` are not used, so musl's generic C implementations of `memcpy`, `fenv`, the `long double` math functions and so on are compiled instead.

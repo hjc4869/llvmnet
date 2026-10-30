@@ -1,6 +1,6 @@
 # Architecture
 
-The pipeline below is shared by three explicit runtime selections: legacy `managed-host`, native `system`, and versioned `portable`. [toolchain.md](toolchain.md) defines their ABI and deployment contracts; host-layout details below are not portable host-library interfaces.
+The pipeline below is shared by two runtime selections: versioned `portable` (the default) and native `system`. [toolchain.md](toolchain.md) defines their ABI and deployment contracts; host-layout details below are not portable host-library interfaces.
 
 ## Pipeline
 
@@ -35,7 +35,7 @@ Large initialized globals are embedded in at most 1 MiB data fields and copied i
 
 Arrays/structures are explicit-layout managed value types used as bit containers, not GC object graphs. Loads/stores use unaligned-safe CIL or exact-width helpers. Ordinary allocas use aligned stack allocation. Functions with stack-save/restore or nonlocal-jump sites use scoped aligned allocations, save allocation checkpoints, and release storage on restore or unwind. `byval` parameters receive a private aligned copy; hidden `sret` pointers are preserved. Direct `setjmp` sites resume through a managed exception dispatcher in the owning activation, preserving live locals and restoring allocation checkpoints. This does not support jumping across native frames.
 
-Variadic calls construct a software x86-64 SysV register-save and overflow area. Translated `va_start`, `va_copy`, and `va_arg` sequences and managed libc formatting functions consume the same layout. Variadic aggregate ABI classification is incomplete; scalar integer/pointer/float overflow-register cases are tested.
+Variadic calls construct a software x86-64 SysV register-save and overflow area. Translated `va_start`, `va_copy`, and `va_arg` sequences, including those in the portable sysroot's musl `printf` family, consume the same layout. Variadic aggregate ABI classification is incomplete; scalar integer/pointer/float overflow-register cases are tested.
 
 System-mode internal variadic callbacks use distinct unmanaged-callable identities registered against their managed implementations. Translated indirect variadic calls resolve these identities before using managed `calli` with the software argument area. Registered native variadic functions instead use LLVM-generated indirect thunks with the actual call-site signature, including floating-point register overflow and long-double arguments. Unregistered native variadic pointers are rejected. Native invocation of translated variadic or aggregate callback identities terminates with an explicit diagnostic. Pointer identity, legacy fixed callbacks, mixed register/stack arguments, formatting, and these boundary errors are tested under JIT and NativeAOT.
 
