@@ -35,6 +35,10 @@ grep -q 'requires baseline or native' "$output/aot-isa.log"
 result=0
 "$output/response executable" || result=$?
 test "$result" -eq 42
+# Include options that take their directory or file as the next argument.
+mkdir -p "$output/after"
+printf '#define RESPONSE_VALUE 42\n' >"$output/after/response-value.h"
+"$root/bin/llvmnet" -c -idirafter "$output/after" -include response-value.h "$root/tests/c/response.c" -o "$output/after.o"
 "$root/bin/llvmnet" -M "$root/tests/c/core.c" -MF "$output/core.d"
 grep -q core.c "$output/core.d"
 "$root/bin/llvmnet" -c "$root/tests/c/link-main.c" -o"$output/main.o"

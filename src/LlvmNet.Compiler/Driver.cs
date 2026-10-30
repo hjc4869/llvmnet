@@ -149,6 +149,7 @@ internal static class Driver
                 case "-l": libraries.Add(Next()); break;
                 case "-I":
                 case "-isystem":
+                case "-idirafter":
                 case "-iquote":
                 case "-include":
                 case "-imacros":

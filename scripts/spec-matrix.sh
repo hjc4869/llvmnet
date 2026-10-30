@@ -34,6 +34,7 @@ if [[ "$snapshot" != "${BASH_SOURCE[0]}" ]]; then
     cp "${BASH_SOURCE[0]}" "$run/matrix.sh"
     cp "$runner" "$run/runner.sh"
     cp "$config/llvmnet.cfg" "$config/llvmnet.xml" "$run/"
+    cp -R "$config/include" "$run/"
     export SPEC_PROJECT_ROOT="$root" SPEC_CONFIG_DIR="$run" SPEC_MATRIX_RUNNER="$run/runner.sh" SPEC_MATRIX_SNAPSHOT="$run/matrix.sh"
     exec bash "$SPEC_MATRIX_SNAPSHOT" "$suite" "$toolchain" "$size" "$pattern"
 fi

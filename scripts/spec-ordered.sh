@@ -29,6 +29,7 @@ if [[ "$snapshot" != "${BASH_SOURCE[0]}" ]]; then
     cp "$matrix" "$run/matrix-source.sh"
     cp "$runner" "$run/harness-source.sh"
     cp "$config/llvmnet.cfg" "$config/llvmnet.xml" "$run/"
+    cp -R "$config/include" "$run/"
     for group in "${groups[@]}"; do
         suite="$suite2017"
         if [[ "$group" == 2026-* ]]; then suite="$suite2026"; fi

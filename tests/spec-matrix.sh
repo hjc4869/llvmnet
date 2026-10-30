@@ -22,6 +22,7 @@ run="$(dirname "$results")"
 cmp "$root/scripts/spec-matrix.sh" "$run/matrix.sh"
 cmp "$SPEC_MATRIX_RUNNER" "$run/runner.sh"
 cmp "$root/config/spec/llvmnet.cfg" "$run/llvmnet.cfg"
+diff -r "$root/config/spec/include" "$run/include"
 grep -qx 'checks=4' "$run/completion.txt"
 grep -qx 'failures=2' "$run/completion.txt"
 awk -F '\t' '

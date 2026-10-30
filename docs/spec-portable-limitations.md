@@ -5,13 +5,12 @@ In portable mode (`--runtime=portable`, ABI `dotnet64-v2`), SPEC CPU 2017 and CP
 | Cause | Benchmarks |
 | --- | --- |
 | [No portable OpenMP runtime](#openmp) | the speed benchmarks that use OpenMP |
-| [Platform code selected by `__linux__`](#linux-platform-detection) | 523.xalancbmk_r, 623.xalancbmk_s, 723.llvm_r, 823.llvm_s, 735.gem5_r, 835.gem5_s, 772.marian_r, 872.marian_s |
 | [glibc behavior that musl does not share](#glibc-behavior) | 507.cactuBSSN_r, 737.gmsh_r, 748.flightdm_r, 767.nest_r |
 | [`fork`](#fork) | 500.perlbench_r, 600.perlbench_s, 827.cppcheck_s |
 | [Portable ABI restrictions](#portable-abi-restrictions) | 722.palm_r |
 | [C++17 special math functions](#c17-special-math-functions) | 766.femflow_r |
 
-All other CPU 2017 and CPU 2026 entries pass in portable mode.
+All other CPU 2017 and CPU 2026 entries pass in portable mode, some with the [portable settings](#portable-settings-in-the-spec-configuration) below. For portable parity with system mode ([ADR-14](plan/decisions.md#adr-14-linux-identity-of-the-portable-target)), the `fork` and portable ABI entries are listed exclusions; the others are open failures.
 
 ## OpenMP
 
@@ -23,14 +22,12 @@ Speed benchmarks that use C++ threads or pthreads instead of OpenMP run on musl'
 
 ## Linux platform detection
 
-Portable code sees neither `__linux__` nor `__unix__` ([ADR-14](plan/decisions.md#adr-14-linux-identity-of-the-portable-target), awaiting the owner's decision). These programs choose their platform code by those macros:
+Portable code sees neither `__linux__` nor `__unix__` ([ADR-14](plan/decisions.md#adr-14-linux-identity-of-the-portable-target)). Programs that choose their platform code by those macros build with them as a per-benchmark setting, which makes the program, not llvmnet, responsible for the Linux interfaces it then uses. With the settings in the table below, all of these pass:
 
-- **523.xalancbmk_r, 623.xalancbmk_s:** Xerces detects its platform through `__linux__`, and its Linux platform file, selected by `-DSPEC_LINUX`, includes the kernel header `linux/limits.h`, which the portable sysroot does not have.
-- **723.llvm_r, 823.llvm_s:** `SwapByteOrder.h` includes the BSD header `machine/endian.h` when it does not detect Linux.
-- **735.gem5_r, 835.gem5_s:** gem5's libelf defines `roundup2` only for the systems it recognizes, such as glibc and Linux.
-- **772.marian_r, 872.marian_s:** marian's path library stops with `#error Unsupported system.`
-
-Each would need the macros or a per-benchmark workaround.
+- **523.xalancbmk_r, 623.xalancbmk_s:** Xerces detects its platform through `__linux__`, and its Linux platform file, selected by `-DSPEC_LINUX`, includes the kernel header `linux/limits.h` for `PATH_MAX`. The portable sysroot has no kernel headers; `config/spec/include/linux/limits.h` includes `<limits.h>` instead.
+- **723.llvm_r, 823.llvm_s:** `SwapByteOrder.h` includes the BSD header `machine/endian.h` when it does not detect Linux. The benchmark's prebuilt `config.h` also includes glibc's `execinfo.h`, whose functions it calls only with backtraces enabled, which they are not; `config/spec/include/execinfo.h` declares them.
+- **735.gem5_r, 835.gem5_s:** gem5's libelf defines `roundup2` and its byte order only for the systems it recognizes, such as glibc and Linux. gem5 also uses `mode_t` where only glibc's headers have declared it.
+- **772.marian_r, 872.marian_s:** marian's path library stops with `#error Unsupported system.` without `__unix__`, and finds the executable's path through `/proc/self/exe` only under `__linux__`.
 
 ## glibc behavior
 
@@ -64,14 +61,18 @@ These programs rely on glibc behavior; built natively against musl, they fail th
 | --- | --- | --- |
 | 500.perlbench_r, 600.perlbench_s | `-DSPEC_NO_USE_STDIO_PTR -DSPEC_NO_USE_STDIO_BASE -DI_FCNTL` | With `SPEC_LINUX_X64`, perl reads glibc's private `FILE` fields and assumes that `sys/file.h` includes `fcntl.h`. musl's `FILE` is opaque; these are perl's own switches for both. |
 | 525.x264_r, 625.x264_s | `-include string.h -include stdlib.h` | x264's bundled `getopt.c` includes these headers only when it sees glibc's `__GNU_LIBRARY__`. |
+| 523.xalancbmk_r, 623.xalancbmk_s | `-D__linux__ -idirafter config/spec/include` | Xerces's platform detection and its `linux/limits.h` ([above](#linux-platform-detection)). |
 | 526.blender_r | `-DSPEC_NO_ISFINITE` | Blender calls `std::isfinite` after including only `<math.h>`, which declares it in libstdc++ but not in libc++. The switch, documented by SPEC, makes it call `finite` instead. |
 | 710.omnetpp_r | `-DUSE_PORTABLE_COROUTINES` | musl has no `swapcontext`. omnetpp's setjmp-based coroutines only need to link, because the model creates none. |
 | 714.cpython_r | `-include sys/types.h` | CPython's pthread stubs need the pthread types, which glibc's `stdlib.h` declares through `sys/types.h`. |
 | 777.zstd_r | `-DPLATFORM_POSIX_VERSION=200809L` | zstd detects POSIX through `__unix__`; this is its documented override. |
+| 723.llvm_r, 823.llvm_s | `-D__linux__ -idirafter config/spec/include` | LLVM's endian and Unix platform code, and the `execinfo.h` its `config.h` includes. |
+| 735.gem5_r, 835.gem5_s | `-D__linux__ -include sys/types.h` | libelf's platform configuration, and `mode_t`. |
+| 772.marian_r, 872.marian_s | `-D__linux__ -D__unix__` | marian's path library. |
 
 ## Reproducing the check
 
-The check needs the licensed kits installed as `artifacts/spec2017-harness` and `artifacts/spec2026-harness`, and a packaged toolchain. It runs through `scripts/spec-harness.sh`, whose requirements are listed in [spec-coverage.md](spec-coverage.md#scripts).
+The check needs the licensed kits installed as `artifacts/spec2017-harness` and `artifacts/spec2026-harness`, and a packaged toolchain. It runs through `scripts/spec-harness.sh`, whose requirements are listed in [spec-coverage.md](spec-coverage.md#scripts). The harness passes `config/spec/include`, the headers some settings name, to runcpu as `llvmnet_spec_include`, and the check scripts copy it with the configuration.
 
 `scripts/spec-portable-check.sh baseline.tsv toolchain [glob]` reruns, in portable mode and with a clean build, every entry of a baseline table whose result is not `PASS`, optionally only those matching a benchmark glob. Each run gets a new directory under `artifacts/spec-portable-audit/` (`SPEC_PORTABLE_OUTPUT` changes the root) with copies of the scripts and configuration, toolchain hashes, `results.tsv`, harness logs and the make logs. `SPEC_TIMEOUT` bounds each build and run (default 900 seconds). `scripts/spec-portable-audit.mjs directory` keeps the latest result per benchmark from all runs under a directory and adds each failure's first diagnostic; its output is the next baseline.
 

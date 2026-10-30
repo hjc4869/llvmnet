@@ -13,6 +13,7 @@ if [[ "${SPEC_PORTABLE_SNAPSHOT:-}" != "${BASH_SOURCE[0]}" ]]; then
     cp "${BASH_SOURCE[0]}" "$run/check.sh"
     cp "$root/scripts/spec-harness.sh" "$run/runner.sh"
     cp "$root/config/spec/llvmnet.cfg" "$root/config/spec/llvmnet.xml" "$run/"
+    cp -R "$root/config/spec/include" "$run/"
     cp "$baseline" "$run/baseline.tsv"
     export SPEC_PROJECT_ROOT="$root" SPEC_CONFIG_DIR="$run" SPEC_PORTABLE_SNAPSHOT="$run/check.sh"
     exec bash "$run/check.sh" "$run/baseline.tsv" "$toolchain" "$pattern"

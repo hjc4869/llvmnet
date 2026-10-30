@@ -68,6 +68,8 @@ cd "$suite"
 set +u
 source ./shrc
 set -u
+# Headers that individual benchmarks need in portable mode, such as xalancbmk's linux/limits.h.
+options+=(--define "llvmnet_spec_include=$(realpath "$config/include")")
 runcpu --config=llvmnet --define "llvmnet_dir=$toolchain" --define "llvmnet_runtime=$runtime" \
     --define "llvmnet_opt_level=$optimization" --define "llvmnet_vectorize=$vectorize" \
     --define "llvmnet_cxx_standard=$cxx_standard" --define "llvmnet_threads=$threads" \
