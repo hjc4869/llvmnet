@@ -915,7 +915,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             }
             discardReturn = TypeSystem.Kind(Llvm.LLVMGetReturnType(signature)) == 0 && TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) != 0;
             bool unusedVoidReturn = TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) == 0 && Llvm.LLVMGetFirstUse(instruction) == 0;
-            truncateBooleanReturn = Compiler.Host is not null && Llvm.LLVMGetInstructionCallConv(instruction) == 0 && Llvm.LLVMGetFunctionCallConv(target) == 0 &&
+            truncateBooleanReturn = Llvm.LLVMGetInstructionCallConv(instruction) == 0 && Llvm.LLVMGetFunctionCallConv(target) == 0 &&
                 TypeSystem.Kind(Llvm.LLVMGetReturnType(signature)) == 8 && TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) == 8 &&
                 (TypeSystem.Width(Llvm.LLVMGetReturnType(signature)) == 1 && TypeSystem.Width(Llvm.LLVMGetReturnType(definition)) == 8 ||
                     TypeSystem.Width(Llvm.LLVMGetReturnType(signature)) == 8 && TypeSystem.Width(Llvm.LLVMGetReturnType(definition)) == 1);
@@ -1048,8 +1048,10 @@ internal sealed class FunctionEmitter : ValueEmitter
             (TypeSystem.Width(source) == 1 && TypeSystem.Width(destination) == 8 || TypeSystem.Width(source) == 8 && TypeSystem.Width(destination) == 1);
         bool pointerBits = TypeSystem.Kind(source) == 12 && TypeSystem.Kind(destination) == 8 && TypeSystem.Width(destination) == 64 ||
             TypeSystem.Kind(source) == 8 && TypeSystem.Width(source) == 64 && TypeSystem.Kind(destination) == 12;
-        // pointer/i64 interchange is exact in both ABIs; the other register-slot equivalences are system-only.
-        if (Compiler.Host is null && !pointerBits || Llvm.LLVMGetInstructionCallConv(instruction) != 0 || Llvm.LLVMGetFunctionCallConv(target) != 0 ||
+        // Both ABIs follow x86-64's register-slot behavior for these mismatches (BE-18, BE-39): pointer/i64 interchange,
+        // i64 arguments narrowed to their low 32 bits and i32 arguments zero-extended in the six register positions, and
+        // i1/i8. Flang passes hidden character lengths as i64 to C functions declared with int, for example.
+        if (Llvm.LLVMGetInstructionCallConv(instruction) != 0 || Llvm.LLVMGetFunctionCallConv(target) != 0 ||
             !(integerWidths || booleanWidths || pointerBits) || integerWidths && TypeSystem.Width(source) == 32 && index >= 6 ||
             TypeSystem.Kind(Llvm.LLVMGetReturnType(Llvm.LLVMGlobalGetValueType(target))) is 10 or 11)
             return false;

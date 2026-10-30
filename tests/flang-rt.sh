@@ -4,7 +4,8 @@
 # timeout: 3600
 # Upstream flang-rt 22.1.8 on musl and libc++ (FT-01, FT-05): every single-file Fortran fixture is compiled with
 # llvmnet against flang-rt and compared with native Flang, plus one NativeAOT build. Excluded: fixtures needing
-# extra sources or OpenMP flags (arithmetic, concurrent, module-main, portable-interop).
+# extra sources or OpenMP flags (arithmetic, concurrent, module-main, portable-interop); default-integer-8 is built
+# with -fdefault-integer-8 in both modes, whose i64 main and register-width call need BE-39.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"
@@ -26,9 +27,19 @@ check() {
 }
 export -f check
 mapfile -t fixtures < <(for source in "$root"/tests/fortran/*.f90; do basename "$source" .f90; done |
-    grep -v -x -E 'arithmetic|concurrent|module-main|portable-interop')
+    grep -v -x -E 'arithmetic|concurrent|module-main|portable-interop|default-integer-8')
 printf '%s\n' "${fixtures[@]}" | xargs -P "${JOBS:-8}" -I{} bash -c 'check "$1"' _ {}
 "$llvmnet" --runtime=portable -O1 -module-dir "$test_output" --nativeaot "$root/tests/fortran/namelist.f90" -o "$test_output/namelist-aot" >"$test_output/aot.log" 2>&1
 (cd "$test_output/namelist/native" && timeout 60 "$test_output/namelist-aot" >aot.txt)
 cmp "$test_output/namelist/native/out.txt" "$test_output/namelist/native/aot.txt"
-printf 'PASS: flang-rt on musl and libc++: %d Fortran fixtures match native Flang, namelist also under NativeAOT\n' "${#fixtures[@]}"
+wide="$test_output/default-integer-8"
+mkdir -p "$wide"
+flang-22 -fdefault-integer-8 -module-dir "$wide" "$root/tests/fortran/default-integer-8.f90" -o "$wide/native"
+native=0; "$wide/native" one two >"$wide/native.txt" 2>/dev/null || native=$?
+for runtime in system portable; do
+    "$llvmnet" --runtime="$runtime" -fdefault-integer-8 -module-dir "$wide" "$root/tests/fortran/default-integer-8.f90" -o "$wide/wide-$runtime.dll"
+    managed=0; dotnet "$wide/wide-$runtime.dll" one two >"$wide/$runtime.txt" 2>/dev/null || managed=$?
+    [[ "$native" == 3 && "$managed" == 3 ]] || { printf 'FAIL: -fdefault-integer-8 %s exit %s, native %s\n' "$runtime" "$managed" "$native"; exit 1; }
+    diff -u "$wide/native.txt" "$wide/$runtime.txt"
+done
+printf 'PASS: flang-rt on musl and libc++: %d Fortran fixtures match native Flang, namelist also under NativeAOT, -fdefault-integer-8 main in both modes\n' "${#fixtures[@]}"

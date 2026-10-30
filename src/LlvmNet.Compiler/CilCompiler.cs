@@ -378,7 +378,12 @@ internal sealed class CilCompiler(CompilerOptions options)
         nint llvmMain = Methods.First(pair => pair.Value == main).Key;
         Type[] parameters = Types.Parameters(Llvm.LLVMGlobalGetValueType(llvmMain));
         bool fortran = Llvm.Name(llvmMain) == "_QQmain" && main.ReturnType == typeof(void) && parameters.Length == 0;
-        if (!fortran && (main.ReturnType != typeof(int) || !(parameters.Length == 0 || parameters.SequenceEqual(new[] { typeof(int), typeof(nint) }) || parameters.SequenceEqual(new[] { typeof(int), typeof(nint), typeof(nint) }))))
+        // Flang with -fdefault-integer-8 defines i64 main(i64, ...); like the native start code, which passes argc in a
+        // register and reads the status from one, the entry point converts at the boundary.
+        bool wide = main.ReturnType == typeof(long);
+        bool wideCount = parameters.Length >= 2 && parameters[0] == typeof(long);
+        if (!fortran && (main.ReturnType != typeof(int) && !wide || !(parameters.Length == 0 ||
+            parameters.Length is 2 or 3 && parameters[0] == (wideCount ? typeof(long) : typeof(int)) && parameters.Skip(1).All(parameter => parameter == typeof(nint)))))
             throw new NotSupportedException("The entry point must be int main(void), int main(int, char **[, char **]), or a Fortran main.");
         MethodBuilder entry = Program.DefineMethod("__Entry", MethodAttributes.Public | MethodAttributes.Static, typeof(int), [typeof(string[])]);
         ILGenerator il = entry.GetILGenerator();
@@ -387,9 +392,14 @@ internal sealed class CilCompiler(CompilerOptions options)
             // musl: __llvmnet_libc_main(argc, argv, envp, main) initializes libc, runs constructors, calls main and exit.
             MethodBuilder adapter = Program.DefineMethod("__llvmnet_main3", MethodAttributes.Private | MethodAttributes.Static, typeof(int), [typeof(int), typeof(nint), typeof(nint)]);
             ILGenerator call = adapter.GetILGenerator();
-            for (short index = 0; index < parameters.Length; index++) call.Emit(OpCodes.Ldarg, index);
+            for (short index = 0; index < parameters.Length; index++)
+            {
+                call.Emit(OpCodes.Ldarg, index);
+                if (index == 0 && wideCount) call.Emit(OpCodes.Conv_I8);
+            }
             call.Emit(OpCodes.Call, main);
             if (fortran) call.Emit(OpCodes.Ldc_I4_0);
+            if (wide) call.Emit(OpCodes.Conv_I4);
             call.Emit(OpCodes.Ret);
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.InitializeStartup))!);
@@ -409,6 +419,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         if (parameters.Length >= 2)
         {
             il.Emit(OpCodes.Ldloc, count);
+            if (wideCount) il.Emit(OpCodes.Conv_I8);
             il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetProperty(nameof(ProcessRuntime.Arguments))!.GetMethod!);
         }
         if (parameters.Length == 3)
@@ -416,6 +427,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         il.Emit(OpCodes.Call, main);
         if (fortran)
             il.Emit(OpCodes.Ldc_I4_0);
+        if (wide)
+            il.Emit(OpCodes.Conv_I4);
         il.Emit(OpCodes.Stloc, result);
         il.Emit(OpCodes.Leave, done);
         il.BeginFinallyBlock();
