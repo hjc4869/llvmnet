@@ -1,6 +1,64 @@
 # Portable SPEC Failure Audit
 
-## Scope And Outcome
+## Current state (2026-10-30, dotnet64-v2)
+
+Portable mode now compiles against musl 1.2.5, libc++/libc++abi and flang-rt 22.1.8 (milestones M3 to M5, `docs/evidence/2026-10-30-m3-m5.md`). This audit (plan item LC-23) reran all 101 distinct CPU 2017 and CPU 2026 entries of the ordered inventory with `scripts/spec-portable-check.sh`: test inputs, `-O3`, NativeAOT, one copy, four threads for speed entries, SPEC output validation. The retries are under `artifacts/spec-portable-audit-m3/`: CPU 2017 rate with the toolchain of `0ef8ad7`; five rate benchmarks rechecked after the fixes in `6d26cc8` and `5752323`; the other 78 entries with `df79747`; the fixes made after the run rechecked with `8bffee3` and `cb0e334`. `node scripts/spec-portable-audit.mjs artifacts/spec-portable-audit-m3` selects the latest result per benchmark (`artifacts/tests/portable-spec/current-m3.tsv`).
+
+**54 of 101 pass**, against 20 in the September audit of the hand-written C library.
+
+| Group | Entries | Pass | Not passing |
+| --- | ---: | ---: | ---: |
+| CPU 2017 rate | 23 | 19 | 4 |
+| CPU 2017 speed | 20 | 7 | 13 |
+| CPU 2026 rate | 26 | 18 | 8 |
+| CPU 2026 speed | 26 | 8 | 18 |
+| specrand variants (both suites) | 6 | 2 | 4 |
+| Total | 101 | 54 | 47 |
+
+### Causes of the remaining failures
+
+| Cause | Benchmarks | Count | Nature |
+| --- | --- | ---: | --- |
+| No portable OpenMP runtime: `__kmpc_*` unresolved or `omp.h` missing (FT-08) | 603, 607, 619, 621, 627, 628, 638, 644, 649, 654, 657, 800, 803, 807, 809, 811, 816, 820, 822, 849, 854, 857, 865, 867, 881 (all speed) | 25 | implementation gap |
+| Platform code selected by `__linux__`, which portable code does not see (ADR-14) | xalancbmk 523/623 (`linux/limits.h`), LLVM 723/823 (`machine/endian.h`), gem5 735/835 (`roundup2`), marian 772/872 ("Unsupported system") | 8 | owner decision |
+| glibc behavior musl does not share; native musl fails the same way | 507.cactuBSSN_r (overlapping `sprintf` arguments), 737.gmsh_r (`NULL` assigned to `bool`), 748.flightdm_r (GNU `strerror_r`), 767.nest_r (`timeval` without `sys/time.h`) | 4 | program |
+| `fork`, which .NET cannot provide | 500.perlbench_r and 600.perlbench_s (the test workload runs each test through a piped `open`), 827.cppcheck_s (process executor) | 3 | host limit |
+| Portable ABI restriction | 526.blender_r (`-funsigned-char`), 722.palm_r (`open` declared with a fixed four-argument prototype) | 2 | by design |
+| libc++ lacks the C++17 special math functions | 766.femflow_r (`std::cyl_bessel_j`) | 1 | upstream |
+| runcpu cannot run these variants alone | 996.specrand_fs, 997.specrand_fr, 998.specrand_is, 999.specrand_ir | 4 | harness |
+
+Only the OpenMP runtime is an implementation gap llvmnet can close (FT-08). The Linux platform detection group depends on the owner's decision on ADR-14: these programs choose their platform code by `__linux__`, which portable code does not see. The glibc group fails the same way with native musl: the programs rely on glibc behavior (overlapping `sprintf` arguments, GNU `strerror_r` under `_GNU_SOURCE`, `NULL` that converts to `bool`, `timeval` declared through other headers).
+
+### Fixes made during this audit
+
+| Benchmark | Cause | Fix |
+| --- | --- | --- |
+| 500.perlbench_r, 600.perlbench_s | `SPEC_LINUX_X64` reads glibc's private `FILE` fields and expects `sys/file.h` to include `fcntl.h` | perl's own switches in the portable configuration (`6d26cc8`); the test workload then needs `fork` |
+| 507.cactuBSSN_r, 521.wrf_r, 527.cam4_r | direct calls with register-width mismatches x86-64 tolerates | BE-39 (`45fb8f2`); WRF also selects `--trap-missing-arguments`, now available in portable mode (`5752323`) |
+| 520.omnetpp_r | `struct stat64` under `_GNU_SOURCE` | musl `features.h` overlay declaring the LFS64 names as glibc does (`6d26cc8`) |
+| 714.cpython_r | the old audit's pthread stub switch (R8) conflicts with musl's pthread types, and without it the stubs need the types glibc's `stdlib.h` declares | switch removed, `-include sys/types.h` (`5e5197f`, `cb0e334`) |
+| 710.omnetpp_r | musl has no `swapcontext` | omnetpp's `USE_PORTABLE_COROUTINES`; the model creates no coroutines (`5e5197f`) |
+| 727.cppcheck_r | `mkdir("dir/")` failed: trailing and repeated slashes | host path resolution (`64af35f`) |
+| 777.zstd_r | zstd detects POSIX through `__unix__` | its documented `PLATFORM_POSIX_VERSION` override (`d465e23`) |
+
+The audit also led to llvmnet fixes outside SPEC's code paths: zero-size `alloca`, signaling NaN constants, `sendfile` and `copy_file_range` (std::filesystem::copy_file), and the C++ exception bridge (CX-13).
+
+### Reproduction
+
+```sh
+bash scripts/package-toolchain.sh artifacts/spec-portable-next
+SPEC_TIMEOUT=1800 SPEC_PORTABLE_OUTPUT=artifacts/spec-portable-audit-m3 \
+    bash scripts/spec-portable-check.sh artifacts/spec-portable-audit-m3/retry.zM8iLlO6/baseline.tsv artifacts/spec-portable-next
+node scripts/spec-portable-audit.mjs artifacts/spec-portable-audit-m3 > artifacts/tests/portable-spec/current-m3.tsv
+```
+
+A benchmark glob as the last argument of `spec-portable-check.sh` (for example `'@(710|714|727|777|827).*'`) selects entries. Never repackage a toolchain or edit a runner while a retry uses it.
+
+## Historical audit (2026-09-08, dotnet64-v1)
+
+The rest of this page is the audit of the hand-written C library that musl, libc++ and flang-rt replaced. Most causes it catalogs (missing headers, streams, math and POSIX services) no longer exist; `tests/portable-spec-causes.sh` checks that those probes now build and run like native, and that the remaining ones (OpenMP, plain-char ABI, typed calls, headers outside the portable sysroot) are still rejected with their diagnostic.
+
+### Scope And Outcome
 
 On 2026-09-08, all **84 distinct portable failures** from the ordered CPU 2017/2026 inventory were rebuilt and attempted with SPEC output validation. The baseline contains 101 distinct benchmarks: 17 portable PASS and 84 FAIL. Shared CPU 2026 random checks are counted once here, not once per integer/FP group.
 
@@ -10,7 +68,7 @@ These are scalar O3, NativeAOT, test-input, non-reportable checks. Rate uses one
 
 **Most failures are implementation gaps, not fundamental limits of CIL.** Incomplete libc++ localization/streams, C math, POSIX services and a missing OpenMP runtime could be implemented or ported. The architecture-related restrictions are narrower: the fixed dotnet64-v1 data contract, typed managed call signatures, and the prohibition on silently consuming native ABI libraries. Those distinctions are preserved below.
 
-## Evidence And Reproduction
+### Evidence And Reproduction
 
 The baseline and retry audit retain one row per benchmark, the exact leading diagnostic, the result-table path, the make-log path, timestamp, threads and threading profile:
 
@@ -32,7 +90,7 @@ node scripts/spec-portable-audit.mjs artifacts/spec-portable-audit > artifacts/t
 
 An optional final argument such as `'722.*'` selects one benchmark. The retry runner executes only failed baseline entries, uses clean builds, and returns success when **inventory collection completes**, even if benchmarks fail; inspect `results.tsv` and `completion.txt`. TIMEOUT is incomplete evidence, not a semantic failure or a pass. Never rebuild a package or edit a runner in use. The existing full-video prerequisite in the SPEC harness is retained.
 
-## Repairs
+### Repairs
 
 | ID | Repair | Benchmark Effect |
 | --- | --- | --- |
@@ -145,11 +203,11 @@ program constructor
 end program
 ```
 
-## Remaining Cause Catalog
+### Remaining Cause Catalog
 
 Run `bash tests/portable-spec-causes.sh` to verify the current expected rejections. Every check matches its intended diagnostic; an unexpected success fails the check and means this document needs updating. Expected-rejection checks are **not** SPEC passes. The following standalone code is independent of licensed sources. The C/C++ forms also exist as numbered probes in [portable-spec-missing.c](../tests/c/portable-spec-missing.c) and [portable-spec-missing.cpp](../tests/cpp/portable-spec-missing.cpp).
 
-### H: Missing Headers And Platform Services
+#### H: Missing Headers And Platform Services
 
 The smallest reproducer is a single include. A shared [header fixture](../tests/c/portable-spec-header.c) permits all variants without copying code:
 
@@ -171,7 +229,7 @@ bin/llvmnet --runtime=portable -c '-DPROBE_HEADER=<sys/ioctl.h>' tests/c/portabl
 
 These are implementation/porting gaps, not evidence that managed execution cannot support these benchmarks. The audit does not enumerate failures hidden behind them. Fake platform macros, empty success stubs, or host struct declarations would make the diagnostic disappear without establishing compatible behavior.
 
-### L1-L3: Libc++ Streams
+#### L1-L3: Libc++ Streams
 
 The portable [libc++ configuration](../sysroot/dotnet64-v1/cxx-config/__config_site) sets `_LIBCPP_HAS_LOCALIZATION=0`. Stream definitions guarded by this setting are unavailable even though upstream headers are installed. Enabling the macro alone does not supply locale facets, globals, stream buffers, formatting, file adapters or their out-of-line implementations.
 
@@ -198,7 +256,7 @@ int main() { std::ifstream input("probe.txt"); return !input; }
 
 Compile with `bin/llvmnet --runtime=portable -std=c++17 -O0 -DPROBE=1 tests/cpp/portable-spec-missing.cpp -o /tmp/probe.dll`, substituting 2/3 as needed. The expected errors are invalid stream operands/missing `endl` or undefined stream templates. This is a substantial **library implementation gap**, not a typed-CIL or threading prohibition. The system libstdc++ archive is built for a different ABI/library and cannot stand in for portable libc++.
 
-### L4-L6: Extended And Complex Math
+#### L4-L6: Extended And Complex Math
 
 L4, even a bare libc++ complex include references undeclared `atan2l` (C++ probe 4):
 
@@ -226,7 +284,7 @@ int main(void) { return __real__ cexp(1.0) < 2.0; }
 
 Use `-O0 -fno-builtin` to retain the call. This reproduces Fotonik3d's missing `cexp` export rather than H3. A portable implementation must preserve the complex calling convention and special values, signed zero, infinities and overflow; a naive `exp(real) * (cos(imag) + i*sin(imag))` is not a complete replacement. These math gaps are not inherent CIL impossibilities.
 
-### L7: Libc++ Thread Lifecycle
+#### L7: Libc++ Thread Lifecycle
 
 ```cpp
 #include <thread>
@@ -235,7 +293,7 @@ int main() { std::thread worker([] {}); worker.join(); }
 
 C++ probe 5 at O0 reports unresolved `_ZNSt3__16thread4joinEv`; XZ's optimized constructor reaches `_ZNSt3__115__thread_structC1Ev` first. The common cause is missing libc++ out-of-line thread lifecycle/TLS support, not lack of managed workers. The existing portable pthread implementation and its tests are separate. A complete repair must handle joining, detaching, cleanup and thread-exit state, not just add one mangled symbol returning success.
 
-### P1-P3: Process And File Services
+#### P1-P3: Process And File Services
 
 P1, shell execution (C probe 1):
 
@@ -262,7 +320,7 @@ int main(void) { return freopen("probe.txt", "w", stdout) == 0; }
 
 These are missing APIs, not architectural impossibilities. Implementing them properly involves shared open-file descriptions, descriptor replacement, `FILE *` identity, buffering, ownership and standard streams. `fopen` plus `close`, or a new descriptor number, is not automatically equivalent. WRF also has the separately documented invalid missing-argument source call described in [SPEC coverage](spec-coverage.md); passing its present header blockers would not remove that boundary.
 
-### A1: Fixed Plain-Char Contract
+#### A1: Fixed Plain-Char Contract
 
 ```c
 int main(void) { return 0; }
@@ -270,7 +328,7 @@ int main(void) { return 0; }
 
 Compile with `bin/llvmnet --runtime=portable -funsigned-char -DPROBE=0 tests/c/portable-spec-missing.c -o /tmp/char.dll`. The driver rejects the option before translation: it cannot change the versioned portable ABI. Blender requires unsigned plain char under the currently validated kit profile. Silently dropping the flag changes its behavior; accepting it changes a shared data contract. An explicit alternate ABI or source-compatible port is needed. This is a deliberate **dotnet64-v1 restriction**, not an intrinsic inability of CIL to represent unsigned bytes.
 
-### A2: Typed Calls And Varargs
+#### A2: Typed Calls And Varargs
 
 PALM declares a fixed four-argument `open` boundary, including a trailing length, whereas the portable runtime implements the declared C variadic API. C probe 9 reproduces the exact LLVM shape:
 
@@ -281,7 +339,7 @@ int main(void) { return open("probe.txt", 0, 0, 9); }
 
 With `--runtime=portable -O0 -fno-builtin`, this fails with `Runtime ABI mismatch for open: i32 (ptr, i32, i32, i64)`. Native SysV calls can happen to tolerate extra arguments and pass a mode in a register; a typed CIL call does not have that implicit ABI. The portable `open` implementation takes an explicit managed varargs frame. A correct bridge needs the actual prototype, argument packing and a justified treatment of the extra length; merely deleting arguments or reinterpreting an integer as a frame pointer is unsafe. This is a **boundary-contract restriction**, not proof PALM cannot run after an explicit ABI-correct adapter.
 
-### A3: OpenMP Runtime Boundary
+#### A3: OpenMP Runtime Boundary
 
 A header-free OpenMP program isolates the runtime requirement (C probe 6):
 
@@ -298,7 +356,7 @@ Compile with `--runtime=portable -O0 -fopenmp`; translation reports unresolved `
 
 The smallest native-boundary probe is the empty A1 program with `--runtime=portable --system-library libomp.so.5`; the driver rejects it with `--system-library requires --runtime=system`. System OpenMP uses native worker callbacks, TLS and runtime structures which cannot be silently mixed with the portable ABI. A portable OpenMP runtime or deliberately specified managed adapter is required. CIL threads are not fundamentally incapable of OpenMP semantics. Disabling OpenMP or stubbing `__kmpc_*` would only create a different serial workload, not fix the speed benchmark.
 
-## CPU 2017, One Benchmark At A Time
+### CPU 2017, One Benchmark At A Time
 
 Every benchmark name links to its latest retained harness log; the corresponding result table and exact make-log path are in the [current audit](../artifacts/tests/portable-spec/current.tsv). Errors in parallel make output can appear in a different order, so a row lists the controlling cause family and corroborated adjacent blockers rather than claiming a unique total order of source diagnostics. A failed row is not a claim that all downstream causes are known.
 
@@ -337,7 +395,7 @@ Every benchmark name links to its latest retained harness log; the corresponding
 | [654.roms_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/654.roms_s-portable.log) | FAIL | A3. |
 | [657.xz_s](../artifacts/spec-portable-audit/retry.Vmyt3WpR/657.xz_s-portable.log) | FAIL | H9/A3; distinct from CPU 2026's C++-thread XZ variant. |
 
-## CPU 2026, One Benchmark At A Time
+### CPU 2026, One Benchmark At A Time
 
 | Benchmark / Evidence | Result | Cause / Disposition |
 | --- | --- | --- |
@@ -394,7 +452,7 @@ Every benchmark name links to its latest retained harness log; the corresponding
 | [998.specrand_s](../artifacts/spec-portable-audit/retry.yaC9sHXJ/998.specrand_s-portable.log) | FAIL | L1; one distinct benchmark despite two group appearances. |
 | [999.specrand_r](../artifacts/spec-portable-audit/retry.yaC9sHXJ/999.specrand_r-portable.log) | FAIL | L1; one distinct benchmark despite two group appearances. |
 
-## Verification And Next Work
+### Verification And Next Work
 
 The [positive repair gate](../artifacts/tests/portable-spec/functions.log), [expected-cause gate](../artifacts/tests/portable-spec/causes.log), and nearby [math](../artifacts/tests/portable-spec/math.log), [I/O](../artifacts/tests/portable-spec/regression-io.log), [POSIX](../artifacts/tests/portable-spec/regression-posix.log), [time](../artifacts/tests/portable-spec/regression-time.log) and [portable C++](../artifacts/tests/portable-spec/regression-portable-cpp.log) suites passed. The positive repair gate is registered in [toolchain-all.sh](../tests/toolchain-all.sh). The entire core/deployment/media gate was **not** rerun for this audit; earlier full-video/deployment evidence is not relabeled as using these changes.
 
