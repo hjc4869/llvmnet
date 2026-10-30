@@ -38,4 +38,17 @@ if llvm-nm-22 --defined-only "$output/system-linked.bc" | grep -E ' (__init_libc
     exit 1
 fi
 llvm-nm-22 --undefined-only "$output/system-linked.bc" | grep -E ' (printf|puts)$' >/dev/null
+# Nor its headers, in C or C++; portable mode sees only them and Clang's own resource headers.
+for source_file in "$root/tests/c/runtime.c" "$root/tests/cpp/streams.cpp"; do
+    "$root/bin/llvmnet" --runtime=system -H -fsyntax-only "$source_file" 2>"$output/system-headers.txt"
+    if grep -q 'sysroot/dotnet64-v2' "$output/system-headers.txt"; then
+        printf 'FAIL: system mode included a portable sysroot header for %s\n' "$source_file" >&2
+        exit 1
+    fi
+    "$root/bin/llvmnet" --runtime=portable -H -fsyntax-only "$source_file" 2>"$output/portable-headers.txt"
+    if grep '^\.' "$output/portable-headers.txt" | grep -v -e 'sysroot/dotnet64-v2' -e '/lib/clang/[0-9]*/include/' >/dev/null; then
+        printf 'FAIL: portable mode included a header outside its sysroot for %s\n' "$source_file" >&2
+        exit 1
+    fi
+done
 printf 'PASS: compatible portable CIL linking and explicit rejection of ABI/output mode conflicts\n'
