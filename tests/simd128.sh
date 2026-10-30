@@ -9,7 +9,7 @@ output="$root/artifacts/tests/simd128"
 mkdir -p "$output"
 for runtime in system portable; do
     abi=system-linux-x64-v1
-    if [[ "$runtime" == portable ]]; then abi=dotnet64-v1; fi
+    if [[ "$runtime" == portable ]]; then abi=dotnet64-v2; fi
     sed "s/LLVMNET_TEST_ABI/$abi/" "$root/tests/wasm/simd128-helpers.ll" >"$output/$runtime.ll"
     "$root/bin/llvmnet" --runtime="$runtime" --simd128 "$output/$runtime.ll" -o "$output/simd-$runtime.dll"
     dotnet "$output/simd-$runtime.dll"

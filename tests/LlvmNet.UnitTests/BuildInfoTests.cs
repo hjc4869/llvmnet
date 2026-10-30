@@ -23,5 +23,5 @@ public sealed class BuildInfoTests
 
     [Fact]
     public void IncompatibleImagesFailBeforeRunning() =>
-        Assert.Throws<InvalidOperationException>(() => AbiContract.Require("dotnet64-v1", "9999.0.0"));
+        Assert.Throws<InvalidOperationException>(() => AbiContract.Require("dotnet64-v2", "9999.0.0"));
 }

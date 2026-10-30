@@ -6,8 +6,8 @@
   <flag name="compiler_path" class="compiler" regexp="(?:/[^\s]+/)?llvmnet-(?:clang\+\+|clang|flang)(?=\s|$)">
     <![CDATA[<p>Runs the llvmnet C, C++, or Fortran compiler driver. Clang/Flang 22 emits LLVM bitcode, which is lowered to .NET CIL.</p>]]>
   </flag>
-  <flag name="runtime_mode" class="portability" regexp="--runtime=(system|portable|managed-host)">
-    <![CDATA[<p>Selects a runtime and ABI contract. System uses the Linux x86-64 ABI, glibc and native pthreads through generated ABI bridges. Portable uses the toolchain-owned LP64 dotnet64-v1 ABI and managed adapters. Managed-host is the legacy managed runtime with Linux host headers. Object modes cannot be mixed.</p>]]>
+  <flag name="runtime_mode" class="portability" regexp="--runtime=(system|portable)">
+    <![CDATA[<p>Selects a runtime and ABI contract. System uses the Linux x86-64 ABI, glibc and native pthreads through generated ABI bridges. Portable uses the versioned LP64 dotnet64-v2 ABI with musl, libc++ and flang-rt compiled to CIL. Object modes cannot be mixed.</p>]]>
   </flag>
   <flag name="nativeaot" class="optimization" regexp="--nativeaot">
     <![CDATA[<p>Publishes the generated CIL executable using .NET 10 NativeAOT. The default NativeAOT optimization preference is Balanced. The generated executable embeds the .NET runtime and any generated native ABI call bridges; ordinary system-library dependencies remain.</p>]]>

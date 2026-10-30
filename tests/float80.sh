@@ -16,7 +16,7 @@ clang-22 -O1 "$root/tests/c/float80-floor.c" -lm -o "$output/floor-native"
 for runtime in system portable; do
     target="$output/floor-$runtime"
     "$root/bin/llvmnet" --runtime="$runtime" -O1 -c "$root/tests/c/float80-floor.c" -o "$target.bc"
-    llvm-dis-22 "$target.bc" -o - | grep -q '@llvm.floor.f80'
+    llvm-dis-22 "$target.bc" -o - | grep '@llvm.floor.f80' >/dev/null
     "$root/bin/llvmnet" --runtime="$runtime" "$target.bc" -o "$target.dll"
     dotnet "$target.dll" > "$target.txt"
     diff -u "$output/floor-native.txt" "$target.txt"

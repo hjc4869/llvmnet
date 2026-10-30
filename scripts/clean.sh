@@ -35,7 +35,7 @@ if [[ "$mode" == all ]]; then
     exit 0
 fi
 # Trailing slashes restrict the globs to directories, so cited top-level logs survive.
-remove "$artifacts/tests" "$artifacts/portable-runtime" "$artifacts"/deps/ "$artifacts"/deps-*/ \
+remove "$artifacts/tests" "$artifacts/sysroot-build" "$artifacts"/deps/ "$artifacts"/deps-*/ \
     "$artifacts"/ffmpeg-*/ "$artifacts"/*-toolchain/ "$artifacts"/*-toolchain-*/
 if [[ "$mode" == downloads ]]; then
     remove "$artifacts/vendor"

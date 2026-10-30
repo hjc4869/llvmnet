@@ -108,6 +108,7 @@ if [[ ${#selected[@]} -eq 0 ]]; then printf 'No tests selected.\n' >&2; exit 2; 
 
 rm -rf "$results"
 mkdir -p "$results/status"
+touch "$results/started"   # tests/jit-validation.sh checks only assemblies built after this
 start_all=$(date +%s)
 if [[ "$build" -eq 1 ]]; then
     printf 'Building solution and portable runtime...\n'

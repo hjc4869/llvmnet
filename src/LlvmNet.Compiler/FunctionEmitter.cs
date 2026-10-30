@@ -1106,7 +1106,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         if (name == "llvm.get.rounding")
         {
             Il.Emit(OpCodes.Ldc_I4, Compiler.Host is null ? 0 : 1);
-            Il.Emit(OpCodes.Call, typeof(CMath).GetMethod(nameof(CMath.GetRounding))!);
+            Il.Emit(OpCodes.Call, typeof(MathIntrinsics).GetMethod(nameof(MathIntrinsics.GetRounding))!);
             return;
         }
         if (name.StartsWith("llvm.threadlocal.address.", StringComparison.Ordinal))
@@ -1307,7 +1307,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Conv_R8);
             Il.Emit(OpCodes.Ldloca, integral);
             Il.Emit(OpCodes.Conv_I);
-            Il.Emit(OpCodes.Call, typeof(CMath).GetMethod(frexp ? nameof(CMath.Frexp) : nameof(CMath.Modf))!);
+            Il.Emit(OpCodes.Call, typeof(MathIntrinsics).GetMethod(frexp ? nameof(MathIntrinsics.Frexp) : nameof(MathIntrinsics.Modf))!);
             if (TypeSystem.Kind(fractionType) == 2) Il.Emit(OpCodes.Conv_R4);
             StoreMemory(fractionType);
             Il.Emit(OpCodes.Ldloca, result);
@@ -1333,7 +1333,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             Load(Llvm.LLVMGetOperand(instruction, 0));
             Load(Llvm.LLVMGetOperand(instruction, 1));
             Il.Emit(OpCodes.Conv_I4);
-            Il.Emit(OpCodes.Call, typeof(CMath).GetMethod(Types.Map(Llvm.LLVMTypeOf(instruction)) == typeof(float) ? nameof(CMath.LdexpF) : nameof(CMath.Ldexp))!);
+            Il.Emit(OpCodes.Call, typeof(MathIntrinsics).GetMethod(Types.Map(Llvm.LLVMTypeOf(instruction)) == typeof(float) ? nameof(MathIntrinsics.LdexpF) : nameof(MathIntrinsics.Ldexp))!);
             return;
         }
         if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) == 4)
@@ -1428,7 +1428,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             bool single = Types.Map(Llvm.LLVMTypeOf(operand)) == typeof(float);
             bool away = operation.Contains("round", StringComparison.Ordinal);
             Load(operand);
-            Il.Emit(OpCodes.Call, typeof(CMath).GetMethod(away ? single ? nameof(CMath.LroundF) : nameof(CMath.Lround) : single ? nameof(CMath.LrintF) : nameof(CMath.Lrint))!);
+            Il.Emit(OpCodes.Call, typeof(MathIntrinsics).GetMethod(away ? single ? nameof(MathIntrinsics.LroundF) : nameof(MathIntrinsics.Lround) : single ? nameof(MathIntrinsics.LrintF) : nameof(MathIntrinsics.Lrint))!);
             if (width <= 32)
                 Il.Emit(OpCodes.Conv_I4);
             return;
@@ -1473,7 +1473,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         if (operation == "round")
         {
             Load(Llvm.LLVMGetOperand(instruction, 0));
-            Il.Emit(OpCodes.Call, typeof(CMath).GetMethod(Types.Map(Llvm.LLVMTypeOf(instruction)) == typeof(float) ? nameof(CMath.RoundF) : nameof(CMath.Round))!);
+            Il.Emit(OpCodes.Call, typeof(MathIntrinsics).GetMethod(Types.Map(Llvm.LLVMTypeOf(instruction)) == typeof(float) ? nameof(MathIntrinsics.RoundF) : nameof(MathIntrinsics.Round))!);
             return;
         }
         if (operation is "ctpop" or "ctlz" or "cttz")

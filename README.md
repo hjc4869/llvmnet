@@ -15,7 +15,6 @@ Requirements for the current Linux toolchain:
 - .NET 10 SDK and runtime.
 - LLVM/Clang/Flang 22, development headers, `libLLVM-22.so`, `llvm-config-22`, `opt-22`, `llvm-ar-22`, and `llvm-ranlib-22`.
 - Bash and a C++ compiler (`clang++-22`) for the compile-time LLVM bridge.
-- NuGet access for pinned `MathNet.Numerics` 5.0.0, used for `erf`.
 - For dependency integration: CMake, Ninja, Meson, pkg-config, and initialized source checkouts.
 
 ```sh

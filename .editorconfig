@@ -18,7 +18,7 @@ trim_trailing_whitespace = false
 trim_trailing_whitespace = false
 insert_final_newline = false
 
-[sysroot/dotnet64-v1/include/c++/**]
+[sysroot/dotnet64-v2/**]
 generated_code = true
 
 [*.cs]

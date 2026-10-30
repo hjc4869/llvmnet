@@ -19,7 +19,7 @@ bash "$root/scripts/ensure-built.sh"
 # Objects built against another portable sysroot carry an incompatible ABI; start over when it changes.
 abi_stamp="$runtime"
 [[ "$runtime" == portable ]] && abi_stamp+=" $(cat "$root/sysroot/dotnet64-v2/.llvmnet-inputs")"
-if [[ -f "$build/llvmnet-abi" && "$(<"$build/llvmnet-abi")" != "$abi_stamp" ]]; then rm -rf "${build:?}" "${prefix:?}"; fi
+if [[ "$(cat "$build/llvmnet-abi" 2>/dev/null)" != "$abi_stamp" ]]; then rm -rf "${build:?}" "${prefix:?}"; fi
 mkdir -p "$build" "$prefix"
 printf '%s\n' "$abi_stamp" >"$build/llvmnet-abi"
 printf '%s\n' "$runtime" | tee "$build/llvmnet-runtime" >"$prefix/llvmnet-runtime"
