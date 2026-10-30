@@ -32,6 +32,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Atomics are lock-free on naturally aligned locations, about five times faster under contention (BE-16).
 - `atexit` and C++ static destructors run interleaved in reverse registration order, destructor attributes last (BE-08).
 - Portable mode accepts the x86-64 register-slot equivalences that system mode accepts for direct calls: `ptr` and `i64`, `i32` and `i64` in register positions, `i1` and `i8`; the entry point accepts Flang's `i64 main` under `-fdefault-integer-8`, and `--trap-missing-arguments` is available (BE-39). Both modes convert `i8` and `[1 x i8]` at direct calls, as Fortran passes `character(1)` to C `char` (BE-40).
+- Portable `memcpy`, `memmove` and `memset` use the runtime's vectorized copy and fill (LC-24).
 - In portable mode `_GNU_SOURCE` also declares the LFS64 names (`stat64`, `off64_t`, `open64`), as glibc does.
 
 ### Removed
