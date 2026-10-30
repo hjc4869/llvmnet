@@ -6,16 +6,27 @@
 # (portable mode) and run through dotnet. The default directories are the ones plan item CX-08 names.
 #   tests/libcxx-conformance.sh [std/<directory>...]       default: containers strings algorithms utilities thread
 #                                                           localization input.output
+#   tests/libcxx-conformance.sh libcxxabi                   libc++abi's own tests instead (CX-13), results in
+#                                                           artifacts/tests/libcxxabi-conformance
 #   LIBCXX_LIT_JOBS=16                                      parallel tests (default: nproc)
 # Results: artifacts/tests/libcxx-conformance/{summary.tsv,results.json,failures.txt}; the test fails if any
 # directory passes fewer than LIBCXX_THRESHOLD percent (default 0: report only) of its tests.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 llvm="$("$root/scripts/fetch-sources.sh" --path llvm-project)"
 sysroot="$root/sysroot/dotnet64-v2"
-rm -rf "$test_output"
-mkdir -p "$test_output/bin"
+project=libcxx
+compile_flags='-I %{libcxx-dir}/test/support'
 directories=("$@")
 [[ ${#directories[@]} -gt 0 ]] || directories=(std/containers std/strings std/algorithms std/utilities std/thread std/localization std/input.output)
+if [[ "${directories[*]}" == libcxxabi ]]; then
+    # The include paths of libc++abi's static-library configuration; its tests use private libc++ and libc++abi sources.
+    project=libcxxabi
+    compile_flags='-I %{include} -I %{libcxx}/test/support -I %{libcxx}/src -D_LIBCPP_ENABLE_CXX17_REMOVED_UNEXPECTED_FUNCTIONS'
+    directories=(.)
+    test_output="$root/artifacts/tests/libcxxabi-conformance"
+fi
+rm -rf "$test_output"
+mkdir -p "$test_output/bin"
 # The compiler the suite calls: llvmnet's C++ driver, portable by default.
 printf '#!/bin/sh\nLLVMNET_DRIVER=clang++ exec %q "$@"\n' "$llvmnet" >"$test_output/bin/llvmnet-clang++"
 chmod +x "$test_output/bin/llvmnet-clang++"
@@ -25,7 +36,7 @@ import os, site, sys
 site.addsitedir(os.path.join('$llvm', 'libcxx', 'utils'))
 import libcxx.test.format, libcxx.test.params, libcxx.test.config, libcxx.test.features
 config.name = 'libc++ on llvmnet (portable)'
-config.test_source_root = os.path.join('$llvm', 'libcxx', 'test')
+config.test_source_root = os.path.join('$llvm', '$project', 'test')
 config.test_exec_root = '$test_output/exec'
 config.test_format = libcxx.test.format.CxxStandardLibraryTest()
 config.recursiveExpansionLimit = 10
@@ -33,13 +44,18 @@ config.recursiveExpansionLimit = 10
 # --target in portable mode, so libc++'s configuration does not pass it.
 config.compiler = '$test_output/bin/llvmnet-clang++'
 config.target_triple = 'x86_64-unknown-linux-musl'
+config.host_triple = 'x86_64-unknown-linux-gnu'
 for name, value in [('%{bin-dir}', '$test_output'), ('%{libcxx-dir}', os.path.join('$llvm', 'libcxx')),
                     ('%{install-prefix}', '$sysroot'), ('%{include-dir}', '$sysroot/include/c++/v1'),
                     ('%{target-include-dir}', '$sysroot/include/c++/v1'), ('%{lib-dir}', '$sysroot/lib'),
                     ('%{module-dir}', '$sysroot/share/libc++/v1'), ('%{test-tools-dir}', '$test_output'),
                     ('%{benchmark_flags}', ''), ('%{python}', sys.executable),
                     ('%{flags}', '-pthread'),
-                    ('%{compile_flags}', '-I %{libcxx-dir}/test/support'), ('%{link_flags}', ''),
+                    ('%{libcxx}', os.path.join('$llvm', 'libcxx')), ('%{libcxxabi}', os.path.join('$llvm', 'libcxxabi')),
+                    ('%{llvm}', os.path.join('$llvm', 'llvm')),
+                    ('%{include}', os.path.join('$llvm', 'libcxxabi', 'include')), ('%{cxx-include}', '$sysroot/include/c++/v1'),
+                    ('%{lib}', '$sysroot/lib'), ('%{maybe-include-libunwind}', ''),
+                    ('%{compile_flags}', '$compile_flags'), ('%{link_flags}', ''),
                     ('%{exec}', '%{executor} --execdir %{temp} -- ')]:
     config.substitutions.append((name, value))
 libcxx.test.config.configure(libcxx.test.params.DEFAULT_PARAMETERS, libcxx.test.features.DEFAULT_FEATURES, config, lit_config)
@@ -51,17 +67,17 @@ sys.path.insert(0, os.path.join('$llvm', 'llvm', 'utils', 'lit'))
 import lit.main
 # Worker processes import this module again (forkserver); only the parent runs lit.
 if __name__ == '__main__':
-    lit.main.main({'config_map': {os.path.normcase(os.path.join('$llvm', 'libcxx', 'test', 'lit.cfg.py')): '$test_output/lit.site.cfg'}})
+    lit.main.main({'config_map': {os.path.normcase(os.path.join('$llvm', '$project', 'test', 'lit.cfg.py')): '$test_output/lit.site.cfg'}})
 EOF
 paths=()
-for directory in "${directories[@]}"; do paths+=("$llvm/libcxx/test/$directory"); done
+for directory in "${directories[@]}"; do paths+=("$llvm/$project/test/$directory"); done
 status=0
 # Experimental features (libc++experimental: the time-zone database) are not part of the sysroot.
 python3 "$test_output/lit.py" -q -j "${LIBCXX_LIT_JOBS:-$(nproc)}" --param enable_experimental=False --timeout 600 --max-failures 100000 \
     --resultdb-output "$test_output/results.json" --xunit-xml-output "$test_output/results.xml" "${paths[@]}" \
     >"$test_output/lit.log" 2>&1 || status=$?
 tail -n 30 "$test_output/lit.log"
-python3 - "$test_output" "$llvm/libcxx/test/" "${LIBCXX_THRESHOLD:-0}" "${directories[@]}" <<'PYEOF'
+python3 - "$test_output" "$llvm/$project/test/" "${LIBCXX_THRESHOLD:-0}" "${directories[@]}" <<'PYEOF'
 import json, re, sys, collections, xml.etree.ElementTree as ET
 output, prefix, threshold, directories = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4:]
 results = json.load(open(f'{output}/results.json'))['tests']
@@ -86,7 +102,7 @@ counts = collections.defaultdict(collections.Counter)
 failures = []
 for test in results:
     name = test['testId'].split(' :: ', 1)[-1]
-    directory = next((d for d in directories if name.startswith(d + '/')), 'other')
+    directory = next((d for d in directories if d == '.' or name.startswith(d + '/')), 'other')
     code = test['status']
     # The result database reports UNSUPPORTED as SKIP, an expected failure as PASS and an unexpected pass as FAIL.
     if code in ('FAIL', 'TIMEOUT', 'UNRESOLVED', 'XPASS'):
@@ -111,4 +127,4 @@ if below:
     print(f'FAIL: below {threshold}%: {" ".join(below)}', file=sys.stderr)
     sys.exit(1)
 PYEOF
-printf 'libc++ conformance results: %s\n' "$test_output/summary.tsv"
+printf '%s conformance results: %s\n' "$project" "$test_output/summary.tsv"

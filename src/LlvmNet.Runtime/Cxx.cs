@@ -52,10 +52,11 @@ public static unsafe class Cxx
     private static nint terminateHandler = defaultTerminate;
     [ThreadStatic] private static Stack<CxxException>? catches;
     [ThreadStatic] private static int uncaughtExceptions;
-    private static int nextTypeId;
+    // Selectors: 0 is cleanup only, negative a violated exception specification and 1 a catch (...); type ids follow.
+    private static int nextTypeId = 1;
 
     internal static void ExceptionCreated() => uncaughtExceptions++;
-    [CExport("_ZSt18uncaught_exceptionv")]
+    [CExport("_ZSt18uncaught_exceptionv"), CExport("__cxa_uncaught_exception")]
     public static int UncaughtException() => uncaughtExceptions != 0 ? 1 : 0;
     [CExport("_ZSt19uncaught_exceptionsv"), CExport("_ZNSt3__119uncaught_exceptionsEv")]
     public static int UncaughtExceptions() => uncaughtExceptions;
@@ -132,9 +133,37 @@ public static unsafe class Cxx
             adjusted = value;
             return caught;
         }
+        string thrownName = TypeName(exception.TypeInfo), caughtName = TypeName(clause);
+        if (thrownName.StartsWith('P') && caughtName.StartsWith('P'))
+            return CanCatchPointer(exception, clause, thrownName, caughtName, out adjusted);
         List<nint> matches = Bases(exception.TypeInfo, exception.Object, clause);
         adjusted = matches.Count == 1 ? matches[0] : 0;
         return matches.Count == 1;
+    }
+
+    /// <summary>System mode's pointer handlers, decided from the mangled names because the bridge's placeholders for
+    /// fundamental pointer types carry nothing else: the handler receives the pointer value, may add but not drop const and
+    /// volatile, and accepts the same pointee, <c>void</c>, or a public base of a class pointee.</summary>
+    private static bool CanCatchPointer(CxxException exception, nint clause, string thrownName, string caughtName, out nint adjusted)
+    {
+        nint value = *(nint*)exception.Object;
+        (string thrownPointee, string thrownQualifiers) = Pointee(thrownName);
+        (string caughtPointee, string caughtQualifiers) = Pointee(caughtName);
+        adjusted = value;
+        if (thrownQualifiers.Any(qualifier => !caughtQualifiers.Contains(qualifier))) return false;
+        if (thrownPointee == caughtPointee || caughtPointee == "v" && !thrownPointee.StartsWith('F')) return true;
+        nint pointerType = Global("_ZTVN10__cxxabiv119__pointer_type_infoE") + 16;
+        if (value == 0 || *(nint*)exception.TypeInfo != pointerType || *(nint*)clause != pointerType) return false;
+        List<nint> matches = Bases(*(nint*)(exception.TypeInfo + 24), value, *(nint*)(clause + 24));
+        adjusted = matches.Count == 1 ? matches[0] : 0;
+        return matches.Count == 1;
+
+        static (string Pointee, string Qualifiers) Pointee(string name)
+        {
+            int start = 1;
+            while (start < name.Length && name[start] is 'r' or 'V' or 'K') start++;
+            return (name[start..], name[1..start]);
+        }
     }
 
     public static int Selector(CxxException exception, nint[] clauses)

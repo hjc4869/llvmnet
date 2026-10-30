@@ -17,3 +17,12 @@ for runtime in system portable; do
     diff -u "$output/native.txt" "$target-aot.txt"
     printf 'PASS: %s C++ exception specifications and cleanup in JIT/NativeAOT\n' "$runtime"
 done
+# Catch clauses: catch (...) after a typed handler, pointer values, qualification and base-class conversions.
+clang++-22 -std=c++14 -O0 "$root/tests/cpp/catch-clauses.cpp" -o "$output/clauses-native"
+"$output/clauses-native" > "$output/clauses-native.txt"
+for runtime in system portable; do
+    "$root/bin/llvmnet" --runtime="$runtime" -std=c++14 -O0 "$root/tests/cpp/catch-clauses.cpp" -o "$output/clauses-$runtime.dll"
+    dotnet "$output/clauses-$runtime.dll" > "$output/clauses-$runtime.txt"
+    diff -u "$output/clauses-native.txt" "$output/clauses-$runtime.txt"
+done
+printf 'PASS: catch (...) after a typed handler and pointer catches in both modes\n'

@@ -172,6 +172,7 @@ public static unsafe partial class HostSyscalls
             if ((flags & CLONE_SETTLS) != 0) threadPointer = tls;
             try { ((delegate* managed<nint, int>)function)(argument); }
             catch (ThreadExit) { }
+            catch (CxxException exception) { Cxx.CallTerminate(exception.Handle); }
             finally
             {
                 if ((flags & CLONE_CHILD_CLEARTID) != 0)

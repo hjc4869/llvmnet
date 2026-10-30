@@ -49,5 +49,7 @@ int main(int count, char **arguments)
         std::set_terminate(returning_handler);
     if (std::strcmp(arguments[1], "throw") == 0)
         std::set_terminate(throwing_handler);
+    if (std::strcmp(arguments[1], "uncaught") == 0)
+        throw_error();
     std::terminate();
 }

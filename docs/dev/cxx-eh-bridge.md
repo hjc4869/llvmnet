@@ -5,10 +5,10 @@ The CLR, not libunwind, unwinds the stack of a translated program, so C++ except
 ## How a C++ exception travels
 
 1. `throw` calls `__cxa_allocate_exception` (bridge) for the object and `__cxa_throw(object, type_info, destructor)` (bridge), which throws a managed `CxxException` holding the object pointer, its `type_info` and its destructor.
-2. The backend lowers every `invoke` to a CIL `try` region. Its `catch (CxxException)` handler stores a GC handle to the exception as the landing pad's exception pointer and asks the bridge which clause matches: `Cxx.Selector` for catch clauses, `Cxx.Filter` for exception specifications. The selector value is the matched clause's type identifier, which `llvm.eh.typeid.for` returns for the same `type_info`, or 0 when only cleanups apply.
+2. The backend lowers every `invoke` to a CIL `try` region. Its `catch (CxxException)` handler stores a GC handle to the exception as the landing pad's exception pointer and asks the bridge which clause matches: `Cxx.Selector` for catch clauses, `Cxx.Filter` for exception specifications. The selector value is the matched clause's type identifier, which `llvm.eh.typeid.for` returns for the same `type_info`; 1 for `catch (...)`, so type identifiers start at 2; 0 when only cleanups apply; and negative for a violated exception specification.
 3. `__cxa_begin_catch` (bridge) returns the adjusted object pointer the matching clause selected and pushes the exception on the thread's catch stack; `__cxa_end_catch` pops it and destroys and frees the object when the last catch ends without a rethrow.
 4. Cleanups that do not catch end with `_Unwind_Resume` (bridge), which rethrows the same `CxxException` with its original stack trace.
-5. `__cxa_rethrow` rethrows the exception on top of the catch stack. `std::terminate`, `__cxa_pure_virtual`, `__clang_call_terminate` and `__cxa_call_unexpected` reach the installed terminate handler, which must not return.
+5. `__cxa_rethrow` rethrows the exception on top of the catch stack. `std::terminate`, `__cxa_pure_virtual`, `__clang_call_terminate` and `__cxa_call_unexpected` reach the installed terminate handler, which must not return. An exception no handler catches reaches it too, with the exception current: the entry point and portable thread start catch `CxxException` and call `__clang_call_terminate`'s path.
 
 Landing pads catch only `CxxException`. Other managed exceptions (for example an `OutOfMemoryException` from the runtime, or the `NonLocalJumpException` of `longjmp`) pass through C++ frames without running their catch clauses, `catch (...)` or cleanups.
 
@@ -20,7 +20,7 @@ In portable mode the bridge provides exactly these symbols; everything else in t
 | --- | --- |
 | Throwing and catching | `__cxa_allocate_exception`, `__cxa_free_exception`, `__cxa_throw`, `__cxa_begin_catch`, `__cxa_end_catch`, `__cxa_rethrow`, `__cxa_get_exception_ptr`, `_Unwind_Resume` |
 | `std::exception_ptr` (libc++abi ABI) | `__cxa_current_primary_exception`, `__cxa_increment_exception_refcount`, `__cxa_decrement_exception_refcount`, `__cxa_rethrow_primary_exception`, `__cxa_init_primary_exception` (`std::make_exception_ptr`) |
-| Uncaught exceptions | `__cxa_uncaught_exceptions`, `std::uncaught_exception`, `std::uncaught_exceptions` |
+| Uncaught exceptions | `__cxa_uncaught_exceptions`, `__cxa_uncaught_exception`, `std::uncaught_exception`, `std::uncaught_exceptions` |
 | Termination | `std::terminate`, `std::set_terminate`, `std::get_terminate`, `__cxa_pure_virtual`, `__cxa_call_unexpected`, `__clang_call_terminate` |
 | RTTI | `__dynamic_cast`, placeholder `__cxxabiv1` class-type-info vtables (libc++abi's `private_typeinfo.cpp` is not compiled), catch matching for the backend |
 | Allocation failure | `std::set_new_handler`, `std::get_new_handler` (libc++abi's `operator new` calls them) |
@@ -37,8 +37,10 @@ In system mode no C++ runtime is linked by default, so the bridge additionally p
 
 ## Known limits
 
-- Catch matching and `__dynamic_cast` walk the Itanium `__class_type_info`, `__si_class_type_info` and `__vmi_class_type_info` layouts in C#. Public single, multiple and virtual inheritance and ambiguous bases are handled; pointer-to-member catch clauses, `catch` of pointers with qualification conversions, and `dynamic_cast` through private bases are not. CX-03 replaces the walk with libc++abi's `private_typeinfo.cpp`.
+- In system mode, catch matching and `__dynamic_cast` walk the Itanium `__class_type_info`, `__si_class_type_info` and `__vmi_class_type_info` layouts in C#. Public single, multiple and virtual inheritance and ambiguous bases are handled, and pointer handlers by mangled name (the pointer value, added `const` or `volatile` at one level, `void *`, base-class pointees); pointer-to-member catch clauses, multi-level qualification conversions and `dynamic_cast` through private bases are not. Portable mode uses libc++abi's `private_typeinfo.cpp` instead (CX-03).
 - Type identifiers for `llvm.eh.typeid.for` live in a process-wide table (`Cxx.typeIds`).
+- Cleanups are CIL `catch` blocks that rethrow, so the CLR finds a handler in every frame with destructors to run: when no C++ handler matches, destructors run before `std::terminate`. C++ leaves this implementation-defined ([except.terminate]); the Itanium runtime terminates without unwinding (libc++abi's `test_vector3`).
+- libc++abi's exception globals (`__cxa_get_globals`, `__cxa_get_globals_fast`) and the unwinder interface (`_Unwind_Backtrace`, `_Unwind_ForcedUnwind`) are not provided: exceptions are managed objects and the CLR unwinds.
 - A foreign (non-C++) managed exception is not a C++ exception: `std::current_exception` inside `catch (...)` does not capture it.
 
-The behavior is covered by `tests/cpp-filters.sh`, `tests/cpp-nothrow.sh`, `tests/cpp-terminate.sh`, `tests/exception-pointer.sh`, `tests/cpp.sh` (RTTI and catches) and the libc++ smoke program in `tests/libcxx.sh`.
+The behavior is covered by libc++abi's own tests (`tests/libcxx-conformance.sh libcxxabi`, CX-13), `tests/cpp-filters.sh`, `tests/cpp-nothrow.sh`, `tests/cpp-terminate.sh`, `tests/exception-pointer.sh`, `tests/cpp.sh` (RTTI and catches) and the libc++ smoke program in `tests/libcxx.sh`.

@@ -17,6 +17,11 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal readonly Dictionary<nint, MethodBuilder> ThreadGlobals = [];
     internal TypeSystem Types { get; private set; } = null!;
     internal TypeBuilder Program { get; private set; } = null!;
+    // The CLR limits how many fields one type may have, so static fields beyond this many per type go to further
+    // internal holder classes (a program with tens of thousands of string literals, such as libc++abi's test_demangle).
+    private const int FieldsPerType = 32768;
+    private readonly List<TypeBuilder> fieldHolders = [];
+    private int fieldsInHolder;
     internal HostInterop? Host { get; private set; }
     internal bool TrapMissingArguments => options.TrapMissingArguments;
     internal bool CheckIndirectCalls => options.CheckIndirectCalls;
@@ -234,6 +239,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         var assembly = new PersistedAssemblyBuilder(new AssemblyName(assemblyName), typeof(object).Assembly);
         ModuleBuilder cilModule = assembly.DefineDynamicModule("program");
         Program = cilModule.DefineType("Program", TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
+        fieldHolders.Add(Program);
         using var types = new TypeSystem(module, cilModule, options.Simd128);
         Types = types;
         constructors = Program.DefineMethod("__llvmnet_run_constructors", MethodAttributes.Public | MethodAttributes.Static, typeof(void), Type.EmptyTypes);
@@ -304,7 +310,7 @@ internal sealed class CilCompiler(CompilerOptions options)
                 Host.LibraryFor(Llvm.Name(global));
             else if (Llvm.LLVMGetInitializer(global) == 0 && !Cxx.HasGlobal(Llvm.Name(global)))
                 throw new NotSupportedException($"Unresolved external global: {Llvm.Name(global)}");
-            Globals[global] = Program.DefineField($"__global{Globals.Count}", typeof(nint), FieldAttributes.Private | FieldAttributes.Static);
+            Globals[global] = FieldHolder().DefineField($"__global{Globals.Count}", typeof(nint), FieldAttributes.Assembly | FieldAttributes.Static);
             if (threadLocal)
             {
                 Globals[global].SetCustomAttribute(new CustomAttributeBuilder(typeof(ThreadStaticAttribute).GetConstructor(Type.EmptyTypes)!, []));
@@ -322,7 +328,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         if (main is null && !options.Library)
             throw new NotSupportedException("No main function found.");
         MethodBuilder? entry = options.Library ? null : EmitEntry(main!);
-        Program.CreateType();
+        foreach (TypeBuilder holder in fieldHolders)
+            holder.CreateType();
         MetadataBuilder metadata = assembly.GenerateMetadata(out BlobBuilder ilStream, out BlobBuilder fieldData);
         var indirectFixups = FinalizeIndirectSignatures(metadata);
         var pe = new ManagedPEBuilder(new PEHeaderBuilder(imageCharacteristics: Characteristics.ExecutableImage | Characteristics.LargeAddressAware | (options.Library ? Characteristics.Dll : 0)),
@@ -363,11 +370,22 @@ internal sealed class CilCompiler(CompilerOptions options)
         Host?.Build();
     }
 
+    private TypeBuilder FieldHolder()
+    {
+        if (fieldsInHolder == FieldsPerType)
+        {
+            fieldHolders.Add(((ModuleBuilder)Program.Module).DefineType($"__Statics{fieldHolders.Count}", TypeAttributes.NotPublic | TypeAttributes.Abstract | TypeAttributes.Sealed));
+            fieldsInHolder = 0;
+        }
+        fieldsInHolder++;
+        return fieldHolders[^1];
+    }
+
     internal FieldBuilder Constant(nint value)
     {
         if (!constants.TryGetValue(value, out FieldBuilder? field))
         {
-            field = Program.DefineField($"__constant{constants.Count}", typeof(nint), FieldAttributes.Private | FieldAttributes.Static);
+            field = FieldHolder().DefineField($"__constant{constants.Count}", typeof(nint), FieldAttributes.Assembly | FieldAttributes.Static);
             constants[value] = field;
         }
         return field;
@@ -392,6 +410,8 @@ internal sealed class CilCompiler(CompilerOptions options)
             // musl: __llvmnet_libc_main(argc, argv, envp, main) initializes libc, runs constructors, calls main and exit.
             MethodBuilder adapter = Program.DefineMethod("__llvmnet_main3", MethodAttributes.Private | MethodAttributes.Static, typeof(int), [typeof(int), typeof(nint), typeof(nint)]);
             ILGenerator call = adapter.GetILGenerator();
+            LocalBuilder status = call.DeclareLocal(typeof(int));
+            Label returned = call.BeginExceptionBlock();
             for (short index = 0; index < parameters.Length; index++)
             {
                 call.Emit(OpCodes.Ldarg, index);
@@ -400,6 +420,11 @@ internal sealed class CilCompiler(CompilerOptions options)
             call.Emit(OpCodes.Call, main);
             if (fortran) call.Emit(OpCodes.Ldc_I4_0);
             if (wide) call.Emit(OpCodes.Conv_I4);
+            call.Emit(OpCodes.Stloc, status);
+            call.Emit(OpCodes.Leave, returned);
+            EmitUncaughtTerminate(call, returned);
+            call.EndExceptionBlock();
+            call.Emit(OpCodes.Ldloc, status);
             call.Emit(OpCodes.Ret);
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.InitializeStartup))!);
@@ -431,12 +456,23 @@ internal sealed class CilCompiler(CompilerOptions options)
             il.Emit(OpCodes.Conv_I4);
         il.Emit(OpCodes.Stloc, result);
         il.Emit(OpCodes.Leave, done);
+        EmitUncaughtTerminate(il, done);
         il.BeginFinallyBlock();
         il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.Cleanup))!);
         il.EndExceptionBlock();
         il.Emit(OpCodes.Ldloc, result);
         il.Emit(OpCodes.Ret);
         return entry;
+    }
+
+    /// <summary>A C++ exception no handler catches calls std::terminate with that exception current, as in native C++;
+    /// otherwise the CLR would report it as an unhandled managed exception and never run the terminate handler.</summary>
+    private static void EmitUncaughtTerminate(ILGenerator il, Label done)
+    {
+        il.BeginCatchBlock(typeof(CxxException));
+        il.Emit(OpCodes.Callvirt, typeof(CxxException).GetProperty(nameof(CxxException.Handle))!.GetMethod!);
+        il.Emit(OpCodes.Call, typeof(Cxx).GetMethod(nameof(Cxx.CallTerminate))!);
+        il.Emit(OpCodes.Leave, done);
     }
 
     private void EmitInitializer(nint module)
@@ -556,7 +592,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         foreach ((long index, byte[] bytes) in data.Chunks)
         {
             long offset = index * ConstantData.ChunkSize;
-            FieldBuilder blob = Program.DefineInitializedData($"__data{field.Name}_{offset}", bytes, FieldAttributes.Private | FieldAttributes.Static);
+            FieldBuilder blob = FieldHolder().DefineInitializedData($"__data{field.Name}_{offset}", bytes, FieldAttributes.Assembly | FieldAttributes.Static);
             il.Emit(OpCodes.Ldsfld, field);
             emitter.Offset(offset);
             il.Emit(OpCodes.Ldsflda, blob);

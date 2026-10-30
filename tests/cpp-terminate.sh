@@ -16,20 +16,20 @@ check_exit() {
         return 1
     fi
 }
-for scenario in invoke noexcept default return throw; do
+for scenario in invoke noexcept default return throw uncaught; do
     expected=134
-    if [[ "$scenario" == invoke || "$scenario" == noexcept ]]; then expected=73; fi
+    if [[ "$scenario" == invoke || "$scenario" == noexcept || "$scenario" == uncaught ]]; then expected=73; fi
     check_exit "$expected" "$output/native-$scenario.log" "$output/native" "$scenario"
 done
 for runtime in system portable; do
     target="$output/terminate-$runtime"
     "$root/bin/llvmnet" --runtime="$runtime" -std=c++17 -O1 "$root/tests/cpp/terminate.cpp" -o "$target.dll"
     "$root/bin/llvmnet" --runtime="$runtime" --nativeaot -std=c++17 -O1 "$root/tests/cpp/terminate.cpp" -o "$target-aot"
-    for scenario in invoke noexcept default return throw; do
+    for scenario in invoke noexcept default return throw uncaught; do
         expected=134
-        if [[ "$scenario" == invoke || "$scenario" == noexcept ]]; then expected=73; fi
+        if [[ "$scenario" == invoke || "$scenario" == noexcept || "$scenario" == uncaught ]]; then expected=73; fi
         check_exit "$expected" "$target-$scenario.log" dotnet "$target.dll" "$scenario"
         check_exit "$expected" "$target-aot-$scenario.log" "$target-aot" "$scenario"
     done
-    printf 'PASS: %s C++ terminate handlers, noexcept and non-returning termination in JIT/NativeAOT\n' "$runtime"
+    printf 'PASS: %s C++ terminate handlers, noexcept, uncaught exceptions and non-returning termination in JIT/NativeAOT\n' "$runtime"
 done
