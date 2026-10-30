@@ -50,7 +50,8 @@ public static unsafe partial class HostSyscalls
         0 => Console.OpenStandardInput(),
         1 => Console.OpenStandardOutput(),
         _ => Console.OpenStandardError()
-    }, null, number == 0 ? O_RDONLY : O_WRONLY) { Console = number };
+    }, null, number == 0 ? O_RDONLY : O_WRONLY)
+    { Console = number };
 
     private static OpenFile? Lookup(int descriptor)
     {
