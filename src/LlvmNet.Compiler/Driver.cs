@@ -91,6 +91,7 @@ internal static class Driver
         bool verbose = false;
         bool linkerVersion = false;
         bool startFiles = true;
+        bool staticLink = false;
         bool defaultLibraries = true;
         string? runtimeId = null;
         string? aotInstructionSet = null;
@@ -174,7 +175,8 @@ internal static class Driver
                         searchPaths.Add(argument[2..]);
                     else if (argument.StartsWith("-l", StringComparison.Ordinal))
                         libraries.Add(argument[2..]);
-                    else if (argument.StartsWith("-Wl,", StringComparison.Ordinal) || argument is "-static" or "-rdynamic")
+                    else if (argument == "-static") staticLink = true;
+                    else if (argument.StartsWith("-Wl,", StringComparison.Ordinal) || argument is "-rdynamic")
                         throw new NotSupportedException($"Native linker option {argument} is not a CIL linker option; use --emit-library, --cil-reference or --native-import.");
                     else if (argument.StartsWith('-'))
                         frontend.Add(argument);
@@ -190,6 +192,9 @@ internal static class Driver
         if (options.Runtime == "managed-host")
             throw new ArgumentException("--runtime=managed-host was removed (ADR-04); use --runtime=portable for a platform-neutral .NET ABI or --runtime=system for the native Linux ABI.");
         if (options.Runtime is not ("system" or "portable")) throw new ArgumentException("--runtime requires portable or system.");
+        // A portable program is always one statically linked image; system mode links the native C library dynamically.
+        if (staticLink && options.Runtime == "system")
+            throw new NotSupportedException("Native linker option -static is not a CIL linker option in system mode; system programs use the host's shared C library.");
         if (options.Runtime == "portable" && options.NativeImports.Count != 0)
             throw new ArgumentException("Portable ABI mode cannot contain native imports; use a managed CIL reference or --runtime=system.");
         if (options.Runtime != "system" && options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
@@ -258,7 +263,8 @@ internal static class Driver
                 }
                 else
                     command.Add("-fno-stack-protector");
-                command.AddRange([.. frontend, "-emit-llvm", textual ? "-S" : "-c", input, "-o", destination]);
+                // Mixed-language builds pass Fortran module options to every input; Clang does not accept them.
+                command.AddRange([.. fortran ? frontend : WithoutFortranOptions(frontend), "-emit-llvm", textual ? "-S" : "-c", input, "-o", destination]);
                 int result = Toolchain.Run(fortran ? Toolchain.Executable("flang-22", "LLVMNET_FLANG") : clang, command, verbose, options.Runtime == "portable");
                 if (result != 0)
                     return result;
@@ -285,7 +291,7 @@ internal static class Driver
                 PortableAbi.RequireSysroot();
                 if (startFiles) bitcode.Add(PortableAbi.Library("crt1.o"));
                 if (defaultLibraries)
-                    foreach (string archive in new[] { "libflang_rt.runtime.a", "libc++.a", "libc++abi.a", "libc.a" })
+                    foreach (string archive in new[] { "libflang_rt.runtime.a", "libc++.a", "libc++abi.a", "libc.a", "libclang_rt.builtins.a" })
                         if (File.Exists(PortableAbi.Library(archive))) bitcode.Add(PortableAbi.Library(archive));
             }
             // System executables take the Fortran runtime from flang-rt built against glibc (FT-09); the C library is native.
@@ -348,6 +354,18 @@ internal static class Driver
         {
             Directory.Delete(temporary, true);
         }
+    }
+
+    private static List<string> WithoutFortranOptions(List<string> arguments)
+    {
+        List<string> result = [];
+        for (int index = 0; index < arguments.Count; index++)
+        {
+            if (arguments[index] is "-module-dir" or "-J") { index++; continue; }
+            if (arguments[index].StartsWith("-J", StringComparison.Ordinal) || arguments[index].StartsWith("-fintrinsic-modules-path", StringComparison.Ordinal)) continue;
+            result.Add(arguments[index]);
+        }
+        return result;
     }
 
     private static bool IsFortran(string path) => Path.GetExtension(path).ToLowerInvariant() is ".f" or ".for" or ".f90" or ".f95" or ".f03" or ".f08";

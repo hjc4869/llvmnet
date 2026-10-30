@@ -180,16 +180,65 @@ public static unsafe partial class HostSyscalls
         string path = Text(pathPointer);
         if (path.Length == 0) throw new FileNotFoundException(path);
         if (path.Length >= 4096) throw new PathTooLongException();
-        if (Path.IsPathRooted(path)) return path;
-        if (directory == AT_FDCWD) return Path.GetFullPath(path);
-        OpenFile parent = Lookup(directory) ?? throw new HostException(EBADF);
-        if (parent.Kind != FileKind.Directory) throw new HostException(ENOTDIR);
-        return Path.GetFullPath(Path.Combine(parent.Path!, path));
+        if (!Path.IsPathRooted(path))
+        {
+            string start = Directory.GetCurrentDirectory();
+            if (directory != AT_FDCWD)
+            {
+                OpenFile parent = Lookup(directory) ?? throw new HostException(EBADF);
+                if (parent.Kind != FileKind.Directory) throw new HostException(ENOTDIR);
+                start = parent.Path!;
+            }
+            path = Path.Combine(start, path);
+        }
+        // Path.GetFullPath removes ".." textually; the kernel resolves the components before it first.
+        return path.Split('/').Contains("..") ? ResolveParents(path, 0) : Path.GetFullPath(path);
     }
 
-    /// <summary>The errno for a path that does not exist: ENOTDIR when a parent component is not a directory.</summary>
+    /// <summary>
+    /// Resolves an absolute path containing ".." as Linux does: each directory component is looked up in order, a
+    /// symbolic link among them is followed before a later "..", and a missing or non-directory component is an
+    /// error. The last component itself is left unresolved, so callers can still treat a final link either way.
+    /// </summary>
+    private static string ResolveParents(string path, int depth)
+    {
+        if (depth > 40) throw new HostException(ELOOP);
+        string[] components = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        string current = "/";
+        for (int index = 0; index < components.Length; index++)
+        {
+            string component = components[index];
+            bool last = index == components.Length - 1;
+            if (component == ".") continue;
+            if (component == "..")
+            {
+                current = Path.GetDirectoryName(current) ?? "/";
+                continue;
+            }
+            string next = Path.Combine(current, component);
+            if (last) return next;
+            if (SymbolicLinkAt(next)?.LinkTarget is string target)
+                next = ResolveParents(Path.IsPathRooted(target) ? target : Path.Combine(current, target), depth + 1);
+            if (!Directory.Exists(next))
+            {
+                long error = File.Exists(next) ? -ENOTDIR : Missing(next);
+                throw new HostException((int)-error);
+            }
+            current = next;
+        }
+        return current;
+    }
+
+    /// <summary>
+    /// The errno for a path the .NET existence checks did not find: the host's own error when it reports one (EACCES for
+    /// a path below a directory the process may not search), ENOTDIR when a parent component is not a directory, else ENOENT.
+    /// </summary>
     private static long Missing(string path)
     {
+        try { File.GetAttributes(path); }
+        catch (UnauthorizedAccessException) { return -EACCES; }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { }
+        catch (IOException error) when (Errno(error) != EIO) { return -Errno(error); }
         for (string? parent = Path.GetDirectoryName(path); !string.IsNullOrEmpty(parent); parent = Path.GetDirectoryName(parent))
         {
             if (File.Exists(parent)) return -ENOTDIR;

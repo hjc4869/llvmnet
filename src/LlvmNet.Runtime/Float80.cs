@@ -250,6 +250,10 @@ public readonly struct Float80
         return Pack(sum, BigInteger.One, scale, left.Negative != right.Negative && addend.Negative);
     }
 
+    // llvm.maxnum and llvm.minnum (C fmaxl, fminl): a NaN operand yields the other one; LLVM leaves the sign of zero open.
+    public static Float80 MaxNumber(Float80 left, Float80 right) => left.IsNan ? right : right.IsNan ? left : Compare(left, right, 3) != 0 ? left : right;
+    public static Float80 MinNumber(Float80 left, Float80 right) => left.IsNan ? right : right.IsNan ? left : Compare(left, right, 5) != 0 ? left : right;
+
     public static int Compare(Float80 left, Float80 right, int predicate)
     {
         bool unordered = left.IsNan || right.IsNan;

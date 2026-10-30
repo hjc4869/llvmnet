@@ -239,6 +239,23 @@ static void filesystem(void)
     printf("%-44s", "directory entries");
     for (int index = 0; index < count; index++) printf(" %s", entries[index]);
     printf("\n");
+    mkdir("locked", 0755);
+    write_file("locked/file", "x");
+    chmod("locked", 0);
+    /* EACCES for an unprivileged user; a root user may search anyway, natively and in the host alike. */
+    CHECK("stat below an unsearchable directory", stat("locked/file", &metadata));
+    CHECK("open below an unsearchable directory", open("locked/file", O_RDONLY));
+    chmod("locked", 0755);
+    CHECK("symlink to a directory", symlink("list", "dirlink"));
+    CHECK("stat through a directory link", stat("dirlink", &metadata));
+    FACT("the link's target is a directory", S_ISDIR(metadata.st_mode));
+    CHECK("stat of missing/.. (resolved in order)", stat("list/missing/..", &metadata));
+    CHECK("stat of a/file/.. (file is not a directory)", stat("list/a/..", &metadata));
+    CHECK("stat of dirlink/.. (link followed first)", stat("dirlink/..", &metadata));
+    chmod("list", 0300);
+    /* EACCES for an unprivileged user, as in the case above. */
+    CHECK("opendir of an unreadable directory", opendir("list") ? 0 : -1);
+    chmod("list", 0755);
     CHECK("opendir a file", opendir("moved") ? 0 : -1);
     CHECK("opendir missing", opendir("missing") ? 0 : -1);
 }

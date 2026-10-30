@@ -1,3 +1,4 @@
+using System.IO.Enumeration;
 using System.Text;
 using static LlvmNet.Runtime.Linux;
 
@@ -26,12 +27,23 @@ public static unsafe partial class HostSyscalls
     {
         if (SymbolicLinkAt(path) is FileSystemInfo link)
         {
+            // The resolved entry has the link's own type (FileInfo), whose Exists is false for a directory target.
             FileSystemInfo? final = link.ResolveLinkTarget(returnFinalTarget: true);
-            if (final is null || !final.Exists) return null;
-            return Directory.Exists(final.FullName) ? new DirectoryInfo(final.FullName) : new FileInfo(final.FullName);
+            if (final is null) return null;
+            if (Directory.Exists(final.FullName)) return new DirectoryInfo(final.FullName);
+            return File.Exists(final.FullName) ? new FileInfo(final.FullName) : null;
         }
         if (Directory.Exists(path)) return new DirectoryInfo(path);
         return File.Exists(path) ? new FileInfo(path) : null;
+    }
+
+    /// <summary>The errno when following <paramref name="path"/> finds nothing: for a symbolic link, the error of its final target.</summary>
+    private static long Unreachable(string path)
+    {
+        if (SymbolicLinkAt(path) is not FileSystemInfo link) return Missing(path);
+        try { return link.ResolveLinkTarget(returnFinalTarget: true) is FileSystemInfo final ? Missing(final.FullName) : -ENOENT; }
+        catch (UnauthorizedAccessException) { return -EACCES; }
+        catch (IOException error) { return -Errno(error); }
     }
 
     private static ulong InodeOf(string path) => (ulong)(uint)StringComparer.Ordinal.GetHashCode(Path.GetFullPath(path)) + 2;
@@ -106,7 +118,7 @@ public static unsafe partial class HostSyscalls
             return 0;
         }
         info = Target(path);
-        if (info is null) return SymbolicLinkAt(path) is null ? Missing(path) : -ENOENT;
+        if (info is null) return Unreachable(path);
         bool isDirectory = info is DirectoryInfo;
         stat->Device = 1;
         stat->Inode = InodeOf(info.FullName);
@@ -124,7 +136,7 @@ public static unsafe partial class HostSyscalls
         string path = Resolve(directory, pathPointer);
         if (OpenDevice(path, O_RDONLY) is not null) return 0;
         FileSystemInfo? info = Target(path);
-        if (info is null) return Missing(path);
+        if (info is null) return Unreachable(path);
         uint permissions = PermissionsOf(info, info is DirectoryInfo);
         // The process owns every file it can see (LC-12), so the owner bits decide.
         if ((mode & R_OK) != 0 && (permissions & 0x100) == 0 || (mode & W_OK) != 0 && (permissions & 0x80) == 0 ||
@@ -140,9 +152,11 @@ public static unsafe partial class HostSyscalls
         if (file.Kind != FileKind.Directory) return -ENOTDIR;
         if (file.Entries is null)
         {
+            // Types come from the directory entries themselves, as readdir reports them, so listing a directory the
+            // process may read but not search works; a type that needs a lookup it may not do is DT_UNKNOWN.
             file.Entries = [(".", DT_DIR), ("..", DT_DIR)];
-            foreach (FileSystemInfo entry in new DirectoryInfo(file.Path!).EnumerateFileSystemInfos())
-                file.Entries.Add((entry.Name, entry.LinkTarget is not null ? DT_LNK : entry is DirectoryInfo ? DT_DIR : DT_REG));
+            var options = new EnumerationOptions { AttributesToSkip = 0, IgnoreInaccessible = false };
+            file.Entries.AddRange(new FileSystemEnumerable<(string, byte)>(file.Path!, EntryOf, options));
         }
         int written = 0;
         while (file.EntryIndex < file.Entries.Count)
@@ -163,6 +177,14 @@ public static unsafe partial class HostSyscalls
             file.EntryIndex++;
         }
         return written == 0 && file.EntryIndex < file.Entries.Count ? -EINVAL : written;
+    }
+
+    private static (string Name, byte Type) EntryOf(ref FileSystemEntry entry)
+    {
+        byte type;
+        try { type = (entry.Attributes & FileAttributes.ReparsePoint) != 0 ? DT_LNK : entry.IsDirectory ? DT_DIR : DT_REG; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { type = 0; }
+        return (entry.FileName.ToString(), type);
     }
 
     private static long MakeDirectory(int directory, nint pathPointer, int mode)
@@ -266,7 +288,7 @@ public static unsafe partial class HostSyscalls
         }
         string? path = PathOf(directory, pathPointer, out long error);
         if (path is null) return error;
-        if (Target(path) is not FileSystemInfo info) return Missing(path);
+        if (Target(path) is not FileSystemInfo info) return Unreachable(path);
         if (OperatingSystem.IsWindows())
             info.Attributes = (mode & 0x80) == 0 ? info.Attributes | FileAttributes.ReadOnly : info.Attributes & ~FileAttributes.ReadOnly;
         else File.SetUnixFileMode(info.FullName, (UnixFileMode)(mode & 0xfff));
@@ -305,7 +327,7 @@ public static unsafe partial class HostSyscalls
     private static long ChangeDirectory(nint pathPointer)
     {
         string path = Resolve(AT_FDCWD, pathPointer);
-        if (Target(path) is not FileSystemInfo info) return Missing(path);
+        if (Target(path) is not FileSystemInfo info) return Unreachable(path);
         if (info is not DirectoryInfo) return -ENOTDIR;
         Directory.SetCurrentDirectory(path);
         return 0;
@@ -331,7 +353,7 @@ public static unsafe partial class HostSyscalls
             string? path = PathOf(directory, pathPointer, out long error);
             if (path is null) return error;
             info = Target(path);
-            if (info is null) return Missing(path);
+            if (info is null) return Unreachable(path);
         }
         DateTime now = DateTime.UtcNow;
         for (int index = 0; index < 2; index++)
@@ -354,7 +376,7 @@ public static unsafe partial class HostSyscalls
     {
         string? path = PathOf(directory, pathPointer, out long error);
         if (path is null) return error == -EINVAL ? FillUnknown(status) : error;
-        if (Target(path) is null) return Missing(path);
+        if (Target(path) is null) return Unreachable(path);
         DriveInfo? drive = DriveInfo.GetDrives().Where(candidate => path.StartsWith(candidate.RootDirectory.FullName, StringComparison.Ordinal))
             .MaxBy(candidate => candidate.RootDirectory.FullName.Length);
         FillUnknown(status);

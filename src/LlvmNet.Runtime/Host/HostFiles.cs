@@ -375,6 +375,9 @@ public static unsafe partial class HostSyscalls
         {
             if (create && exclusive) return -EEXIST;
             if (access != O_RDONLY || create || truncate) return -EISDIR;
+            // A directory the process may not read fails at open, as opendir does natively, not at the first read.
+            if ((flags & O_PATH) == 0)
+                using (IEnumerator<string> entries = Directory.EnumerateFileSystemEntries(path).GetEnumerator()) entries.MoveNext();
             return Install(new OpenFile(FileKind.Directory, null, path, flags), closeOnExec);
         }
         bool exists = File.Exists(path);

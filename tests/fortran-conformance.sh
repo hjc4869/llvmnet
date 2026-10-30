@@ -45,10 +45,15 @@ def build(kind, directory, sources, options):
         command = ['flang-22', '-w', *options, '-module-dir', directory, *[s for s in sources if not s.endswith('.c')], *objects, '-o', 'program']
     else:
         command = [llvmnet, '--runtime=portable', '-w', *options, '-module-dir', directory, *sources, '-o', 'program']
-    status, _ = run(command, directory, 600)
-    if status == 'timeout': return 'compile timeout'
-    if status == 1 and kind == 'llvmnet': return 'rejected'
-    return None if status == 0 else 'compile'
+    try:
+        result = subprocess.run(command, cwd=directory, timeout=600, capture_output=True, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return 'compile timeout'
+    if result.returncode == 0: return None
+    if kind == 'llvmnet' and result.returncode == 1:
+        first = next((l for l in result.stderr.decode(errors='replace').splitlines() if 'error' in l), '')
+        return 'rejected: ' + first.replace('llvmnet: error: ', '')[:140]
+    return 'compile'
 
 def outcome(kind, directory, sources, options, timeout):
     error = build(kind, directory, sources, options)
@@ -85,13 +90,20 @@ def gfortran_tests():
             if name_filter and name_filter not in test: continue
             yield 'gfortran', test, [os.path.join(directory, s) for s in sources], options.split(), xfail == 'xfail', None
 
+def with_status(result):
+    """The test-suite's reference outputs end with the exit status its runner appends after the program's output."""
+    status, stdout = result
+    if not isinstance(status, int): return None
+    if stdout and not stdout.endswith(b'\n'): stdout += b'\n'
+    return stdout + f'exit {status}\n'.encode()
+
 def check(test):
     group, name, sources, options, xfail, reference = test
     work = os.path.join(output, 'work', group, name.replace('/', '_'))
     native = outcome('native', os.path.join(work, 'native'), sources, options, 60)
     if reference is not None:
         expected = open(reference, 'rb').read()
-        native_ok = native[0] == 0 and native[1] == expected
+        native_ok = with_status(native) == expected
     else:
         native_ok = (native[0] != 0) if xfail else native[0] == 0
     if not native_ok:
@@ -99,8 +111,8 @@ def check(test):
         return group, name, 'native-fails', ''
     managed = outcome('llvmnet', os.path.join(work, 'llvmnet'), sources, options, 120)
     if reference is not None:
-        passed = managed[0] == 0 and managed[1] == expected
-        reason = 'output differs' if managed[0] == 0 else str(managed[0])
+        passed = with_status(managed) == expected
+        reason = 'output differs' if isinstance(managed[0], int) else str(managed[0])
     elif xfail:
         passed, reason = managed[0] != 0, 'expected failure did not happen'
     else:

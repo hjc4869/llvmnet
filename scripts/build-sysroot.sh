@@ -18,7 +18,7 @@ inputs="$(
     cd "$root"
     {
         { find ports -type f; printf '%s\n' scripts/build-sysroot.sh scripts/build-portable-libc.sh scripts/build-portable-cxx.sh \
-            scripts/build-flang-rt.sh src/LlvmNet.Compiler/Driver.cs src/LlvmNet.Compiler/PortableAbi.cs \
+            scripts/build-flang-rt.sh scripts/build-portable-builtins.sh src/LlvmNet.Compiler/Driver.cs src/LlvmNet.Compiler/PortableAbi.cs \
             src/LlvmNet.Compiler/Llvm.cs native/abi.cpp; } | LC_ALL=C sort | xargs sha256sum
         grep -E '^(musl|llvm-project)\s' scripts/sources.lock
         clang-22 --version | head -n 1
@@ -33,7 +33,8 @@ export LLVMNET_SKIP_BUILD=1
 rm -rf "${build:?}"
 mkdir -p "$build"
 start=$(date +%s)
-steps=("libc:build-portable-libc.sh $build" "cxx:build-portable-cxx.sh $build" "flang-rt:build-flang-rt.sh portable $build"
+steps=("libc:build-portable-libc.sh $build" "builtins:build-portable-builtins.sh $build" "cxx:build-portable-cxx.sh $build"
+    "flang-rt:build-flang-rt.sh portable $build"
     "flang-rt-system:build-flang-rt.sh system $build/system")
 for step in "${steps[@]}"; do
     name="${step%%:*}"

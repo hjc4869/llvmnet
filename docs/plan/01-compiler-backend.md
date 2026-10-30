@@ -72,6 +72,9 @@ The backend is the part of llvmnet that must be kept. This workstream makes it p
 
 - [x] **BE-35** (S, P0) Globals beyond 2 GB. Constant data was collected in one array, so a global over 2 GB, such as YARPGen's multidimensional arrays, failed with an internal overflow error (19 of 400 programs), and every global was cleared page by page at startup. — **Done** (`7a607d2`): sparse 1 MB constant chunks; globals use lazily zeroed memory like ELF `.bss` (`tests/c/huge-globals.c`, 5 GB of globals in 36 MB of memory).
 - [ ] **BE-36** (M, P1) Integers wider than 128 bits. Clang stores a run of adjacent bit-fields as one integer of the combined width, such as `i136` or `i176`, at every optimization level, and llvmnet rejects these types (7 of 884 compared csmith programs). Lower arbitrary widths, at least loads, stores, shifts, masks, extension and truncation, instead of rejecting them.
+- [ ] **BE-37** (S, P1) The remaining `x86_fp80` intrinsics (`llvm.pow`, `log10`, `minimum`, `maximum`, `canonicalize` and others listed as rejected in `docs/user/support-matrix.md`); `copysign`, `maxnum` and `minnum` were added when musl and compiler-rt needed them. Found by the libc-test and gfortran conformance runs.
+- [ ] **BE-38** (M, P2) Half-precision (`half`, Fortran `REAL(2)`) constants and arithmetic, rejected today ("Unsupported floating constant: half"); found by the gfortran conformance run.
+- [ ] **BE-39** (S, P2) Decide whether portable mode adopts system mode's scalar register-slot rules for direct calls (BE-18): Flang with `-fdefault-integer-8` declares `_FortranAProgramStart` with a 64-bit argument count, and C interoperability passes `character(1)` by value as `[1 x i8]` where C takes `char`. Both work natively by the x86-64 calling convention that dotnet64-v2 follows, and are rejected in portable mode today (9 gfortran conformance tests).
 
 ### Vectors
 

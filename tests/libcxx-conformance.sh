@@ -58,32 +58,52 @@ for directory in "${directories[@]}"; do paths+=("$llvm/libcxx/test/$directory")
 status=0
 # Experimental features (libc++experimental: the time-zone database) are not part of the sysroot.
 python3 "$test_output/lit.py" -q -j "${LIBCXX_LIT_JOBS:-$(nproc)}" --param enable_experimental=False --timeout 600 --max-failures 100000 \
-    --resultdb-output "$test_output/results.json" "${paths[@]}" >"$test_output/lit.log" 2>&1 || status=$?
+    --resultdb-output "$test_output/results.json" --xunit-xml-output "$test_output/results.xml" "${paths[@]}" \
+    >"$test_output/lit.log" 2>&1 || status=$?
 tail -n 30 "$test_output/lit.log"
 python3 - "$test_output" "$llvm/libcxx/test/" "${LIBCXX_THRESHOLD:-0}" "${directories[@]}" <<'PYEOF'
-import json, sys, collections
+import json, re, sys, collections, xml.etree.ElementTree as ET
 output, prefix, threshold, directories = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4:]
 results = json.load(open(f'{output}/results.json'))['tests']
+# The reason for each failure, from the failure output in the xUnit report.
+reasons = {}
+for case in ET.parse(f'{output}/results.xml').getroot().iter('testcase'):
+    failure = case.find('failure')
+    if failure is None: continue
+    text = failure.text or ''
+    # classname is "<suite>.<directory>" with the dots of directory names turned into underscores.
+    name = case.get('classname', '').split('.', 1)[-1] + '/' + case.get('name', '')
+    if 'failed to fork a process to perform a death test' in text: reason = 'death test (needs fork)'
+    elif m := re.search(r'Unresolved function: (\S+)', text): reason = 'link: unresolved ' + m.group(1)
+    elif m := re.search(r'llvmnet: error: ([^\n]{0,120})', text): reason = 'llvmnet: ' + m.group(1)
+    elif m := re.search(r'error: ([^\n]{0,120})', text): reason = 'compile: ' + m.group(1)
+    elif m := re.search(r'Unhandled exception\. ([^\n]{0,120})', text): reason = 'exception: ' + m.group(1)
+    elif m := re.search(r'(Assertion [^\n]{0,140})', text): reason = m.group(1)
+    else: reason = 'run failed'
+    reasons[name] = reason
 counts = collections.defaultdict(collections.Counter)
 failures = []
 for test in results:
     name = test['testId'].split(' :: ', 1)[-1]
     directory = next((d for d in directories if name.startswith(d + '/')), 'other')
     code = test['status']
-    counts[directory][code] += 1
     # The result database reports UNSUPPORTED as SKIP, an expected failure as PASS and an unexpected pass as FAIL.
     if code in ('FAIL', 'TIMEOUT', 'UNRESOLVED', 'XPASS'):
-        failures.append(f'{code}\t{name}')
+        directory_part, _, file_part = name.rpartition('/')
+        reason = reasons.get(directory_part.replace('.', '_') + '/' + file_part, 'timeout' if code == 'TIMEOUT' else 'run failed')
+        if reason == 'death test (needs fork)': code = 'DEATH'
+        failures.append(f'{code}\t{name}\t{reason}')
+    counts[directory][code] += 1
 below = []
 with open(f'{output}/summary.tsv', 'w') as summary:
-    summary.write('directory\tpassed\tfailed\tunsupported\texpected failures (separate statuses only)\tpass rate\n')
+    summary.write('directory\tpassed\tfailed\tdeath tests (need fork)\tunsupported\tpass rate without death tests\n')
     for directory in directories:
         c = counts[directory]
         passed, failed = c['PASS'], c['FAIL'] + c['TIMEOUT'] + c['UNRESOLVED'] + c['XPASS']
         rate = 100.0 * passed / (passed + failed) if passed + failed else 100.0
         unsupported = c['SKIP'] + c['UNSUPPORTED']
-        summary.write(f'{directory}\t{passed}\t{failed}\t{unsupported}\t{c["XFAIL"]}\t{rate:.1f}\n')
-        print(f'{directory}: {passed} passed, {failed} failed, {unsupported} unsupported ({rate:.1f}%)')
+        summary.write(f'{directory}\t{passed}\t{failed}\t{c["DEATH"]}\t{unsupported}\t{rate:.1f}\n')
+        print(f'{directory}: {passed} passed, {failed} failed, {c["DEATH"]} death tests that need fork, {unsupported} unsupported ({rate:.1f}%)')
         if rate < threshold: below.append(directory)
 open(f'{output}/failures.txt', 'w').write('\n'.join(sorted(failures)) + '\n')
 if below:
