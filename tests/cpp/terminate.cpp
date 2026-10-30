@@ -26,6 +26,17 @@ static void violate_noexcept() noexcept
     throw_error();
 }
 
+// A constructor that calls its own pure virtual function through a pointer reaches __cxa_pure_virtual.
+struct Abstract {
+    Abstract() { call(this); }
+    virtual ~Abstract() {}
+    virtual void run() = 0;
+    static void call(Abstract *self) { self->run(); }
+};
+struct Concrete : Abstract {
+    void run() override {}
+};
+
 int main(int count, char **arguments)
 {
     if (count != 2)
@@ -51,5 +62,7 @@ int main(int count, char **arguments)
         std::set_terminate(throwing_handler);
     if (std::strcmp(arguments[1], "uncaught") == 0)
         throw_error();
+    if (std::strcmp(arguments[1], "pure") == 0)
+        Concrete concrete;
     std::terminate();
 }

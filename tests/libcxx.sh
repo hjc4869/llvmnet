@@ -25,9 +25,9 @@ compare smoke "$root/tests/cpp/libcxx/smoke.cpp" c++23
 "$llvmnet" --runtime=portable -std=c++23 -O1 --nativeaot "$root/tests/cpp/libcxx/smoke.cpp" -o "$test_output/smoke-aot" >"$test_output/aot.log" 2>&1
 (cd "$test_output" && timeout 120 ./smoke-aot >smoke-aot.txt)
 diff -u "$test_output/smoke-native.txt" "$test_output/smoke-aot.txt"
-for fixture in core rtti exception-filters exception-pointer aggregate-callbacks futures nothrow portable portable-spec-clock; do
+for fixture in core rtti exception-filters exception-pointer aggregate-callbacks futures nothrow portable portable-spec-clock allocation-abi; do
     compare "$fixture" "$root/tests/cpp/$fixture.cpp" c++17
 done
 compare streams "$root/tests/cpp/streams.cpp" c++17 file
 compare filesystem "$root/tests/cpp/filesystem.cpp" c++17 directory
-printf 'PASS: libc++ and libc++abi on musl: smoke program (JIT and NativeAOT) and 11 C++ fixtures match native\n'
+printf 'PASS: libc++ and libc++abi on musl: smoke program (JIT and NativeAOT) and 12 C++ fixtures match native\n'
