@@ -13,6 +13,7 @@ public static unsafe partial class HostSyscalls
     private static int nextThreadId = 1;
     private static int clonedThreads;
     private static readonly ConcurrentDictionary<nint, object> priorityFutexes = new();
+    private static bool priorityFutexesUsed;
     private static readonly ConcurrentDictionary<int, Thread> threads = new();
     [ThreadStatic] private static nint robustList;
 
@@ -98,11 +99,16 @@ public static unsafe partial class HostSyscalls
         internal FutexWaiter? Head, Tail;
         private int locked;
 
+        /// <summary>
+        /// Spins and yields, never sleeps: Thread.Sleep would deliver a pending pthread_cancel interrupt here, and an
+        /// interrupted wake would leave its waiters blocked.
+        /// </summary>
         internal void Enter()
         {
             if (Interlocked.CompareExchange(ref locked, 1, 0) == 0) return;
-            var spin = new SpinWait();
-            while (Volatile.Read(ref locked) != 0 || Interlocked.CompareExchange(ref locked, 1, 0) != 0) spin.SpinOnce(-1);
+            for (int spin = 0; Volatile.Read(ref locked) != 0 || Interlocked.CompareExchange(ref locked, 1, 0) != 0; spin++)
+                if (spin < 10) Thread.SpinWait(1 << spin);
+                else Thread.Yield();
         }
 
         internal void Exit() => Volatile.Write(ref locked, 0);
@@ -156,6 +162,7 @@ public static unsafe partial class HostSyscalls
             case FUTEX_REQUEUE or FUTEX_CMP_REQUEUE:
                 return Requeue(address, address2, value, (int)(nint)timeout, command == FUTEX_CMP_REQUEUE ? value3 : null);
             case FUTEX_LOCK_PI or FUTEX_TRYLOCK_PI:
+                Volatile.Write(ref priorityFutexesUsed, true);
                 return LockPriorityInheritance(address, priorityFutexes.GetOrAdd(address, _ => new object()), command == FUTEX_TRYLOCK_PI, timeout);
             case FUTEX_UNLOCK_PI:
                 return UnlockPriorityInheritance(address, priorityFutexes.GetOrAdd(address, _ => new object()));
@@ -168,6 +175,10 @@ public static unsafe partial class HostSyscalls
     private static long FutexWake(nint address, int count, uint bitset)
     {
         if (bitset == 0) return -EINVAL;
+        // A dead thread's robust priority-inheritance mutex: musl marks it owner-died and wakes it with FUTEX_WAKE,
+        // where the kernel would act on the robust list itself, so the FUTEX_LOCK_PI waiters are woken to retry.
+        if (Volatile.Read(ref priorityFutexesUsed) && priorityFutexes.TryGetValue(address, out object? queue))
+            lock (queue) Monitor.PulseAll(queue);
         FutexBucket bucket = BucketOf(address);
         FutexWaiter? woken = null;
         int number = 0;
@@ -239,8 +250,9 @@ public static unsafe partial class HostSyscalls
             if (Dequeue(waiter)) throw;
         }
         if (!waiter.Woken.IsSet && Dequeue(waiter)) return -ETIMEDOUT;
-        // A wake took the waiter off the queue; its signal follows as soon as the waker releases the bucket.
-        waiter.Woken.Wait();
+        // A wake took the waiter off the queue; its signal follows as soon as the waker releases the bucket. This
+        // wait is not interruptible, so a cancellation arriving now cannot leave the event set for the next wait.
+        while (!waiter.Woken.IsSet) Thread.Yield();
         waiter.Woken.Reset();
         return 0;
     }
