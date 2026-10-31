@@ -73,8 +73,20 @@ public static unsafe partial class HostSyscalls
     private static void Fill(Mapping mapping, nint address, long length, bool zeroed = false)
     {
         if (!zeroed) NativeMemory.Clear((void*)address, (nuint)length);
-        if (mapping.File?.Stream is not FileStream stream) return;
         long fileOffset = mapping.Offset + (address - mapping.Address);
+        if (mapping.File?.Stream is MemoryStream memory)
+        {
+            // A synthetic file (/etc/passwd, a generated zoneinfo image) is read-only and lives in memory.
+            lock (memory)
+            {
+                long saved = memory.Position;
+                memory.Position = Math.Min(fileOffset, memory.Length);
+                for (int read; length > 0 && (read = memory.Read(new Span<byte>((void*)address, (int)Math.Min(length, int.MaxValue)))) > 0; address += read, length -= read) { }
+                memory.Position = saved;
+            }
+            return;
+        }
+        if (mapping.File?.Stream is not FileStream stream) return;
         long available = Math.Max(0, Math.Min(length, RandomAccess.GetLength(stream.SafeFileHandle) - fileOffset));
         for (long done = 0; done < available;)
         {
@@ -108,7 +120,7 @@ public static unsafe partial class HostSyscalls
         {
             file = Lookup(descriptor);
             if (file is null) return -EBADF;
-            if (file.Stream is not FileStream) return -ENODEV;
+            if (file.Stream is not (FileStream or MemoryStream)) return -ENODEV;
             if (!file.CanRead || type == MAP_SHARED && (protection & PROT_WRITE) != 0 && !file.CanWrite) return -EACCES;
         }
         if ((flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0)

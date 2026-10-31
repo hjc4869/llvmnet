@@ -440,7 +440,10 @@ public static unsafe partial class HostSyscalls
         return Install(new OpenFile(FileKind.Regular, new FileStream(path, options), path, flags & ~O_CREAT & ~O_EXCL & ~O_TRUNC), closeOnExec);
     }
 
-    /// <summary>Paths every host provides itself: random sources, null, zero, the standard streams and the synthetic identity files.</summary>
+    /// <summary>
+    /// Paths every host provides itself: random sources, null, zero, the standard streams, the synthetic identity files and,
+    /// where the host has no zoneinfo, generated TZif images.
+    /// </summary>
     private static OpenFile? OpenDevice(string path, int flags)
     {
         Stream? stream = path switch
@@ -450,6 +453,7 @@ public static unsafe partial class HostSyscalls
             "/dev/zero" => new ZeroStream(),
             "/etc/passwd" => new MemoryStream(Encoding.UTF8.GetBytes(PasswordFile()), writable: false),
             "/etc/group" => new MemoryStream(Encoding.UTF8.GetBytes(GroupFile()), writable: false),
+            _ when HostZoneInfo.Image(path) is byte[] zone => new MemoryStream(zone, writable: false),
             _ => null
         };
         if (stream is not null) return new OpenFile(stream is MemoryStream ? FileKind.Regular : FileKind.Device, stream, null, flags);
