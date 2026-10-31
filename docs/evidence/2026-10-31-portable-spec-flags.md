@@ -5,7 +5,7 @@ Host: Linux x86-64 (Debian 13), 32 logical CPUs, .NET SDK 10.0.403, LLVM/Clang/F
 ## What changed
 
 - BE-41 (`d2dc451`): portable mode accepts `-funsigned-char` (ADR-09). 526.blender_r also needs SPEC's `-DSPEC_NO_ISFINITE` in portable mode, because libc++'s `<math.h>` does not declare `std::isfinite`.
-- LC-31: the entries that select platform code by `__linux__` build with per-benchmark settings in portable mode (ADR-14), listed in [spec-portable-limitations.md](../spec-portable-limitations.md#portable-settings-in-the-spec-configuration). Two headers in `config/spec/include` stand in for what portable mode does not have: `linux/limits.h` (xalancbmk) and a declarations-only `execinfo.h` (LLVM). The driver now forwards `-idirafter <dir>`.
+- LC-31: the entries that select platform code by `__linux__` build with per-benchmark settings in portable mode (ADR-14), listed in [dev/spec.md](../dev/spec.md#portable-settings-in-the-spec-configuration). Two headers in `config/spec/include` stand in for what portable mode does not have: `linux/limits.h` (xalancbmk) and a declarations-only `execinfo.h` (LLVM). The driver now forwards `-idirafter <dir>`.
 
 ## SPEC CPU checks in portable mode
 

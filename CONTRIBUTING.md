@@ -38,7 +38,7 @@ The runner builds the solution once, runs tests in parallel, continues after fai
    source "$(dirname "$0")/lib.sh"
    ```
 
-   `lib.sh` sets strict mode, `root`, `llvmnet`, `checks` and `test_output`, and runs `scripts/ensure-built.sh` unless the runner already did. `tests/run.sh --help` lists the other header keys (`serial`, `after`, `timeout`).
+   `lib.sh` sets strict mode, `root`, `llvmnet`, `checks` and `test_output`, and runs `scripts/ensure-built.sh` unless the runner already did. `tests/run.sh --help` lists the other header keys (`serial`, `after`, `timeout`); [docs/dev/testing.md](docs/dev/testing.md) describes the tags, the oracles and the nightly suites.
 3. Compare against a native oracle where possible: build the same fixture with `clang-22` or `flang-22` and diff the outputs. Pure IR tests may use expected-output files instead.
 4. Print one `PASS: ...` line per property checked and exit nonzero on any failure.
 

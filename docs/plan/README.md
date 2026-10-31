@@ -2,7 +2,7 @@
 
 This directory is the working plan for taking llvmnet from a prototype that runs ffmpeg and SPEC CPU to a toolchain that other people can depend on. It is written for human review and progress tracking: every piece of work is a checkbox with an ID, a size, a priority and a done condition, grouped into workstreams and sequenced by milestones. The architecture decisions the plan depends on are listed separately so they can be accepted or rejected before work starts.
 
-Related: [roadmap.md](../roadmap.md) (the earlier priority ordering), [status.md](../status.md), [architecture.md](../architecture.md), [toolchain.md](../toolchain.md).
+Related: [README.md](../../README.md), [user/limitations.md](../user/limitations.md), [dev/architecture.md](../dev/architecture.md), [user/modes.md](../user/modes.md).
 
 ## How to use this plan
 
@@ -19,12 +19,13 @@ The owner settled every open decision in [decisions.md](decisions.md): the `dotn
 
 ## Progress (2026-10-31, M7)
 
-Measurements are in [evidence/2026-10-31-m7-toolchain.md](../evidence/2026-10-31-m7-toolchain.md).
+Measurements are in [evidence/2026-10-31-m7-toolchain.md](../evidence/2026-10-31-m7-toolchain.md). Every M7 exit item is done; the signed packages the exit also asks for are built and verified locally and will be signed by the release workflow once the repository is on GitHub (FD-19).
 
 - **SA-01.** `--native-import` is removed; `--system-library` is the one native path in system mode, and the option fails with that guidance.
 - **TC-01.** The driver's options are one table with four treatments per runtime mode (handled, passed to the frontend, accepted without effect, rejected with a reason), from which `--help` and the tables of `docs/user/driver.md` are generated; every option Clang's and Flang's `--help` list works or fails with a clear error in both modes (`tests/driver-options.sh`).
 - **TC-02 to TC-05.** Link inputs (`-c` on IR and objects, `-l:`, whole archives, order-independent archive resolution, duplicate definitions naming both files, `-r` of archives, the `-nostdlib` family), the `-O1` default with every level tested against native and JIT-validated at `-O0` and `-O3`, `-g`, `-fno-exceptions`, `-fno-rtti`, `-fvisibility` (a library now exports only what a native one would), per-alias language defaults, and a diagnostics pipeline that passes the frontends' output through byte for byte and gives llvmnet's own errors Clang's form and colors.
 - **TC-13 and TC-11.** The bundled toolchain drops Clang's sanitizer and profiling runtimes (609 MB to 533 MB installed; 100 MB compressed, 33 MB thin). `scripts/release-artifacts.sh` builds the two archives, the dotnet tool package and the sums reproducibly, and `.github/workflows/release.yml` runs the gate on a tag, builds twice, signs with cosign's keyless signing and creates the release; the signing and the release itself wait for the repository on GitHub (FD-19).
+- **TC-16.** `docs/` is `docs/user/` (getting started, driver, runtime modes, linking, deployment, limitations, troubleshooting, support matrix, SIMD128), `docs/dev/` (architecture, host ABI, calling convention, C++ bridge, versioning, testing, adding a host function, release process, artifacts, SPEC, ffmpeg, video benchmark) and `docs/evidence/`; `README.md` is written for users, with every claim pointing at a test or an evidence file; the old `toolchain.md`, `status.md`, `roadmap.md` and SPEC pages are gone and every link in the repository resolves (0 broken of the relative Markdown links).
 - **TC-17.** `docs/user/limitations.md` is generated from the support matrix and from the runtime's own table of the system calls it refuses by name (16 services, each with its errno and reason), which the dispatcher now consults; `tests/limitations.sh` keeps the page current and checks the errno values.
 - **TC-12.** NativeAOT provisioning: an offline NuGet feed (`scripts/nativeaot-feed.sh`, `LLVMNET_NUGET_FEED`) and a prerequisite check that names the missing SDK, compiler, zlib, cross sysroot or feed package in one line before `dotnet publish` runs.
 
@@ -70,7 +71,7 @@ Verified on this host during the plan review (Linux x86-64, .NET SDK 10.0.403, r
 | `dotnet build llvmnet.slnx -c Release` | succeeded, 0 warnings |
 | `tests/smoke.sh`, `tests/driver.sh` | pass (2 s and 8 s) |
 | `tests/all.sh core` (53 scripts, JIT and NativeAOT, both ABIs) | pass, 151 checks, 376 s wall (sequential runner before FD-12) |
-| Integration, ffmpeg, SPEC tags | not rerun today; last evidence 2026-09-08 in [status.md](../status.md) |
+| Integration, ffmpeg, SPEC tags | not rerun today; last evidence 2026-09-08 in the status page of that date (since replaced by the evidence files) |
 
 What exists and works, per the September evidence: C, C++ and Fortran compile through Clang/Flang 22 to CIL; three runtime modes (`managed-host`, `system`, `portable`); NativeAOT output; a relocatable toolchain package; the ffmpeg browser profile with threading and SIMD128 kernels matching native hashes on a 4K HDR file; every installed SPEC CPU 2017/2026 entry validated on test inputs in system mode, 20 of 101 in portable mode.
 
@@ -141,7 +142,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M4 | 0.5 | done; libc++ localization 100%, input.output 97.8% (LC-30 services), SPEC C++ parity holds | 0 | 2026-10-31 |
 | M5 | 0.5 | done; flang-rt and portable OpenMP delivered (FT-08), 22 of 25 OpenMP speed entries pass, the rest excluded | 0 | 2026-10-31 |
 | M6 | 0.6 | exit items done on all three hosts; two weeks of green CI runs need GitHub (FD-19) | 0 | 2026-10-31 |
-| M7 | 0.7 | in progress; SA-01, TC-01 to TC-05, TC-11 to TC-13, TC-17 done (signed packages need GitHub, FD-19) | 1 | 2026-10-31 |
+| M7 | 0.7 | exit items done; signed packages from a tag need the repository on GitHub (FD-19) | 0 | 2026-10-31 |
 | M8 | 0.7 | not started | 2 | 2026-10-30 |
 | M9 | 1.0-rc | not started | 6 | 2026-10-30 |
 

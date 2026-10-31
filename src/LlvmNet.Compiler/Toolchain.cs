@@ -94,7 +94,7 @@ internal static class Toolchain
     /// source, and copies of the image, its managed references and system-mode bridge archives, referenced relative to
     /// the project. The directory is relocatable: "dotnet publish NativeHost.csproj -c Release -r &lt;rid&gt;" builds it
     /// on any host with the .NET 10 SDK and that host's native toolchain, which is how portable images are published
-    /// for Windows and macOS from a Linux build (docs/toolchain.md). Returns the assembly name, which names the executable.
+    /// for Windows and macOS from a Linux build (docs/user/deployment.md). Returns the assembly name, which names the executable.
     /// </summary>
     internal static string AotProject(string assembly, string projectDirectory, string preference, string instructionSet, bool debug, IReadOnlyList<string> systemLibraries)
     {

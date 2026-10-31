@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tags: toolchain cpp
 # requires: clang++
-# Causes of portable SPEC failures recorded in docs/spec-portable-limitations.md: resolved causes must build and
+# Causes of portable SPEC failures recorded in docs/dev/spec.md: resolved causes must build and
 # exit like their native builds, and the remaining ones must still fail with their diagnostic.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"

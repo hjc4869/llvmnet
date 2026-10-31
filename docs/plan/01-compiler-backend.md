@@ -13,7 +13,7 @@ The backend is the part of llvmnet that must be kept. This workstream makes it p
 - Atomics are implemented with one process-wide lock (`Atomics.gate`) for every width and address. Correct, but every atomic in a threaded program serializes on it.
 - Allocas use `localloc`, or a heap-backed `StackMemory` list when the function has stack save/restore or nonlocal jumps. `byval` arguments are copied per call.
 - Debug metadata is discarded (`llvm.dbg.*` ignored, `-g` forwarded to Clang only). Stack traces show `Program.<llvm-name>` and no source lines. Diagnostics are exception messages without file/line; `LLVMNET_TRACE=1` adds a .NET stack trace.
-- Known unsupported (from `docs/status.md`): computed goto / `indirectbr`, cross-native-frame `longjmp`, external native TLS, scalable vectors, masked memory intrinsics, `fp128`, some wide-integer intrinsic families, inline assembly beyond an allowlist, and methods that exceed CLR local limits.
+- Known unsupported (from `docs/user/limitations.md`): computed goto / `indirectbr`, cross-native-frame `longjmp`, external native TLS, scalable vectors, masked memory intrinsics, `fp128`, some wide-integer intrinsic families, inline assembly beyond an allowlist, and methods that exceed CLR local limits.
 - The core gate, driver test and smoke test pass on the current host.
 
 ## Items

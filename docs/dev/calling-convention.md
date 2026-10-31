@@ -36,7 +36,7 @@ A function pointer is a raw method address, and `calli` uses the call site's CIL
 - Casts between pointer types are always safe: `int (*)(char *)` and `int (*)(void *)` are both `int32(native int)`.
 - Integer types of the same CIL class are safe: `i8`, `i16` and `i32` are all `int32`.
 - Anything else is undefined behavior in the CLR, as it is in C: `int` versus `long`, `float` versus `double`, a different parameter count, aggregate versus scalar, or variadic versus fixed. The JIT does not detect these, so results can be wrong values, corrupted registers or crashes.
-- In system mode, calls through pointers to native functions go through generated native bridges; native code calling translated callbacks is described in [toolchain.md](../toolchain.md#system-abi).
+- In system mode, calls through pointers to native functions go through generated native bridges; native code calling translated callbacks is described in [user/modes.md](../user/modes.md#system-abi).
 
 ### Finding incompatible indirect calls
 

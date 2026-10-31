@@ -4,7 +4,7 @@ WebAssembly's fixed 128-bit SIMD operations map onto .NET's architecture-neutral
 
 The opt-in `--simd128` option compiles code written against WebAssembly's `wasm_simd128.h` intrinsics, in both runtime modes and without changing their 64-bit data ABI. It supports the subset of intrinsics that ffmpeg's WebAssembly HEVC kernels use. Exactly 128-bit vector values become `Vector128<byte>`, and each intrinsic becomes a call to a managed helper. Other vector arithmetic is scalarized as usual.
 
-The ffmpeg profile `FFMPEG_SIMD128=1` enables the HEVC IDCT at 8 and 10 bits and SAO at 8 bits. With the default baseline instruction set, NativeAOT code for these kernels is slower than the scalar build; host-targeted NativeAOT and the JIT are faster (PF-08). [video-simd128-performance.md](video-simd128-performance.md) describes how to measure this.
+The ffmpeg profile `FFMPEG_SIMD128=1` enables the HEVC IDCT at 8 and 10 bits and SAO at 8 bits. With the default baseline instruction set, NativeAOT code for these kernels is slower than the scalar build; host-targeted NativeAOT and the JIT are faster (PF-08). [dev/video-benchmark.md](../dev/video-benchmark.md) describes how to measure this.
 
 ## Build ffmpeg
 
@@ -16,9 +16,9 @@ LLVMNET_RUNTIME=portable FFMPEG_SIMD128=1 bash scripts/build-ffmpeg.sh
 dotnet artifacts/ffmpeg-browser-portable-simd128/decode.dll input.mp4 100 video 4 frame
 ```
 
-SIMD build directories have a `-simd128` suffix and share the dependency builds of their runtime mode. The profile configures ffmpeg with `--arch=wasm --enable-asm --enable-simd128` and keeps inline assembly, x86 assembly, hardware decoders and networking disabled. ffmpeg's `ARCH_WASM` selects its C SIMD DSP kernels, while LLVM targets llvmnet's 64-bit ABI. For the portable build, a patched copy of ffmpeg's `configure` ([config/ffmpeg-configure.patch](../config/ffmpeg-configure.patch)) checks `posix_memalign` through `stdlib.h`.
+SIMD build directories have a `-simd128` suffix and share the dependency builds of their runtime mode. The profile configures ffmpeg with `--arch=wasm --enable-asm --enable-simd128` and keeps inline assembly, x86 assembly, hardware decoders and networking disabled. ffmpeg's `ARCH_WASM` selects its C SIMD DSP kernels, while LLVM targets llvmnet's 64-bit ABI. For the portable build, a patched copy of ffmpeg's `configure` ([config/ffmpeg-configure.patch](../../config/ffmpeg-configure.patch)) checks `posix_memalign` through `stdlib.h`.
 
-The header is [sysroot/simd128/include/wasm_simd128.h](../sysroot/simd128/include/wasm_simd128.h), selected by `--simd128` in both modes; the helpers are in [src/LlvmNet.Runtime/Simd128.cs](../src/LlvmNet.Runtime/Simd128.cs). Partial 64-bit loads and stores access exactly eight bytes, and the header checks shuffle and lane immediates. Intrinsics the header does not provide are compile errors.
+The header is [sysroot/simd128/include/wasm_simd128.h](../../sysroot/simd128/include/wasm_simd128.h), selected by `--simd128` in both modes; the helpers are in [src/LlvmNet.Runtime/Simd128.cs](../../src/LlvmNet.Runtime/Simd128.cs). Partial 64-bit loads and stores access exactly eight bytes, and the header checks shuffle and lane immediates. Intrinsics the header does not provide are compile errors.
 
 NativeAOT can target the build host's CPU explicitly:
 
@@ -40,9 +40,9 @@ FFMPEG_SIMD128_SKIP_BUILD=1 bash tests/ffmpeg-simd128.sh
 
 The tests need Clang 22 with the WebAssembly target, a `wasm-ld` executable (`WASM_LD` overrides discovery), Node.js with SIMD support, and .NET 10 with the NativeAOT publishing tools. `tests/ffmpeg-simd128.sh` also needs a host ffmpeg with libx265 to generate its fixtures.
 
-- [tests/wasm-simd128.sh](../tests/wasm-simd128.sh) compiles [tests/wasm/simd128.c](../tests/wasm/simd128.c) with Clang's real WebAssembly intrinsics and runs it in Node as the oracle. [tests/LlvmNet.Checks/Simd128Probe.cs](../tests/LlvmNet.Checks/Simd128Probe.cs) evaluates the same 21 operations on the same 67 input records (three boundary cases and 64 deterministic random ones) with `Vector128<T>`. Every result must match under the default JIT, with `DOTNET_EnableHWIntrinsic=0` (which must report no hardware acceleration) and under NativeAOT.
-- [tests/simd128.sh](../tests/simd128.sh) compiles the same C fixture with llvmnet's header in both modes and compares the output with the WebAssembly oracle under the JIT, the software fallback, baseline NativeAOT and host-targeted NativeAOT.
-- [tests/ffmpeg-simd128.sh](../tests/ffmpeg-simd128.sh) checks that ffmpeg dispatches to the SIMD kernels and compares 512 IDCT and 144 SAO cases with scalar ffmpeg, including output-buffer boundaries. It decodes 8- and 10-bit HEVC fixtures with frame and slice threading in both modes under the JIT, the software fallback and NativeAOT, compares the frame hashes with the native decoder, and requires the portable decoder to have no P/Invoke imports.
+- [tests/wasm-simd128.sh](../../tests/wasm-simd128.sh) compiles [tests/wasm/simd128.c](../../tests/wasm/simd128.c) with Clang's real WebAssembly intrinsics and runs it in Node as the oracle. [tests/LlvmNet.Checks/Simd128Probe.cs](../../tests/LlvmNet.Checks/Simd128Probe.cs) evaluates the same 21 operations on the same 67 input records (three boundary cases and 64 deterministic random ones) with `Vector128<T>`. Every result must match under the default JIT, with `DOTNET_EnableHWIntrinsic=0` (which must report no hardware acceleration) and under NativeAOT.
+- [tests/simd128.sh](../../tests/simd128.sh) compiles the same C fixture with llvmnet's header in both modes and compares the output with the WebAssembly oracle under the JIT, the software fallback, baseline NativeAOT and host-targeted NativeAOT.
+- [tests/ffmpeg-simd128.sh](../../tests/ffmpeg-simd128.sh) checks that ffmpeg dispatches to the SIMD kernels and compares 512 IDCT and 144 SAO cases with scalar ffmpeg, including output-buffer boundaries. It decodes 8- and 10-bit HEVC fixtures with frame and slice threading in both modes under the JIT, the software fallback and NativeAOT, compares the frame hashes with the native decoder, and requires the portable decoder to have no P/Invoke imports.
 
 ## Operation mappings
 
@@ -76,4 +76,4 @@ The ffmpeg kernel tests also exercise signed short extended multiplication, satu
 
 - [WebAssembly SIMD128 operation semantics](https://github.com/WebAssembly/simd/blob/main/proposals/simd/SIMD.md)
 - [.NET Vector128 API](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.intrinsics.vector128?view=net-10.0)
-- [Compiler architecture](architecture.md)
+- [Compiler architecture](../dev/architecture.md)

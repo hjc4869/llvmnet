@@ -13,7 +13,7 @@ LLVMNET_RUNTIME=portable bash scripts/build-ffmpeg.sh
 
 `LLVMNET_RUNTIME` defaults to `portable`. Outputs go to `artifacts/deps-<mode>`, `artifacts/deps-build-<mode>` and `artifacts/ffmpeg-browser-<mode>`; `LLVMNET_DEPS_PREFIX`, `LLVMNET_DEPS_BUILD_DIR` and `FFMPEG_BUILD_DIR` override them. Each directory records its runtime mode, and the scripts refuse to reuse a directory built for the other mode. Portable build directories also record the sysroot they were built against and start over when it changes.
 
-The sources are the pinned ffmpeg, dav1d, libxml2 and zlib releases from `scripts/sources.lock`, fetched by `scripts/fetch-sources.sh`; `FFMPEG_SOURCE`, `DAV1D_SOURCE`, `LIBXML2_SOURCE` and `ZLIB_SOURCE` select other source trees. The builds need .NET 10, Clang/LLVM 22, CMake, Ninja, Meson and pkg-config. The CMake and Meson cross files ([cmake/llvmnet.cmake](../cmake/llvmnet.cmake), [meson/llvmnet.ini](../meson/llvmnet.ini)) run llvmnet's output executables directly for configure probes.
+The sources are the pinned ffmpeg, dav1d, libxml2 and zlib releases from `scripts/sources.lock`, fetched by `scripts/fetch-sources.sh`; `FFMPEG_SOURCE`, `DAV1D_SOURCE`, `LIBXML2_SOURCE` and `ZLIB_SOURCE` select other source trees. The builds need .NET 10, Clang/LLVM 22, CMake, Ninja, Meson and pkg-config. The CMake and Meson cross files ([cmake/llvmnet.cmake](../../cmake/llvmnet.cmake), [meson/llvmnet.ini](../../meson/llvmnet.ini)) run llvmnet's output executables directly for configure probes.
 
 ## Decode
 
@@ -22,7 +22,7 @@ dotnet artifacts/ffmpeg-browser-system/decode.dll input.mp4 100 video 4 frame
 dotnet artifacts/ffmpeg-browser-portable/decode.dll input.mp4 100 video 4 slice
 ```
 
-The arguments are `input [frame-limit] [video|audio] [threads:1-64] [auto|frame|slice] [hash|bench]`. The defaults are ten frames of video, one thread and `hash`, which prints a hash of every frame. `bench` counts and drains frames without hashing or per-frame output. With an explicit thread count the harness writes the decoder name, the configured count and ffmpeg's active thread type to stderr; frame hashes stay on stdout. A codec that does not support the requested threading mode decodes without ffmpeg worker threads, which the tests detect through the active thread type. dav1d manages its own workers and reports thread type zero. The [SIMD128 profile](simd128.md) uses the same harness.
+The arguments are `input [frame-limit] [video|audio] [threads:1-64] [auto|frame|slice] [hash|bench]`. The defaults are ten frames of video, one thread and `hash`, which prints a hash of every frame. `bench` counts and drains frames without hashing or per-frame output. With an explicit thread count the harness writes the decoder name, the configured count and ffmpeg's active thread type to stderr; frame hashes stay on stdout. A codec that does not support the requested threading mode decodes without ffmpeg worker threads, which the tests detect through the active thread type. dav1d manages its own workers and reports thread type zero. The [SIMD128 profile](../user/simd128.md) uses the same harness.
 
 The scalar system build also links `decode-native` from the same bitcode with Clang. It is the reference decoder for the tests of both modes.
 
@@ -45,7 +45,7 @@ The test builds both modes and compares threaded decodes under the JIT with sing
 | VP9 | frame | 2, 4 | same |
 | dav1d AV1 | its own workers | 2, 4 | same |
 
-The test also requires the portable decoder to have no P/Invoke imports. Variadic callbacks from system libxml2 are covered by [tests/varargs-callbacks.sh](../tests/varargs-callbacks.sh).
+The test also requires the portable decoder to have no P/Invoke imports. Variadic callbacks from system libxml2 are covered by [tests/varargs-callbacks.sh](../../tests/varargs-callbacks.sh).
 
 ## Limits
 

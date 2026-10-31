@@ -1,6 +1,6 @@
 # Architecture
 
-llvmnet translates linked LLVM bitcode to CIL. The same pipeline serves both runtime modes, `portable` (the default) and `system`; [toolchain.md](toolchain.md) defines their ABI and deployment contracts.
+llvmnet translates linked LLVM bitcode to CIL. The same pipeline serves both runtime modes, `portable` (the default) and `system`; [user/modes.md](../user/modes.md) defines their ABI and deployment contracts.
 
 ## Pipeline
 
@@ -20,11 +20,11 @@ Integers up to 32 bits use CIL `int32`, up to 64 bits `int64`, and up to 128 bit
 
 `float` and `double` use their CIL equivalents. `x86_fp80` uses `Float80`, a software value in 16-byte storage with a 64-bit significand, the full extended exponent range and round-to-nearest-even arithmetic; its constants are extracted bit for bit through LLVM. `half`, `bfloat` and `fp128` are rejected. `llvm.fmuladd` rounds the product and the sum separately, which LLVM permits; `llvm.fma` is fused.
 
-Fixed-length vectors are scalarized by LLVM before translation. Vector values that remain at function boundaries use explicit-layout value storage with lane insertion and extraction, including bit-packed integer masks. Scalable vectors, target-specific intrinsics and some generic vector intrinsics are rejected; [user/support-matrix.md](user/support-matrix.md) lists them.
+Fixed-length vectors are scalarized by LLVM before translation. Vector values that remain at function boundaries use explicit-layout value storage with lane insertion and extraction, including bit-packed integer masks. Scalable vectors, target-specific intrinsics and some generic vector intrinsics are rejected; [user/support-matrix.md](../user/support-matrix.md) lists them.
 
 LLVM 22's scalarizer can corrupt the terminator of an `invoke` that returns a vector. Before scalarization, llvmnet wraps such results in a one-field aggregate and extracts the vector in a new normal-edge block, preserving PHI predecessors and the unwind edge.
 
-The opt-in [SIMD128 path](simd128.md) maps exactly 128-bit vector storage to `Vector128<byte>` and keeps the SIMD128 helper calls and vector loads and stores. The helpers use typed `Vector128<T>` reinterpretations and can be inlined by the JIT and NativeAOT. The scalarizer still handles other vector arithmetic.
+The opt-in [SIMD128 path](../user/simd128.md) maps exactly 128-bit vector storage to `Vector128<byte>` and keeps the SIMD128 helper calls and vector loads and stores. The helpers use typed `Vector128<T>` reinterpretations and can be inlined by the JIT and NativeAOT. The scalarizer still handles other vector arithmetic.
 
 ## Memory and Calls
 
@@ -40,7 +40,7 @@ Defined thread-local globals use lazy per-thread storage with initialization and
 
 Variadic calls build a software x86-64 SysV register-save and overflow area, and translated `va_start`, `va_copy` and `va_arg` sequences, including musl's `printf` family, read the same layout. Aggregates passed to variadic functions follow the System V classification: one register slot per eightbyte of a small struct when they all fit, otherwise the overflow area, where `byval` arguments and `long double` also go.
 
-C calls without a prototype may use a variadic LLVM signature for a fixed-arity definition. Direct calls then use the definition when the required argument types match, drop unused trailing arguments such as Fortran hidden character lengths, and discard an unused result. Direct calls also follow x86-64's register-slot rules: `i32` and `i64`, `ptr` and `i64`, and `i1` and `i8` are interchangeable in register positions. Other signature mismatches are compile errors. Missing required arguments are compile errors unless `--trap-missing-arguments` turns the call site into an exception. [dev/calling-convention.md](dev/calling-convention.md) gives the full rules.
+C calls without a prototype may use a variadic LLVM signature for a fixed-arity definition. Direct calls then use the definition when the required argument types match, drop unused trailing arguments such as Fortran hidden character lengths, and discard an unused result. Direct calls also follow x86-64's register-slot rules: `i32` and `i64`, `ptr` and `i64`, and `i1` and `i8` are interchangeable in register positions. Other signature mismatches are compile errors. Missing required arguments are compile errors unless `--trap-missing-arguments` turns the call site into an exception. [dev/calling-convention.md](calling-convention.md) gives the full rules.
 
 In system mode, translated callbacks passed to native code get unmanaged-callable entry points registered against their managed implementations, and indirect calls through those pointers resolve back to the managed method. Native variadic functions are called through LLVM-generated thunks with the call site's signature. Native calls into translated variadic or aggregate callbacks fail with a diagnostic.
 
@@ -48,16 +48,16 @@ In system mode, translated callbacks passed to native code get unmanaged-callabl
 
 `LlvmNet.Runtime` is a .NET assembly copied next to every output. Its public static methods marked with `CExportAttribute` resolve C symbols; the compiler checks them against the LLVM signatures. It contains:
 
-- The host layer (`Host/`, portable mode): the Linux system calls musl issues, implemented over .NET for files, the file system, memory mappings, processes and signals, threads (musl's `clone` on managed threads, futexes) and time. [dev/host-abi.md](dev/host-abi.md) is its contract.
+- The host layer (`Host/`, portable mode): the Linux system calls musl issues, implemented over .NET for files, the file system, memory mappings, processes and signals, threads (musl's `clone` on managed threads, futexes) and time. [dev/host-abi.md](host-abi.md) is its contract.
 - Compiler helpers: atomics, `Float80`, wide integers, math intrinsics, varargs, stack allocation, nonlocal jumps, thread-local storage, SIMD128 and `--check-indirect-calls`.
-- The C++ exception bridge (`Cxx.cs`, [dev/cxx-eh-bridge.md](dev/cxx-eh-bridge.md)).
+- The C++ exception bridge (`Cxx.cs`, [dev/cxx-eh-bridge.md](cxx-eh-bridge.md)).
 - System-mode adapters: native callbacks, `pthread_create` and key destructors, and `atexit`/`exit` ordering.
 
 Atomics on naturally aligned 8- to 64-bit locations use `Interlocked` and `Volatile`, so they are lock-free and interoperate with native atomics in system mode. Misaligned locations take a lock, and 128-bit atomics use a lock striped by address.
 
-In portable mode, musl's pthreads run on managed threads, with the thread pointer and futexes provided by the host layer. In system mode, threads are native pthreads; an adapter wraps thread start and TLS destructors so that callbacks run inside .NET's thread lifetime. Neither mode reproduces native asynchronous signal delivery into arbitrary code; [dev/host-abi.md](dev/host-abi.md) describes how portable mode delivers signals.
+In portable mode, musl's pthreads run on managed threads, with the thread pointer and futexes provided by the host layer. In system mode, threads are native pthreads; an adapter wraps thread start and TLS destructors so that callbacks run inside .NET's thread lifetime. Neither mode reproduces native asynchronous signal delivery into arbitrary code; [dev/host-abi.md](host-abi.md) describes how portable mode delivers signals.
 
-C++ `invoke` becomes a CIL try/catch region. Landing pads select matching C++ types and exception-specification filters, and resume or rethrow propagates a managed exception that carries the C++ object. In portable mode, catch matching, `type_info` and `dynamic_cast` come from libc++abi; in system mode the bridge implements them, and the optional libstdc++ archive (see [toolchain.md](toolchain.md#optional-system-c-library)) supplies the library.
+C++ `invoke` becomes a CIL try/catch region. Landing pads select matching C++ types and exception-specification filters, and resume or rethrow propagates a managed exception that carries the C++ object. In portable mode, catch matching, `type_info` and `dynamic_cast` come from libc++abi; in system mode the bridge implements them, and the optional libstdc++ archive (see [user/modes.md](../user/modes.md#optional-system-c-library)) supplies the library.
 
 Fortran uses Flang 22 CFI descriptors and flang-rt in both modes: compiled against musl and libc++ in the portable sysroot, and against glibc in the system sysroot. System-mode OpenMP links LLVM's native `libomp`; outlined regions remain translated CIL and enter through native-callable thunks, and Flang's host `DO CONCURRENT` lowering uses the same path. Portable mode links LLVM's OpenMP runtime (libomp) from the sysroot, built on musl's pthreads with the port in `ports/openmp`; outlined regions are ordinary translated functions the runtime calls through its C invoker.
 

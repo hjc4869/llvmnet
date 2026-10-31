@@ -77,7 +77,7 @@ The conformance test `tests/host.sh` runs `tests/c/host-errors.c` natively and i
 
 ## Hosts other than Linux
 
-The same image runs on every supported .NET host (Linux x64 and ARM64, Windows x64, macOS ARM64, under the JIT and NativeAOT; [toolchain.md](../toolchain.md#supported-hosts)). Programs see Linux semantics everywhere, so the differences are confined to what the host operating system itself cannot provide. `tests/xp/` runs a fixture set on each host against the native results recorded on Linux ([evidence/2026-10-31-m6-cross-platform.md](../evidence/2026-10-31-m6-cross-platform.md)).
+The same image runs on every supported .NET host (Linux x64 and ARM64, Windows x64, macOS ARM64, under the JIT and NativeAOT; [deployment.md](../user/deployment.md#supported-hosts)). Programs see Linux semantics everywhere, so the differences are confined to what the host operating system itself cannot provide. `tests/xp/` runs a fixture set on each host against the native results recorded on Linux ([evidence/2026-10-31-m6-cross-platform.md](../evidence/2026-10-31-m6-cross-platform.md)).
 
 **macOS ARM64 and Linux ARM64** behave like Linux x64 in every check of `tests/c/host-errors.c`. Errno values that macOS numbers differently from Linux (`ENOTEMPTY`, `ELOOP`, `ENAMETOOLONG` and others above `ERANGE`) are translated; a Darwin error with no Linux counterpart becomes `EIO`.
 

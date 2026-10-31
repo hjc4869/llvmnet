@@ -89,7 +89,7 @@ missing() {
             fuzz-build) { command -v cmake && command -v m4 && command -v clang++-22; } >/dev/null || { echo "cmake, m4 or clang++-22 not found (needed to build csmith and yarpgen)"; return; } ;;
             ffmpeg-cli) command -v ffmpeg >/dev/null || { echo "ffmpeg command-line tool not found (needed to generate media fixtures)"; return; } ;;
             openmp) [[ -f "${LLVMNET_OPENMP_PREFIX:-$root/artifacts/system-openmp}/lib/libomp.so.5" ]] || { echo "system OpenMP not staged; run scripts/install-system-openmp.sh"; return; } ;;
-            system-cxx) [[ -f "${LLVMNET_SYSTEM_CXX:-$root/artifacts/system-cxx/libstdcxx-system.a}" ]] || { echo "system libstdc++ archive not built; see docs/toolchain.md"; return; } ;;
+            system-cxx) [[ -f "${LLVMNET_SYSTEM_CXX:-$root/artifacts/system-cxx/libstdcxx-system.a}" ]] || { echo "system libstdc++ archive not built; see docs/user/modes.md"; return; } ;;
             local-media) [[ -n "${FFMPEG_TEST_VIDEO:-}" && -f "${FFMPEG_TEST_VIDEO:-}" ]] || { echo "FFMPEG_TEST_VIDEO does not name a local video file"; return; } ;;
             *) echo "unknown requirement $requirement"; return ;;
         esac

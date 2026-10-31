@@ -2,7 +2,7 @@
 
 Prefix `PF`. Owner: unassigned. Milestone: [M8](README.md#m8-performance). Correctness gates always take precedence; no item here may replace an unsupported operation with a stub.
 
-## Current state (verified 2026-10-30, from `docs/video-simd128-performance.md` and `docs/status.md`)
+## Current state (verified 2026-10-30, from `docs/dev/video-benchmark.md` and `docs/user/limitations.md`)
 
 - Four-thread 4K HEVC decoding under JIT: portable SIMD128 profile at 2.49x the elapsed time of the installed native ffmpeg (which uses hand-written assembly); scalar portable at about 2.8x. An earlier single-thread full-file run measured 1.32 to 1.36x native built from the same bitcode.
 - NativeAOT with the baseline instruction set regresses the SIMD profile 2.2x against scalar AOT; host-targeted AOT gains about 15%. The cause has not been established.
