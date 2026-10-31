@@ -17,6 +17,16 @@ Related: [roadmap.md](../roadmap.md) (the earlier priority ordering), [status.md
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`, and portable ABI restrictions). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-10-31, closing M3 to M5)
+
+Measurements are in [evidence/2026-10-31-m3-m5-closeout.md](../evidence/2026-10-31-m3-m5-closeout.md).
+
+- **M3.** LC-09 is done: where the host has no zoneinfo, the host layer serves TZif images generated from `TimeZoneInfo` (45,056 conversions in 13 zones compared with native). LC-28 closes with it. The remaining M3 exit question is SPEC parity for 507.cactuBSSN_r, which needs glibc's `sprintf` behavior (owner decision, below).
+- **M4.** CX-06 is done: libc++'s localization suite passes 261 of 261 once the lit configuration stops advertising the named locales musl does not have; input.output stays at 97.8% because 12 of its 13 failures need FIFOs, Unix sockets, hard links or race-safe `openat`, which .NET cannot provide (LC-30). SPEC C++ parity: 767.nest_r passes with a per-benchmark setting; 766.femflow_r builds with SPEC's own switch for the C++17 special math functions and then needed the `long double` intrinsics (BE-37, done; its rerun is in the evidence file); 737.gmsh_r and 748.flightdm_r need glibc behavior no flag selects.
+- **M5.** FT-08 is done: LLVM's OpenMP runtime is compiled into the sysroot (`ports/openmp`), `-fopenmp` works for C, C++ and Fortran under JIT and NativeAOT, and 21 of the 25 OpenMP SPEC speed entries pass in portable mode. The others: 607.cactuBSSN_s (glibc `sprintf`), 822.palm_s and 621.wrf_s (prototypes that contradict the definition, which llvmnet rejects) and 627.cam4_s (a main-thread stack overflow still being investigated). Along the way: aggregates through variadic calls follow the System V classification (BE-19), and the `long double` math intrinsics become C library calls (BE-37), 184 of 212 support-matrix constructs.
+- **Owner decisions needed.** Whether programs that fail natively against musl too (cactuBSSN, gmsh, flightdm) and prototypes that contradict the definition (palm, wrf_s) join the ADR-14 parity exclusions; proposed in [decisions.md](decisions.md#adr-14-linux-identity-of-the-portable-target). With both, every remaining SPEC gap in portable mode is cam4_s.
+- **Still open from M0 and M1.** The first GitHub run of the PR gate (FD-19) and the two-week fuzzing criterion (FD-16) need the repository on GitHub; everything else in the M0 to M2 exits is done.
+
 ## Progress (2026-10-30, M3 to M5)
 
 Work on the `m3-m5` branch replaced the hand-written runtimes with the upstream ones in both modes. Measurements are in [evidence/2026-10-30-m3-m5.md](../evidence/2026-10-30-m3-m5.md).
@@ -109,9 +119,9 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M0 | 0.3 | exit items done except the first GitHub run of the PR gate | 1 (FD-19) | 2026-10-30 |
 | M1 | 0.3 | exit items done; two-week fuzzing criterion open (FD-16) | 0 | 2026-10-30 |
 | M2 | 0.3 | done; ADR-01, 02, 03, 07 accepted | 0 | 2026-10-30 |
-| M3 | 0.4 | musl is the portable C library; managed-host and the hand-written libc deleted; SPEC audit and corpora open | 8 (LC-07, 09, 17-partial, 18, 20, 21, 22, 23) | 2026-10-30 |
-| M4 | 0.5 | libc++/libc++abi delivered, lit suite 98.6%; localization below 98% (locale data) | 2 (CX-06, SPEC C++ parity) | 2026-10-30 |
-| M5 | 0.5 | flang-rt in both modes, C# Fortran runtime deleted; FCVS 100%, gfortran 99.2% | 1 (FT-07) | 2026-10-30 |
+| M3 | 0.4 | exit items done; SPEC parity waits on the owner's exclusion decision for 507.cactuBSSN_r | 0 | 2026-10-31 |
+| M4 | 0.5 | exit items done; libc++ localization 100%, input.output 97.8% (LC-30 services); SPEC C++ parity waits on the exclusion decision (gmsh, flightdm) and femflow's rerun | 0 | 2026-10-31 |
+| M5 | 0.5 | exit items done; portable OpenMP delivered (FT-08), 21 of 25 OpenMP speed entries pass; cam4_s open | 0 | 2026-10-31 |
 | M6 | 0.6 | not started | 4 | 2026-10-30 |
 | M7 | 0.7 | not started | 11 | 2026-10-30 |
 | M8 | 0.7 | not started | 2 | 2026-10-30 |

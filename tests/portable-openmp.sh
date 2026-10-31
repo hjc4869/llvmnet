@@ -20,6 +20,10 @@ printf 'PASS: portable OpenMP with four workers under JIT (O0, O3) and NativeAOT
 [[ "$(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT DOTNET_PROCESSOR_COUNT=3 timeout 120 dotnet "$test_output/count.dll")" == "3 3" ]]
 [[ "$(env -u OMP_THREAD_LIMIT OMP_NUM_THREADS=5 DOTNET_PROCESSOR_COUNT=3 timeout 120 dotnet "$test_output/count.dll")" == "5 5" ]]
 printf 'PASS: the default team size is the processor count .NET reports\n'
+# A region with more captured variables than libomp's C invoker takes gets a thunk from the linker.
+"$llvmnet" --runtime=portable -fopenmp -O1 "$root/tests/c/openmp-many.c" -o "$test_output/many.dll"
+[[ "$(timeout 120 dotnet "$test_output/many.dll")" == "1280 10" ]]
+printf 'PASS: a region with 21 captured variables runs through the argument-array thunk\n'
 # Flang lowers DO CONCURRENT to OpenMP; the C worker reports which thread ran each iteration.
 "$llvmnet" --runtime=portable -O1 -c "$root/tests/c/concurrent-worker.c" -o "$test_output/worker.o"
 "$llvmnet" --runtime=portable -O1 -fopenmp -fdo-concurrent-to-openmp=host "$root/tests/fortran/concurrent.f90" "$test_output/worker.o" \

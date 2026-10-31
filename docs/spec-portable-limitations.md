@@ -1,24 +1,19 @@
 # Portable SPEC limitations
 
-In portable mode (`--runtime=portable`, ABI `dotnet64-v2`), SPEC CPU 2017 and CPU 2026 benchmarks compile against musl, libc++/libc++abi and flang-rt from the portable sysroot. This page lists the benchmarks that do not pass in portable mode and why, the settings the SPEC configuration applies for portable mode, and how to rerun the check. A check builds the benchmark at `-O3` with NativeAOT and runs it with test inputs; it passes when runcpu validates the output. [spec-coverage.md](spec-coverage.md) describes the SPEC tooling in general.
+In portable mode (`--runtime=portable`, ABI `dotnet64-v2`), SPEC CPU 2017 and CPU 2026 benchmarks compile against musl, libc++/libc++abi, LLVM's OpenMP runtime and flang-rt from the portable sysroot. This page lists the benchmarks that do not pass in portable mode and why, the settings the SPEC configuration applies for portable mode, and how to rerun the check. A check builds the benchmark at `-O3` with NativeAOT and runs it with test inputs; it passes when runcpu validates the output. [spec-coverage.md](spec-coverage.md) describes the SPEC tooling in general.
 
 | Cause | Benchmarks |
 | --- | --- |
-| [No portable OpenMP runtime](#openmp) | the speed benchmarks that use OpenMP |
-| [glibc behavior that musl does not share](#glibc-behavior) | 507.cactuBSSN_r, 737.gmsh_r, 748.flightdm_r, 767.nest_r |
+| [glibc behavior that musl does not share](#glibc-behavior) | 507.cactuBSSN_r, 607.cactuBSSN_s, 737.gmsh_r, 748.flightdm_r |
 | [`fork`](#fork) | 500.perlbench_r, 600.perlbench_s, 827.cppcheck_s |
-| [Portable ABI restrictions](#portable-abi-restrictions) | 722.palm_r |
-| [C++17 special math functions](#c17-special-math-functions) | 766.femflow_r |
+| [Prototypes that contradict the definition](#prototypes-that-contradict-the-definition) | 722.palm_r, 822.palm_s, 621.wrf_s |
+| [Under investigation](#under-investigation) | 627.cam4_s |
 
 All other CPU 2017 and CPU 2026 entries pass in portable mode, some with the [portable settings](#portable-settings-in-the-spec-configuration) below. For portable parity with system mode ([ADR-14](plan/decisions.md#adr-14-linux-identity-of-the-portable-target)), the `fork` and portable ABI entries are listed exclusions; the others are open failures.
 
 ## OpenMP
 
-The portable sysroot has no OpenMP runtime (FT-08): `omp.h` is not found, and code compiled with `-fopenmp` calls `__kmpc_*` functions that do not resolve. `--system-library`, which links the native LLVM OpenMP runtime, requires `--runtime=system`. With more than one thread, the SPEC configuration builds the kits' OpenMP benchmarks with `-fopenmp -DSPEC_OPENMP` and lowers CPU 2026 Fortran `DO CONCURRENT` loops to OpenMP (`-fdo-concurrent-to-openmp=host`). These speed benchmarks therefore fail:
-
-603.bwaves_s, 607.cactuBSSN_s, 619.lbm_s, 621.wrf_s, 627.cam4_s, 628.pop2_s, 638.imagick_s, 644.nab_s, 649.fotonik3d_s, 654.roms_s, 657.xz_s, 800.pot3d_s, 803.sph_exa_s, 807.ntest_s, 809.cactus_s, 811.tealeaf_s, 816.nab_s, 820.cloverleaf_s, 822.palm_s, 849.fotonik3d_s, 854.graph500_s, 857.namd_s, 865.roms_s, 867.nest_s, 881.neutron_s.
-
-Speed benchmarks that use C++ threads or pthreads instead of OpenMP run on musl's pthreads.
+Portable mode links LLVM's OpenMP runtime from the sysroot (FT-08, `ports/openmp`), so with more than one thread the SPEC configuration builds the kits' OpenMP benchmarks with `-fopenmp -DSPEC_OPENMP` and lowers CPU 2026 Fortran `DO CONCURRENT` loops to OpenMP (`-fdo-concurrent-to-openmp=host`) in both modes; `--system-library` is only for the native runtime in system mode. The speed benchmarks that need OpenMP run on four workers over musl's pthreads; those that use C++ threads or pthreads instead run the same way. The entries that do not pass are listed above by cause.
 
 ## Linux platform detection
 
@@ -31,12 +26,13 @@ Portable code sees neither `__linux__` nor `__unix__` ([ADR-14](plan/decisions.m
 
 ## glibc behavior
 
-These programs rely on glibc behavior; built natively against musl, they fail the same way.
+These programs rely on glibc behavior that no flag selects; built natively against musl, they fail the same way.
 
-- **507.cactuBSSN_r** passes overlapping source and destination buffers to `sprintf`. Its output does not validate.
-- **737.gmsh_r** assigns `NULL` to a `bool`. musl defines `NULL` as `nullptr` in C++, which does not convert to `bool`.
-- **748.flightdm_r** expects the GNU `strerror_r`, which returns `char *` under `_GNU_SOURCE`. musl's returns `int`.
-- **767.nest_r** uses `struct timeval` without including `sys/time.h`, relying on glibc's other headers to declare it.
+- **507.cactuBSSN_r** and **607.cactuBSSN_s** pass overlapping source and destination buffers to `sprintf`. Their output does not validate.
+- **737.gmsh_r** assigns `NULL` to a `bool` in a line SPEC added under `#ifdef SPEC`. musl defines `NULL` as `nullptr` in C++, which does not convert to `bool`; glibc's headers define it as `__null`, which does.
+- **748.flightdm_r** takes the GNU `strerror_r`, which returns `char *`, whenever `_GNU_SOURCE` is defined, and otherwise needs `_POSIX_C_SOURCE`. clang++ defines `_GNU_SOURCE` on Linux targets and portable C++ keeps it because libc++'s headers need it against musl (`strtod_l` and the other `_l` functions), so undefining it for the benchmark breaks libc++'s headers, and musl's `strerror_r` is the POSIX one in any case.
+
+767.nest_r and 766.femflow_r relied on glibc and libstdc++ in ways a per-benchmark setting fixes; they are in the [settings table](#portable-settings-in-the-spec-configuration) and pass.
 
 ## fork
 
@@ -45,13 +41,16 @@ These programs rely on glibc behavior; built natively against musl, they fail th
 - **500.perlbench_r, 600.perlbench_s:** the test workload runs tests through a piped `open`, which perl implements with `fork`. The output does not validate.
 - **827.cppcheck_s:** the speed workload checks files in child processes (`-j` with the thread count), which cppcheck creates with `fork`.
 
-## Portable ABI restrictions
+## Prototypes that contradict the definition
 
-- **722.palm_r** declares `open` with a fixed four-argument prototype, while the C library defines it as variadic. The compiler rejects the call (`Incompatible direct call signature for open`); see [dev/calling-convention.md](dev/calling-convention.md#direct-calls). 822.palm_s fails on OpenMP first.
+Native code tolerates a call whose prototype disagrees with the callee when the registers happen to line up; llvmnet, which sees both sides of a call into a translated C library or runtime, rejects it (`Incompatible direct call signature`; [dev/calling-convention.md](dev/calling-convention.md#direct-calls)). In system mode these calls reach native code, so the mismatch is invisible there.
 
-## C++17 special math functions
+- **722.palm_r, 822.palm_s** declare `open` with a fixed four-argument prototype, while the C library defines it as variadic.
+- **621.wrf_s** calls `omp_get_thread_num` in `module_fr_fire_util` with the `use omp_lib` and the declaration commented out, so implicit typing makes the result `REAL`: `float ()` against the runtime's `i32 ()`. Natively the caller reads an unrelated register. 521.wrf_r does not compile the line, which sits under an OpenMP sentinel.
 
-**766.femflow_r** calls `std::cyl_bessel_j`. libc++ does not implement the C++17 special math functions.
+## Under investigation
+
+- **627.cam4_s** overflows the main thread's stack in `dyn_run`, whose automatic arrays are sized from the model's grid, under JIT and NativeAOT even with a 2 GB stack limit, although a 600 MB stack allocation in a probe program works under both. 527.cam4_r, the same code without OpenMP, passes; the system-mode build is being rerun to tell whether the overflow depends on the mode.
 
 ## Portable settings in the SPEC configuration
 
@@ -66,6 +65,8 @@ These programs rely on glibc behavior; built natively against musl, they fail th
 | 710.omnetpp_r | `-DUSE_PORTABLE_COROUTINES` | musl has no `swapcontext`. omnetpp's setjmp-based coroutines only need to link, because the model creates none. |
 | 714.cpython_r | `-include sys/types.h` | CPython's pthread stubs need the pthread types, which glibc's `stdlib.h` declares through `sys/types.h`. |
 | 777.zstd_r | `-DPLATFORM_POSIX_VERSION=200809L` | zstd detects POSIX through `__unix__`; this is its documented override. |
+| 767.nest_r, 867.nest_s | `-include sys/time.h` | NEST's `simulation_manager.h` declares `timeval` members but includes `sys/time.h` only without SPEC's `-DDISABLE_TIMING`; glibc's other headers declare the type anyway, musl's do not. |
+| 766.femflow_r | `-DSPEC_NO_CXX17_SPECIAL_MATH_FUNCTIONS` | deal.II calls `std::cyl_bessel_j`, which libc++ does not implement; SPEC's documented switch substitutes Boost's. |
 | 723.llvm_r, 823.llvm_s | `-D__linux__ -idirafter config/spec/include` | LLVM's endian and Unix platform code, and the `execinfo.h` its `config.h` includes. |
 | 735.gem5_r, 835.gem5_s | `-D__linux__ -include sys/types.h` | libelf's platform configuration, and `mode_t`. |
 | 772.marian_r, 872.marian_s | `-D__linux__ -D__unix__` | marian's path library. |
@@ -90,4 +91,4 @@ bash scripts/spec-portable-check.sh artifacts/spec-portable-current.tsv artifact
 
 Do not repackage the toolchain while a check uses it.
 
-`bash tests/portable-spec-causes.sh` checks the causes with small probes and needs no SPEC kit. The `linux/limits.h`, `machine/endian.h` and `omp.h` headers, `-fopenmp`, the four-argument `open` and `--system-library` must fail in portable mode with their diagnostic. Probes of headers and library functions that SPEC programs use (`sys/ioctl.h`, `locale.h`, `complex.h`, `system`, `dup2`, `freopen`, `cexp`, iostreams, `std::thread`, `-funsigned-char` and others) must build and exit like their native builds.
+`bash tests/portable-spec-causes.sh` checks the causes with small probes and needs no SPEC kit. The `linux/limits.h` and `machine/endian.h` headers, the four-argument `open` and `--system-library` must fail in portable mode with their diagnostic. Probes of headers and library functions that SPEC programs use (`sys/ioctl.h`, `locale.h`, `complex.h`, `omp.h`, `system`, `dup2`, `freopen`, `cexp`, iostreams, `std::thread`, `-funsigned-char`, `-fopenmp` and others) must build and exit like their native builds.

@@ -2,11 +2,25 @@ llvmnet port of LLVM's OpenMP runtime (openmp/runtime) 22.1.8 for the dotnet64-v
 scripts/build-portable-openmp.sh with patch -p1. The portable target is a Linux userland without an architecture
 macro, so KMP_OS_LINUX is set from __LLVMNET_PORTABLE__ and a new architecture, KMP_ARCH_LLVMNET, selects the
 generic C code: the C __kmp_invoke_microtask, builtin atomics, __sync_synchronize barriers, no processor
-affinity (there is none on managed threads) and no assembly.
+affinity (there is none on managed threads) and no assembly. Worker stacks default to 4 MB as on x86-64, and a
+microtask with more arguments than the C invoker's cases receives the argument array through the thunk llvmnet's
+linker generates for it.
 
+diff -ruN a/src/kmp.h b/src/kmp.h
+--- a/src/kmp.h	2026-10-31 16:27:12.571301057 +1100
++++ b/src/kmp.h	2026-10-31 16:27:12.571301057 +1100
+@@ -1221,7 +1221,7 @@
+ 
+ #if KMP_ARCH_X86
+ #define KMP_DEFAULT_STKSIZE ((size_t)(2 * 1024 * 1024))
+-#elif KMP_ARCH_X86_64
++#elif KMP_ARCH_X86_64 || KMP_ARCH_LLVMNET
+ #define KMP_DEFAULT_STKSIZE ((size_t)(4 * 1024 * 1024))
+ #define KMP_BACKUP_STKSIZE ((size_t)(2 * 1024 * 1024))
+ #elif KMP_ARCH_VE
 diff -ruN a/src/kmp_os.h b/src/kmp_os.h
---- a/src/kmp_os.h	2026-10-31 15:58:31.796989767 +1100
-+++ b/src/kmp_os.h	2026-10-31 15:58:31.796989767 +1100
+--- a/src/kmp_os.h	2026-10-31 16:27:12.571301057 +1100
++++ b/src/kmp_os.h	2026-10-31 16:27:12.571301057 +1100
 @@ -77,7 +77,7 @@
  
  #if (KMP_OS_LINUX || KMP_OS_WINDOWS || KMP_OS_FREEBSD || KMP_OS_NETBSD ||      \
@@ -45,8 +59,8 @@ diff -ruN a/src/kmp_os.h b/src/kmp_os.h
  #undef KMP_MB
  #define KMP_MB() std::atomic_thread_fence(std::memory_order_seq_cst)
 diff -ruN a/src/kmp_platform.h b/src/kmp_platform.h
---- a/src/kmp_platform.h	2026-10-31 15:58:31.796989767 +1100
-+++ b/src/kmp_platform.h	2026-10-31 15:58:31.796989767 +1100
+--- a/src/kmp_platform.h	2026-10-31 16:27:12.571301057 +1100
++++ b/src/kmp_platform.h	2026-10-31 16:27:12.571301057 +1100
 @@ -100,6 +100,13 @@
  #define KMP_OS_AIX 1
  #endif
@@ -92,8 +106,8 @@ diff -ruN a/src/kmp_platform.h b/src/kmp_platform.h
  #endif
  
 diff -ruN a/src/kmp_runtime.cpp b/src/kmp_runtime.cpp
---- a/src/kmp_runtime.cpp	2026-10-31 15:58:31.796989767 +1100
-+++ b/src/kmp_runtime.cpp	2026-10-31 15:58:31.796989767 +1100
+--- a/src/kmp_runtime.cpp	2026-10-31 16:27:12.571301057 +1100
++++ b/src/kmp_runtime.cpp	2026-10-31 16:27:12.571301057 +1100
 @@ -8924,7 +8924,7 @@
  
  #if KMP_ARCH_X86_64 || KMP_ARCH_PPC64 || KMP_ARCH_AARCH64 ||                   \
@@ -103,3 +117,23 @@ diff -ruN a/src/kmp_runtime.cpp b/src/kmp_runtime.cpp
  
  #if KMP_OS_LINUX || KMP_OS_DRAGONFLY || KMP_OS_FREEBSD || KMP_OS_NETBSD ||     \
      KMP_OS_OPENBSD || KMP_OS_WINDOWS || KMP_OS_DARWIN || KMP_OS_HAIKU ||       \
+diff -ruN a/src/z_Linux_util.cpp b/src/z_Linux_util.cpp
+--- a/src/z_Linux_util.cpp	2026-10-31 16:27:12.571301057 +1100
++++ b/src/z_Linux_util.cpp	2026-10-31 16:27:12.571301057 +1100
+@@ -2793,9 +2793,16 @@
+ 
+   switch (argc) {
+   default:
++#if KMP_ARCH_LLVMNET
++    // llvmnet's linker wraps a microtask with more arguments than the cases below in a thunk that takes the
++    // argument array (ports/openmp/README.md).
++    (*(microtask_t1)pkfn)(&gtid, &tid, (void *)p_argv);
++    break;
++#else
+     fprintf(stderr, "Too many args to microtask: %d!\n", argc);
+     fflush(stderr);
+     exit(-1);
++#endif
+   case 0:
+     (*(microtask_t0)pkfn)(&gtid, &tid);
+     break;
