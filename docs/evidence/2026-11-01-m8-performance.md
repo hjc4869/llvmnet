@@ -12,7 +12,7 @@ Building the set found a host-layer bug, fixed in its own commit (`76ec86b`): `l
 
 `tests/benchmarks.sh` (core tag) builds the microbenchmarks in both forms on every pull request, checks their output under the JIT, and checks the thresholds on synthetic results: an unchanged run, a run within tolerance and runs on hosts two and three times slower or faster pass; one benchmark 40% slower (also on a slower host) and every benchmark 15% slower fail. The nightly job in `.github/workflows/ci.yml` ends with `python3 scripts/benchmark.py --output artifacts/bench/nightly`, uploads `results.tsv`, `summary.md` and `metadata.json`, and fails on a confirmed regression. **Pending:** the first GitHub run of the nightly job, which needs the repository on GitHub (FD-19); until then the job was run locally as below.
 
-Baseline run (`python3 scripts/benchmark.py --update-baseline --jobs 12 --output artifacts/bench/pf01-baseline`, on commit `7ca67bb` plus the harness and the `lseek` fix, the machine otherwise idle apart from the desktop): 58 benchmarks built in 252 s, every output matched, 31 minutes in all. Its medians are `tests/perf/baseline.tsv`. Ratios are llvmnet time over native time per process, so the JIT column includes startup and compilation; the peak RSS columns are the largest of the five runs.
+Baseline run (`python3 scripts/benchmark.py --update-baseline --jobs 12 --output artifacts/bench/pf01-baseline`, on commit `7ca67bb` plus the harness and the `lseek` fix, the machine otherwise idle apart from the desktop): 58 benchmarks built in 252 s, every output matched, 31 minutes in all. Its medians are `tests/perf/baseline.tsv`. Ratios are llvmnet time over native time per process, so the JIT column includes startup and compilation; the peak RSS columns are the largest of the five runs, and in this run they count the harness's own 27 MB as a floor (corrected under PF-11).
 
 | Benchmark | Group | Native (s) | JIT (s) | JIT / native | NativeAOT (s) | NativeAOT / native | JIT peak RSS (MB) | Native peak RSS (MB) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -240,3 +240,24 @@ Measured and not adopted:
 | ReadyToRun runtime and no ICU | 32 ms |
 
 **Invariant globalization is not safe for portable images.** On the Windows host, a portable program that sets `TZ=Europe/London` printed `2024-07-01 13:00:00 +0100 isdst=1` for 12:00 UTC, and `12:00:00 +0000 isdst=0` with `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`: .NET on Windows needs ICU to map IANA zone names to its own zones, so the generated zone information (LC-09) silently becomes UTC. The JIT's `runtimeconfig.json`, shared by every host, therefore keeps ICU. NativeAOT projects had set `InvariantGlobalization` unconditionally, which made exactly that happen in win-x64 executables: published on the Windows host, the same program printed `12:00:00 +0000` with the old setting and `13:00:00 +0100` with the new one, which sets it only for runtime identifiers other than `win-*` (`ToolchainTests.NativeAotProjectsKeepIcuOnWindows`; `dotnet msbuild -getProperty` gives `true` for linux-x64 and osx-arm64 and nothing for win-x64). ReadyToRun would save 3 ms on linux-x64 only and more than double the runtime library that every portable image carries; it belongs to the ReadyToRun evaluation of PF-06 (TC-08). NativeAOT executables already start as fast as native ones.
+
+## PF-11: memory
+
+**The harness's peak RSS was wrong for small programs.** On Linux a child's `ru_maxrss` also counts the address space it was forked from, even through `posix_spawn`: a `true` started from a Python process holding 212 MB reported 212 MB. The PF-01 baseline therefore shows 27.2 MB, the harness's own size, for every program smaller than that. `scripts/benchmark.py` now starts each measured process through GNU time and takes `%M` from it, which reports `true` at 1 MB; it also waits for the process instead of polling every 2 ms, so short runs are timed exactly. Peak RSS medians of five runs (`/usr/bin/time -f %M`):
+
+| Program | Native | JIT | NativeAOT |
+| --- | ---: | ---: | ---: |
+| hello world | 1.8 MB | 36.8 MB | |
+| empty C# program, same runtime | | 27.9 MB | |
+| malloc microbenchmark | 11.2 MB | 51.8 MB | 18.4 MB |
+| Bullet | 57.6 MB | 114.7 MB | 67.7 MB |
+| ffmpeg HEVC 1080p, four threads | 86.4 MB | 158.0 MB | 98.7 MB |
+| ffmpeg H.264 1080p, one thread | 28.5 MB | 175.8 MB | 39.4 MB |
+
+NativeAOT stays within 7 to 12 MB of native, the runtime's own share; the JIT adds the runtime (28 MB for any `dotnet program.dll`) and the code it generates, which grows with the program: 9 MB for hello world, 60 to 150 MB for Bullet and ffmpeg. The 4K video comparison the item quotes (330 MB against 251 MB) used private media and was not repeated.
+
+**GC configuration.** Translated programs keep their data in native memory (musl's `malloc` over the host's `mmap`), so the managed heap holds only the runtime's own objects, and the GC settings that matter for managed programs change nothing: on hello world and the H.264 decode, `DOTNET_gcConcurrent=0` (no background GC thread), `DOTNET_GCgen0size=0x100000` and `DOTNET_GCConserveMemory=5` each moved peak RSS by less than 1 MB and time not at all. What does move RSS is the JIT's tiering: on the H.264 decode `DOTNET_TieredPGO=0` gave 155 MB and 2.77 s against 176 MB and 2.87 s, and `DOTNET_TieredCompilation=0` 156 MB and 2.63 s (but hello world 58 ms instead of 37), which PF-06 evaluates for `runtimeconfig.json`. No GC setting is added.
+
+**Large-page arenas for musl `malloc`** were not pursued: the malloc microbenchmark already runs faster than native glibc's under both engines (0.97 s and 0.86 s against 1.20 s), and RSS above native comes from the runtime and generated code, not from the C heap.
+
+Gates: no compiler or runtime change; `tests/run.sh benchmarks` passed with the new process runner.

@@ -36,9 +36,12 @@ import os
 import platform
 import shlex
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -230,24 +233,34 @@ def run_directory(benchmark, output):
     return directory
 
 
+# Peak RSS comes from GNU time when it is installed: on Linux a child's ru_maxrss also counts the address space it
+# was forked from (this Python process, about 27 MB), so the measured program must be started by a small process.
+gnu_time = "/usr/bin/time" if os.path.exists("/usr/bin/time") else None
+
+
 def run_once(command, cwd, stdin, stdout, stderr, timeout):
     """Runs one process; returns (exit status, elapsed, user, system, peak RSS in KiB)."""
-    with open(stdin if stdin else os.devnull, "rb") as input_file:
+    with tempfile.NamedTemporaryFile("r", suffix=".rss") as rss, open(stdin if stdin else os.devnull, "rb") as input_file:
+        wrapped = [gnu_time, "-f", "%M", "-o", rss.name, *command] if gnu_time else command
         start = time.perf_counter()
-        process = subprocess.Popen(command, cwd=cwd, stdin=input_file, stdout=stdout, stderr=stderr)
-        deadline = start + timeout
-        while True:
-            pid, status, usage = os.wait4(process.pid, os.WNOHANG)
-            if pid:
-                break
-            if time.perf_counter() > deadline:
-                process.kill()
-                os.wait4(process.pid, 0)
-                raise TimeoutError(f"{shlex.join(command)} exceeded {timeout} s")
-            time.sleep(0.002)
+        process = subprocess.Popen(wrapped, cwd=cwd, stdin=input_file, stdout=stdout, stderr=stderr, start_new_session=True)
+        expired = threading.Event()
+
+        def kill():
+            expired.set()
+            os.killpg(process.pid, signal.SIGKILL)
+
+        timer = threading.Timer(timeout, kill)
+        timer.start()
+        _, status, usage = os.wait4(process.pid, 0)
         elapsed = time.perf_counter() - start
+        timer.cancel()
+        if expired.is_set():
+            raise TimeoutError(f"{shlex.join(command)} exceeded {timeout} s")
+        lines = [line for line in rss.read().splitlines() if line.strip()]
+        peak = int(lines[-1]) if gnu_time and lines and lines[-1].strip().isdigit() else usage.ru_maxrss
     process.returncode = os.waitstatus_to_exitcode(status)
-    return process.returncode, elapsed, usage.ru_utime, usage.ru_stime, usage.ru_maxrss
+    return process.returncode, elapsed, usage.ru_utime, usage.ru_stime, peak
 
 
 def validate(benchmark, engines, output, checks, timeout):
