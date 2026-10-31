@@ -1,0 +1,68 @@
+# Benchmark set (PF-01) for scripts/benchmark.py; proposed for the owner in docs/plan/decisions.md.
+# Tab-separated: name, group, sources, flags, arguments, comparison, [check arguments].
+#   group        micro (tests/perf), suite (llvm-test-suite), ffmpeg (decode harness), startup (left out of means)
+#   sources      repository paths or suite:<path under llvm-test-suite>, globs allowed; for ffmpeg the clip name
+#   flags        extra flags for both compilers ({dir} is the first source's directory); - for none
+#   arguments    the measured run's arguments, run in a directory holding links to the source directory's data
+#                files; <file redirects standard input; {clip} is the ffmpeg clip
+#   comparison   exact (output equals native), numeric:<absolute tolerance>, musl (output equals the sources linked
+#                natively with musl: the program depends on glibc behavior, ADR-14), or status (the output holds timings)
+#   check        the validation run's arguments when they differ (ffmpeg hashes every frame)
+malloc	micro	tests/perf/malloc.c	-	-	exact
+fwrite	micro	tests/perf/fwrite.c	-	fwrite.data	exact
+printf	micro	tests/perf/printf.c	-	-	exact
+atomics	micro	tests/perf/atomics.c	-	-	exact
+mutex	micro	tests/perf/mutex.c	-	-	exact
+calli	micro	tests/perf/calli.c	-	-	exact
+varargs	micro	tests/perf/varargs.c	-	-	exact
+float80	micro	tests/perf/float80.c	-	-	exact
+memcpy	micro	tests/perf/memcpy.c	-	-	exact
+alloca	micro	tests/perf/alloca.c	-	-	exact
+callback	micro	tests/perf/callback.c	-	-	exact
+startup	startup	tests/perf/hello.c	-	-	exact
+dhrystone	suite	suite:SingleSource/Benchmarks/Dhrystone/dry.c	-Wno-implicit-int	-	exact
+linpack	suite	suite:SingleSource/Benchmarks/Linpack/linpack-pc.c	-	-	exact
+richards	suite	suite:SingleSource/Benchmarks/Misc/richards_benchmark.c	-	-	exact
+oourafft	suite	suite:SingleSource/Benchmarks/Misc/oourafft.c	-	-	exact
+ffbench	suite	suite:SingleSource/Benchmarks/Misc/ffbench.c	-	-	exact
+whetstone	suite	suite:SingleSource/Benchmarks/Misc/whetstone.c	-	-	exact
+salsa20	suite	suite:SingleSource/Benchmarks/Misc/salsa20.c	-	-	exact
+perlin	suite	suite:SingleSource/Benchmarks/Misc/perlin.c	-Wno-implicit-int	-	exact
+reed-solomon	suite	suite:SingleSource/Benchmarks/Misc/ReedSolomon.c	-Wno-implicit-int	-	exact
+almabench	suite	suite:SingleSource/Benchmarks/CoyoteBench/almabench.c	-	-	exact
+fftbench	suite	suite:SingleSource/Benchmarks/CoyoteBench/fftbench.cpp	-	-	exact
+huffbench	suite	suite:SingleSource/Benchmarks/CoyoteBench/huffbench.c	-	-	exact
+lpbench	suite	suite:SingleSource/Benchmarks/CoyoteBench/lpbench.c	-	-	exact
+fannkuch	suite	suite:SingleSource/Benchmarks/BenchmarkGame/fannkuch.c	-	-	exact
+recursive	suite	suite:SingleSource/Benchmarks/BenchmarkGame/recursive.c	-	-	exact
+heapsort	suite	suite:SingleSource/Benchmarks/Shootout/heapsort.c	-	-	exact
+hash	suite	suite:SingleSource/Benchmarks/Shootout/hash.c	-	-	exact
+lists	suite	suite:SingleSource/Benchmarks/Shootout/lists.c	-	-	exact
+random	suite	suite:SingleSource/Benchmarks/Shootout/random.c	-	-	exact
+queens	suite	suite:SingleSource/Benchmarks/McGill/queens.c	-	-	exact
+hash2-cxx	suite	suite:SingleSource/Benchmarks/Shootout-C++/hash2.cpp	-	-	exact
+stepanov-v1p2	suite	suite:SingleSource/Benchmarks/Misc-C++/stepanov_v1p2.cpp	-	-	exact
+stepanov-abstraction	suite	suite:SingleSource/Benchmarks/Adobe-C++/stepanov_abstraction.cpp	-	-	status
+functionobjects	suite	suite:SingleSource/Benchmarks/Adobe-C++/functionobjects.cpp	-	-	status
+olden-bh	suite	suite:MultiSource/Benchmarks/Olden/bh/*.c	-fcommon -DTORONTO -Wno-implicit-int	20000 20	exact
+olden-health	suite	suite:MultiSource/Benchmarks/Olden/health/*.c	-DTORONTO	9 20 1	exact
+olden-treeadd	suite	suite:MultiSource/Benchmarks/Olden/treeadd/*.c	-DTORONTO	22	exact
+olden-tsp	suite	suite:MultiSource/Benchmarks/Olden/tsp/*.c	-DTORONTO	1024000	exact
+olden-em3d	suite	suite:MultiSource/Benchmarks/Olden/em3d/*.c	-DTORONTO	1024 1000 125	exact
+olden-voronoi	suite	suite:MultiSource/Benchmarks/Olden/voronoi/*.c	-DTORONTO	100000 20 32 7	exact
+ptrdist-ks	suite	suite:MultiSource/Benchmarks/Ptrdist/ks/*.c	-	KL-4.in	exact
+ptrdist-yacr2	suite	suite:MultiSource/Benchmarks/Ptrdist/yacr2/*.c	-DTODD -Wno-implicit-function-declaration	input2.in	exact
+ptrdist-ft	suite	suite:MultiSource/Benchmarks/Ptrdist/ft/*.c	-Wno-implicit-int	1500 100000	musl
+ptrdist-anagram	suite	suite:MultiSource/Benchmarks/Ptrdist/anagram/*.c	-Wno-implicit-function-declaration	words 2 <input.OUT	exact
+tramp3d	suite	suite:MultiSource/Benchmarks/tramp3d-v4/*.cpp	-std=c++14 -fno-exceptions	--cartvis 1.0 0.0 --rhomin 1e-8 -n 10 --domain 32 32 32	numeric:0.0000001
+bullet	suite	suite:MultiSource/Benchmarks/Bullet/*.cpp	-I{dir}/include -DNO_TIME -std=c++98	-	numeric:0.0001
+jpeg	suite	suite:MultiSource/Benchmarks/MiBench/consumer-jpeg/*.c	-	-dct int -ppm -outfile /dev/null input_large.jpg	exact
+lame	suite	suite:MultiSource/Benchmarks/MiBench/consumer-lame/*.c	-DHAVEMPGLIB -DLAMEPARSE -DNDEBUG -D__NO_MATH_INLINES -DLAMESNDFILE	-S large.wav /dev/null	exact
+sha	suite	suite:MultiSource/Benchmarks/MiBench/security-sha/*.c	-	input_large.asc	exact
+susan	suite	suite:MultiSource/Benchmarks/MiBench/automotive-susan/*.c	-Wno-implicit-int	input_large.pgm /dev/null -s	exact
+mafft	suite	suite:MultiSource/Benchmarks/mafft/Calignm1.c suite:MultiSource/Benchmarks/mafft/constants.c suite:MultiSource/Benchmarks/mafft/defs.c suite:MultiSource/Benchmarks/mafft/Falign.c suite:MultiSource/Benchmarks/mafft/fft.c suite:MultiSource/Benchmarks/mafft/fftFunctions.c suite:MultiSource/Benchmarks/mafft/Galign11.c suite:MultiSource/Benchmarks/mafft/genalign11.c suite:MultiSource/Benchmarks/mafft/genGalign11.c suite:MultiSource/Benchmarks/mafft/Halignmm.c suite:MultiSource/Benchmarks/mafft/io.c suite:MultiSource/Benchmarks/mafft/Lalign11.c suite:MultiSource/Benchmarks/mafft/Lalignmm.c suite:MultiSource/Benchmarks/mafft/mltaln9.c suite:MultiSource/Benchmarks/mafft/MSalign11.c suite:MultiSource/Benchmarks/mafft/MSalignmm.c suite:MultiSource/Benchmarks/mafft/mtxutl.c suite:MultiSource/Benchmarks/mafft/pairlocalalign.c suite:MultiSource/Benchmarks/mafft/partQalignmm.c suite:MultiSource/Benchmarks/mafft/partSalignmm.c suite:MultiSource/Benchmarks/mafft/Qalignmm.c suite:MultiSource/Benchmarks/mafft/Ralignmm.c suite:MultiSource/Benchmarks/mafft/rna.c suite:MultiSource/Benchmarks/mafft/SAalignmm.c suite:MultiSource/Benchmarks/mafft/Salignmm.c suite:MultiSource/Benchmarks/mafft/suboptalign11.c suite:MultiSource/Benchmarks/mafft/tddis.c	-DLLVM	-b 62 -g 0.100 -f 2.00 -h 0.100 -L <pyruvate_decarboxylase.fasta	exact
+nbench	suite	suite:MultiSource/Benchmarks/nbench/*.c	-DBASE_ITERATIONS=25 -Wno-implicit-function-declaration	-	status
+ffmpeg-hevc-1t	ffmpeg	hevc-1080p10	-	{clip} 100000 video 1 frame bench	exact	{clip} 100000 video 1 frame hash
+ffmpeg-hevc-4t	ffmpeg	hevc-1080p10	-	{clip} 100000 video 4 frame bench	exact	{clip} 100000 video 4 frame hash
+ffmpeg-h264-1t	ffmpeg	h264-1080p	-	{clip} 100000 video 1 frame bench	exact	{clip} 100000 video 1 frame hash
+ffmpeg-h264-4t	ffmpeg	h264-1080p	-	{clip} 100000 video 4 frame bench	exact	{clip} 100000 video 4 frame hash

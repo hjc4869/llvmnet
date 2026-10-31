@@ -33,7 +33,7 @@ Header keys: `tags` (selection), `requires` (prerequisites), `serial: N` (run al
 | `fuzz` | csmith and YARPGen programs compiled natively and with llvmnet, outputs compared, failures kept with a `repro.sh` | nightly, 500 seeds per generator |
 | `spec` | SPEC CPU 2017 and 2026 through the standard harness ([spec.md](spec.md)); licensed kits, never in public CI | a private runner |
 
-The CI workflow (`.github/workflows/ci.yml`) runs the pull-request gate in the Debian 13 container that `scripts/ci/install-packages.sh` provisions, the nightly job on a schedule, and the `xp` jobs on Windows, macOS and Linux ARM64 runners with the bundle the Linux job built. The gate's wall time with four jobs is under 15 minutes.
+The CI workflow (`.github/workflows/ci.yml`) runs the pull-request gate in the Debian 13 container that `scripts/ci/install-packages.sh` provisions, the nightly job on a schedule (ending with the benchmark harness, [benchmarks.md](benchmarks.md), which fails the job on a confirmed regression), and the `xp` jobs on Windows, macOS and Linux ARM64 runners with the bundle the Linux job built. The gate's wall time with four jobs is under 15 minutes.
 
 ## Oracles
 

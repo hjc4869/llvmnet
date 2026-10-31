@@ -1,6 +1,6 @@
 # SIMD128 video measurements
 
-`scripts/benchmark-simd128.mjs` measures whole-file HEVC decoding with the scalar and SIMD128 ffmpeg builds of both runtime modes against a native ffmpeg executable, after checking that every engine decodes the same frames. [user/simd128.md](../user/simd128.md) describes the SIMD128 profile.
+`scripts/benchmark-simd128.mjs` measures whole-file HEVC decoding with the scalar and SIMD128 ffmpeg builds of both runtime modes against a native ffmpeg executable, after checking that every engine decodes the same frames. [user/simd128.md](../user/simd128.md) describes the SIMD128 profile; the nightly benchmark set, which includes shorter ffmpeg runs of the portable scalar build, is in [benchmarks.md](benchmarks.md).
 
 ## Method
 

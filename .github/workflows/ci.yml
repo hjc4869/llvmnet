@@ -69,7 +69,7 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     container: debian:trixie
-    timeout-minutes: 300
+    timeout-minutes: 360
     steps:
       - name: Install git
         run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
@@ -110,10 +110,24 @@ jobs:
         run: |
           tests/run.sh --no-build --tag conformance --timeout-scale 2
           cp -a artifacts/tests/results artifacts/tests/results-conformance
+      # PF-01: the benchmark set against native builds, with the regression thresholds against tests/perf/baseline.tsv.
+      # It runs last, alone, so the measurements are not disturbed; a confirmed regression fails the job.
+      - name: Benchmarks (PF-01)
+        if: always()
+        run: python3 scripts/benchmark.py --output artifacts/bench/nightly
       - uses: actions/upload-artifact@v4
         with:
           name: xp-bundle
           path: artifacts/tests/xp/bundle.tar.gz
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks
+          path: |
+            artifacts/bench/nightly/results.tsv
+            artifacts/bench/nightly/summary.md
+            artifacts/bench/nightly/metadata.json
+          if-no-files-found: ignore
       - if: always()
         uses: actions/upload-artifact@v4
         with:

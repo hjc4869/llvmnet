@@ -38,6 +38,8 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - NativeAOT provisioning (TC-12): `scripts/nativeaot-feed.sh` fills an offline NuGet folder feed, `LLVMNET_NUGET_FEED=<dir>` publishes from it alone, and a missing prerequisite (the .NET 10 SDK, a C compiler, zlib, the aarch64 cross sysroot, a feed package, or a target that another host must publish) is reported in one line naming the fix before `dotnet publish` runs.
 - Table-driven driver options (TC-01): every option is handled, passed to the frontend, accepted without effect or rejected with a reason, per runtime mode; `--help` and the tables of `docs/user/driver.md` are generated from the table, and `tests/driver-options.sh` feeds every option Clang's and Flang's `--help` list to the driver. New: `-###` (print the frontend commands), `--driver-mode=`, `-x` per input, `-l:<file>`, `-Wl,--whole-archive`, `-Xlinker`, `-nostdlib++`, `-c` on `.o` inputs, and `-mllvm` in portable mode.
 
+- Benchmark harness `scripts/benchmark.py` (PF-01): 58 benchmarks (`tests/perf/benchmarks.tsv`: microbenchmarks, free `llvm-test-suite` programs, the ffmpeg decode harness at one and four threads) built natively, for the JIT and as NativeAOT from the same sources, outputs checked against native, medians compared with `tests/perf/baseline.tsv`; the nightly CI job fails on a confirmed regression. Method in `docs/dev/benchmarks.md`.
+
 ### Changed
 
 - **Breaking:** `--runtime=portable` is the default, and the portable ABI tag is `dotnet64-v2`, the musl layout with glibc-width fast integer types; `dotnet64-v1` objects are rejected (LC-26, ADR-09).
