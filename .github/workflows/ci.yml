@@ -33,13 +33,19 @@ jobs:
         run: bash scripts/ci/install-packages.sh
       - name: Mark the workspace safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # Not hashFiles(): actions/cache re-evaluates its key in the post step, on the host as the runner user, and by
+      # then the tests have left root-owned mktemp -d (0700) directories in the workspace that its walk cannot enter.
+      - name: Hash the dependency inputs
+        id: deps
+        shell: bash
+        run: echo "hash=$(git ls-files -z '*.csproj' Directory.Build.props scripts/sources.lock | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
           path: |
             ~/.nuget/packages
             artifacts/vendor/downloads
             artifacts/vendor/musl-native
-          key: deps-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'scripts/sources.lock') }}
+          key: deps-${{ runner.os }}-${{ steps.deps.outputs.hash }}
       - name: Build
         run: bash scripts/ensure-built.sh
       - name: Format check
@@ -80,13 +86,19 @@ jobs:
         run: bash scripts/ci/install-packages.sh --integration
       - name: Mark the workspace safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # Not hashFiles(): actions/cache re-evaluates its key in the post step, on the host as the runner user, and by
+      # then the tests have left root-owned mktemp -d (0700) directories in the workspace that its walk cannot enter.
+      - name: Hash the dependency inputs
+        id: deps
+        shell: bash
+        run: echo "hash=$(git ls-files -z '*.csproj' Directory.Build.props scripts/sources.lock | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
           path: |
             ~/.nuget/packages
             artifacts/vendor/downloads
             artifacts/vendor/musl-native
-          key: deps-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'scripts/sources.lock') }}
+          key: deps-${{ runner.os }}-${{ steps.deps.outputs.hash }}
       - name: Fetch pinned sources
         run: scripts/fetch-sources.sh
       - name: Build
