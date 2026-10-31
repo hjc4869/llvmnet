@@ -114,3 +114,29 @@ The bundled toolchain (`scripts/package-toolchain.sh <prefix> --self-contained -
 | Thin installation (no LLVM) | | 161 |
 
 Compressed with `xz -6` for the release archives: the bundled package is 100,432,388 bytes (96 MiB) and the thin one 33,406,532 bytes (32 MiB). What remains is the LLVM libraries themselves: `libLLVM` (144 MB), `libMLIR` (104 MB, Flang's dependency) and `libclang-cpp` (61 MB), which cannot be trimmed without rebuilding LLVM with fewer components, and the compiler's .NET runtime (80 MB), which `--self-contained` includes so that the package needs no `dotnet` to compile.
+
+## TC-11: release artifacts
+
+`scripts/release-artifacts.sh artifacts/m7-release` on commit `3692436` (a development build, so the version carries the commit) produced:
+
+```
+01971137ef541ca2585e4685c0aa97a27472fd702e7a8ec46193ec6688bb1bee  llvmnet-0.3.0-dev+36924368816e-linux-x64-llvm.tar.xz   (100,432,388 bytes)
+3708a868109b8fd1e5424527d3f6f298498081c8ba621e7451d30867ef9067e3  llvmnet-0.3.0-dev+36924368816e-linux-x64.tar.xz        (33,406,532 bytes)
+3bf19bd96265854c0d55c32c97b6733917ebd0c208c14a07c9087505157eabfc  llvmnet.0.3.0-dev.nupkg                                (19,464,427 bytes)
+```
+
+The dotnet tool package holds the compiler, `LlvmNet.Runtime.dll`, the LLVM bridge and the three sysroots (1,931 files, 80 MB unpacked); `dotnet tool install --tool-path <dir> llvmnet --add-source artifacts/m7-release --version 0.3.0-dev` installed it, and the installed `llvmnet` compiled and ran `tests/c/core.c` and, with `--driver-mode=g++`, `tests/cpp/core.cpp`.
+
+The artifacts are built to be a function of their contents: `tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@$SOURCE_DATE_EPOCH` (the commit time) with the atime and ctime headers dropped, and `xz -T0 --block-size=32MiB -6`, so the thread count does not change the stream; the .NET build is deterministic and the version string comes from the commit; the tool package, whose generated entries NuGet stamps with the build time, is rewritten as a zip with the commit time and a fixed entry order. `tests/release.sh` builds the artifacts twice and compares `SHA256SUMS`: with version `0.0.0-test+36924368816e`, both builds gave
+
+```
+6fd23e5c1df226f41f6c3c19e9f7e53956192d9fc88643e29f9169819c5d3c26  llvmnet-0.0.0-test+36924368816e-linux-x64-llvm.tar.xz   (96 MiB)
+e0487f3dbfb65afe75b2cde5f494a752adde5098853910882ff5a4cf3e9ef808  llvmnet-0.0.0-test+36924368816e-linux-x64.tar.xz        (32 MiB)
+9f0915adba5300402a5d5a77093e45c36c7e6653e4fd50fffa51814879ae9016  llvmnet.0.0.0-test.nupkg                                (18 MiB)
+```
+
+in 67 s, and the tool installed from the first build compiled `tests/c/core.c` and `tests/cpp/core.cpp`. Two earlier runs of the test found what was not reproducible: a page under `docs/` edited while the test ran (the package copies the documentation, so a release builds from a committed tree), and NuGet's entry timestamps, fixed as described.
+
+`.github/workflows/release.yml` runs on a `v*` tag in the same Debian 13 container as the PR gate: the unit tests, the core and toolchain tags with the full package and deployment test, `scripts/release-artifacts.sh` twice with a comparison of the sums, then `cosign sign-blob --yes --bundle` on every file (Sigstore's keyless signing with the workflow's GitHub OIDC identity, no key to keep), `cosign verify-blob` against the repository's workflow identity, and `gh release create` with the artifacts, the Sigstore bundles and the CHANGELOG section as the notes. **Blocked:** a signature and a release need the workflow to run on GitHub, which the repository has not reached (FD-19); the workflow was validated as far as it can be here (the same commands, without the signing and release steps). Publishing the tool package to nuget.org and the choice of keyless signing over a minisign key are [proposed for the owner](../plan/decisions.md#proposed-for-the-owner-2026-10-31).
+
+Gate for TC-13 and TC-11: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 90 passed in 474 s; the one failure was `tests/limitations.sh`, the TC-17 test already in the working tree whose runtime part was not yet applied (its `--print-host-limitations` option did not exist). `tests/run.sh deployment release`: both passed (12 s and 67 s). Unit tests 108 passed; format and shellcheck clean.

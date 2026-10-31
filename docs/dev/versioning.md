@@ -15,7 +15,7 @@ Compatibility follows Semantic Versioning with the usual 0.x rule: while the maj
 
 1. Set `VersionSuffix` to empty and `VersionPrefix` to the release version in `Directory.Build.props`.
 2. Move the `Unreleased` section of `CHANGELOG.md` under the new version heading.
-3. Commit and tag `v<version>`. `scripts/package-toolchain.sh` builds the toolchain package from the tagged tree.
+3. Commit and tag `v<version>`. The `release` workflow (`.github/workflows/release.yml`) builds the artifacts from the tagged tree with `scripts/release-artifacts.sh`, checks that a second build reproduces them, signs them and creates the GitHub release ([toolchain.md](../toolchain.md#release-packages)).
 4. Bump `VersionPrefix` to the next minor version and restore `VersionSuffix` to `dev`.
 
 ## ABI tags

@@ -1,0 +1,75 @@
+# Release artifacts from a tag (TC-11): the thin and bundled-LLVM toolchain packages as reproducible tar.xz files, the
+# dotnet tool package, SHA256SUMS, and a Sigstore signature of each file made with the workflow's own identity (cosign
+# keyless signing through GitHub's OIDC token: no key to keep). The gate runs first, so a tag never ships untested.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  artifacts:
+    name: Build, test, package and sign (Linux x64)
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 180
+    steps:
+      - name: Install git
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install packages
+        run: bash scripts/ci/install-packages.sh
+      - name: Mark the workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Build
+        run: bash scripts/ensure-built.sh
+      - name: Unit tests
+        run: dotnet test tests/LlvmNet.UnitTests -c Release --no-build
+      - name: Core and toolchain tests, including the package and deployment checks
+        run: tests/run.sh --no-build --tag core --tag toolchain -j 4
+      - name: Release artifacts
+        run: bash scripts/release-artifacts.sh dist
+      - name: Reproducibility check against a second build
+        run: |
+          bash scripts/release-artifacts.sh dist-again
+          diff dist/SHA256SUMS dist-again/SHA256SUMS
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign every artifact (Sigstore bundle next to each file)
+        run: |
+          cd dist
+          for file in *.tar.xz *.nupkg SHA256SUMS; do
+            cosign sign-blob --yes --bundle "$file.sigstore.json" "$file"
+          done
+      - name: Verify the signatures
+        run: |
+          cd dist
+          for file in *.tar.xz *.nupkg SHA256SUMS; do
+            cosign verify-blob --bundle "$file.sigstore.json" \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com "$file"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist
+      - name: Create the GitHub release with the artifacts attached
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apt-get install -y --no-install-recommends gh
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" --title "llvmnet $version" --notes-file <(awk -v v="$version" '
+              $0 ~ "^## \\[" v "\\]" { on = 1; next } /^## \[/ { on = 0 } on' CHANGELOG.md) \
+            dist/*.tar.xz dist/*.nupkg dist/SHA256SUMS dist/*.sigstore.json
