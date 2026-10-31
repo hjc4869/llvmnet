@@ -12,7 +12,7 @@ int main(void)
     printf("[%d|%5i|%-5u|%+.3d|%x|%#o|%lld|%zu|%jd]\n", -42, 7, 9u, 5, 0xbeef, 8, -9000000000LL, (size_t)77, (intmax_t)-1);
     printf("[%f|%.3e|%g|%G|%a|%A|%.0f|%10.4f]\n", 3.14159, 12345.678, 0.0001, 1e-10, 1.5, -0.375, 2.5, -1.0 / 3);
     printf("[%Lf|%.20Lg|%La|%Le]\n", 1.0L / 3, 2.0L / 3, 1.0L, 1e4000L);
-    printf("[%s|%.3s|%8s|%-8s|%c|%%|%2$s %1$s]%n\n", "alpha", "omega", "pad", "left", 'Z', &n);
+    printf("[%s|%.3s|%8s|%-8s|%c|%%]%n\n", "alpha", "omega", "pad", "left", 'Z', &n);
     printf("written %d [%s %s]\n", n, "x", "y");
     printf("[%2$s %1$s %3$d]\n", "world", "hello", 3);
     printf("[%ls|%lc]\n", L"wide", (wint_t)L'w');

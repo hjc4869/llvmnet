@@ -33,6 +33,10 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     internal void Emit()
     {
+        // Locals and localloc memory are not zeroed on entry (C# SkipLocalsInit): an alloca's contents are undefined in
+        // LLVM, and zeroing every stack buffer cost more than a quarter of ffmpeg's decoding time (PF-04). Locals whose
+        // first value matters are initialized explicitly.
+        method.InitLocals = false;
         varargs.Allocate(function);
         for (uint index = 0; index < Llvm.LLVMCountParams(function); index++)
             arguments[Llvm.LLVMGetParam(function, index)] = (int)index;
@@ -83,10 +87,11 @@ internal sealed class FunctionEmitter : ValueEmitter
         AllocateFunctionLocals(valueCount > 32768 && jumpSites.Count == 0);
         if (scopedStack || hasAllocations && jumpSites.Count != 0)
         {
-            stackMemory = Il.DeclareLocal(typeof(StackMemory));
+            // The thread's alloca arena top on entry, restored on every exit (BE-17).
+            stackMemory = Il.DeclareLocal(typeof(nint));
             stackReturn = method.ReturnType == typeof(void) || jumpSites.Count != 0 ? null : Il.DeclareLocal(method.ReturnType);
             stackExit = Il.DefineLabel();
-            Il.Emit(OpCodes.Newobj, typeof(StackMemory).GetConstructor(Type.EmptyTypes)!);
+            Il.Emit(OpCodes.Call, typeof(StackMemory).GetMethod(nameof(StackMemory.Save))!);
             Il.Emit(OpCodes.Stloc, stackMemory);
             Il.BeginExceptionBlock();
         }
@@ -99,6 +104,8 @@ internal sealed class FunctionEmitter : ValueEmitter
             jumpExit = Il.DefineLabel();
             Il.Emit(OpCodes.Call, typeof(NonLocalJumps).GetMethod(nameof(NonLocalJumps.NewFrame))!);
             Il.Emit(OpCodes.Stloc, jumpFrame);
+            Il.Emit(OpCodes.Ldc_I4_0);
+            Il.Emit(OpCodes.Stloc, jumpResume);
             Il.MarkLabel(jumpDispatch);
             Il.BeginExceptionBlock();
             Il.Emit(OpCodes.Ldloc, jumpResume);
@@ -135,10 +142,9 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.MarkLabel(matched);
             if (stackMemory is not null)
             {
-                Il.Emit(OpCodes.Ldloc, stackMemory);
                 Il.Emit(OpCodes.Ldloc, exception);
                 Il.Emit(OpCodes.Callvirt, typeof(NonLocalJumpException).GetProperty(nameof(NonLocalJumpException.StackPosition))!.GetMethod!);
-                Il.Emit(OpCodes.Callvirt, typeof(StackMemory).GetMethod(nameof(StackMemory.Restore))!);
+                Il.Emit(OpCodes.Call, typeof(StackMemory).GetMethod(nameof(StackMemory.Restore))!);
             }
             foreach ((nint instruction, (int site, _)) in jumpSites)
             {
@@ -170,7 +176,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         {
             Il.BeginFinallyBlock();
             Il.Emit(OpCodes.Ldloc, stackMemory);
-            Il.Emit(OpCodes.Callvirt, typeof(StackMemory).GetMethod(nameof(StackMemory.Dispose))!);
+            Il.Emit(OpCodes.Call, typeof(StackMemory).GetMethod(nameof(StackMemory.Restore))!);
             Il.EndExceptionBlock();
             Il.MarkLabel(stackExit);
             if ((jumpReturn ?? stackReturn) is LocalBuilder result) Il.Emit(OpCodes.Ldloc, result);
@@ -265,7 +271,6 @@ internal sealed class FunctionEmitter : ValueEmitter
                 if (TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0))) > 64)
                     throw new NotSupportedException("Alloca element counts wider than the address space are not supported.");
                 int alignment = Math.Max(Types.Alignment(allocated), checked((int)Llvm.LLVMGetAlignment(value)));
-                if (stackMemory is not null) Il.Emit(OpCodes.Ldloc, stackMemory);
                 Load(Llvm.LLVMGetOperand(value, 0));
                 Il.Emit(OpCodes.Conv_U);
                 Il.Emit(OpCodes.Ldc_I8, Types.Size(allocated));
@@ -275,7 +280,7 @@ internal sealed class FunctionEmitter : ValueEmitter
                 // returns null, which flang-rt reads as an unallocated zero-length character variable).
                 Offset(alignment);
                 if (stackMemory is not null)
-                    Il.Emit(OpCodes.Callvirt, typeof(StackMemory).GetMethod(nameof(StackMemory.Allocate))!);
+                    Il.Emit(OpCodes.Call, typeof(StackMemory).GetMethod(nameof(StackMemory.Allocate))!);
                 else
                     Il.Emit(OpCodes.Localloc);
                 Offset(alignment - 1);
@@ -937,10 +942,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             else Il.Emit(OpCodes.Ldc_I4_0);
             Il.Emit(OpCodes.Ldc_I4, Compiler.Host is null ? 0 : 1);
             if (stackMemory is not null)
-            {
-                Il.Emit(OpCodes.Ldloc, stackMemory);
-                Il.Emit(OpCodes.Callvirt, typeof(StackMemory).GetMethod(nameof(StackMemory.Save))!);
-            }
+                Il.Emit(OpCodes.Call, typeof(StackMemory).GetMethod(nameof(StackMemory.Save))!);
             else
             {
                 Il.Emit(OpCodes.Ldc_I4_0);
@@ -1242,10 +1244,9 @@ internal sealed class FunctionEmitter : ValueEmitter
         if (name.StartsWith("llvm.stacksave", StringComparison.Ordinal) || name.StartsWith("llvm.stackrestore", StringComparison.Ordinal))
         {
             if (stackMemory is null) throw new NotSupportedException("Stack intrinsics require a scoped allocation frame.");
-            Il.Emit(OpCodes.Ldloc, stackMemory);
             bool restore = name.StartsWith("llvm.stackrestore", StringComparison.Ordinal);
             if (restore) Load(Llvm.LLVMGetOperand(instruction, 0));
-            Il.Emit(OpCodes.Callvirt, typeof(StackMemory).GetMethod(restore ? nameof(StackMemory.Restore) : nameof(StackMemory.Save))!);
+            Il.Emit(OpCodes.Call, typeof(StackMemory).GetMethod(restore ? nameof(StackMemory.Restore) : nameof(StackMemory.Save))!);
             return;
         }
         if (name.StartsWith("llvm.ptrmask.", StringComparison.Ordinal))

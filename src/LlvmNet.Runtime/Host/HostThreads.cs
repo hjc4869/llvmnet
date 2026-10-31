@@ -437,6 +437,7 @@ public static unsafe partial class HostSyscalls
                     Futex(childTid, FUTEX_WAKE, 1, null, 0, 0);
                 }
                 threads.TryRemove(tid, out _);
+                StackMemory.ReleaseThread();
                 Interlocked.Decrement(ref clonedThreads);
             }
         }, StackSizeFor(stack))
