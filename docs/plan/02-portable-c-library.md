@@ -83,4 +83,4 @@ Everything above the host layer is translated C; the host layer is the only hand
 
 ## Exit criteria for M3
 
-LC-04 through LC-10, LC-14 through LC-17, LC-19 through LC-23 are done; the portable ffmpeg profile, all 31 media fixtures and the private 4K HDR full-file hash gate pass; portable SPEC passes are at parity with system mode as [ADR-14](decisions.md#adr-14-linux-identity-of-the-portable-target) defines it: documented per-benchmark portability flags are allowed, and programs that need `fork` or hit a portable ABI restriction are listed exclusions.
+LC-04 through LC-10, LC-14 through LC-17, LC-19 through LC-23 are done; the portable ffmpeg profile, all 31 media fixtures and the private 4K HDR full-file hash gate pass; portable SPEC passes are at parity with system mode as [ADR-14](decisions.md#adr-14-linux-identity-of-the-portable-target) defines it: documented per-benchmark portability flags are allowed, and programs that need `fork`, rely on glibc behavior musl does not share, or call through a prototype that contradicts the definition are listed exclusions.

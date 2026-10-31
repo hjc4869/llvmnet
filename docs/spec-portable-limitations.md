@@ -8,7 +8,7 @@ In portable mode (`--runtime=portable`, ABI `dotnet64-v2`), SPEC CPU 2017 and CP
 | [`fork`](#fork) | 500.perlbench_r, 600.perlbench_s, 827.cppcheck_s |
 | [Prototypes that contradict the definition](#prototypes-that-contradict-the-definition) | 722.palm_r, 822.palm_s, 621.wrf_s |
 
-All other CPU 2017 and CPU 2026 entries pass in portable mode, some with the [portable settings](#portable-settings-in-the-spec-configuration) below. For portable parity with system mode ([ADR-14](plan/decisions.md#adr-14-linux-identity-of-the-portable-target)), the `fork` and portable ABI entries are listed exclusions; the others are open failures.
+All other CPU 2017 and CPU 2026 entries pass in portable mode, some with the [portable settings](#portable-settings-in-the-spec-configuration) below. For portable parity with system mode ([ADR-14](plan/decisions.md#adr-14-linux-identity-of-the-portable-target)), every entry in the table is a listed exclusion: programs that need `fork`, programs that rely on glibc behavior musl does not share and fail natively against musl too, and prototypes that contradict the definition; each needs a source change the SPEC rules do not allow.
 
 ## OpenMP
 
