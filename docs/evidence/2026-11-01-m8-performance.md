@@ -116,3 +116,16 @@ NativeAOT, which runs the same translated code without a JIT, scales as native d
 atomics goes from 1.94 to 1.20 times native under the JIT and to native speed as NativeAOT; mutex from 2.34 to 1.37 and from 2.10 to 1.30. The ffmpeg decodes stay within the run-to-run noise (host-normalized 0.97 to 1.04 of the baseline), as the profile predicted: the four-thread case was not serialized by atomics or locks. Separated by an A/B run (twelve alternating runs each, medians): the old `mutex.dll` with the old runtime 1.79 s, the same `mutex.dll` with the new runtime (futex only) 1.33 s, recompiled with inline atomics 1.16 s, native 1.00 s in that run.
 
 Gates: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 92 passed, 0 failed in 503 s; `dotnet test tests/LlvmNet.UnitTests -c Release` 113 passed (five new futex tests, run three times); `tests/run.sh atomics threads host thread-stack thread-local portable-openmp fortran-concurrent lifecycle` passed before the gate; format and shellcheck clean.
+
+## PF-13: register callbacks once
+
+Every evaluation of a function's address emitted `ldftn` twice and a call to `SystemAbi.RegisterCallback` (or `RegisterVariadicCallback`), a `ConcurrentDictionary.GetOrAdd`, in both modes. The registration maps the pointer to its method for the runtime (`SystemAbi.ResolveCallback`: `atexit` handlers, `pthread_key` destructors, the C++ terminate handler, and calls through a variadic pointer type to a function that is not variadic); in portable mode the pointer is the method itself, so only the mapping, not the value, needed it. The compiler now records every function whose address the module takes and the module initializer registers each one once, before any translated code runs; the address itself is a single `ldftn` (in system mode, of the native-callable stub, as before). Registering in the initializer keeps every lookup the runtime does working in both modes, which dropping registration in portable mode would not have for the legacy variadic-pointer calls (`tests/legacy-callbacks.sh`).
+
+The `callback` microbenchmark stores one of two function addresses into a table and calls through it 150 million times. A/B on the same host (ten alternating runs, medians; the before binaries are the PF-01 baseline builds, run with the current runtime):
+
+| Engine | Before (s) | After (s) | Native (s) |
+| --- | ---: | ---: | ---: |
+| JIT | 0.694 | 0.449 | 0.350 |
+| NativeAOT | 0.781 | 0.354 | 0.350 |
+
+`python3 scripts/benchmark.py --only 'callback,startup,calli,tramp3d,bullet,functionobjects,ffmpeg-hevc-1t,ffmpeg-h264-1t' --output artifacts/bench/pf13-after` against the baseline (host-normalized): callback 0.64 (JIT) and 0.40 (NativeAOT), the others 0.92 to 1.04, within noise; startup 48 ms against 52 ms, so registering every address-taken function of a program up front costs nothing measurable (musl and libc++ included). Gates: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 92 passed, 0 failed in 501 s; unit tests 113 passed; `tests/run.sh legacy-callbacks varargs-callbacks indirect-calls aggregate-callbacks lifecycle exit-order cpp-terminate system-abi` passed before the gate.

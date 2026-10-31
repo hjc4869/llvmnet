@@ -108,10 +108,11 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
             Il.Emit(OpCodes.Ldstr, Llvm.Demangle(Llvm.Name(function)));
             Il.Emit(OpCodes.Call, typeof(IndirectCalls).GetMethod(nameof(IndirectCalls.Register))!);
         }
-        Il.Emit(OpCodes.Ldftn, Compiler.Host is null ? target : Compiler.Host.Callback(function, target));
-        Il.Emit(OpCodes.Ldftn, target);
-        bool variadic = Llvm.LLVMIsFunctionVarArg(Llvm.LLVMGlobalGetValueType(function)) != 0;
-        Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(variadic ? nameof(SystemAbi.RegisterVariadicCallback) : nameof(SystemAbi.RegisterCallback))!);
+        System.Reflection.MethodInfo identity = Compiler.Host is null ? target : Compiler.Host.Callback(function, target);
+        Il.Emit(OpCodes.Ldftn, identity);
+        // The runtime maps the pointer to its method (SystemAbi.ResolveCallback); the module initializer registers
+        // every function whose address is taken once, instead of every evaluation of the address (PF-13).
+        Compiler.AddressTaken.TryAdd(function, (identity, target));
     }
 
     internal void Zero(nint type)

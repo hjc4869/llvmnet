@@ -15,6 +15,8 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal readonly Dictionary<nint, MethodInfo> Methods = [];
     internal readonly Dictionary<nint, FieldBuilder> Globals = [];
     internal readonly Dictionary<nint, MethodBuilder> ThreadGlobals = [];
+    /// <summary>Functions whose address the module takes: the pointer value (identity) and the method it calls.</summary>
+    internal readonly Dictionary<nint, (MethodInfo Identity, MethodInfo Target)> AddressTaken = [];
     internal TypeSystem Types { get; private set; } = null!;
     internal TypeBuilder Program { get; private set; } = null!;
     // The CLR limits how many fields one type may have, so static fields beyond this many per type go to further
@@ -555,6 +557,15 @@ internal sealed class CilCompiler(CompilerOptions options)
             }
         foreach ((nint value, FieldBuilder field) in constants)
             InitializeGlobal(il, value, field);
+        // Before any translated code runs, so pointers taken anywhere resolve to their methods (PF-13).
+        foreach ((nint function, (MethodInfo identity, MethodInfo target)) in AddressTaken)
+        {
+            bool variadic = Llvm.LLVMIsFunctionVarArg(Llvm.LLVMGlobalGetValueType(function)) != 0;
+            il.Emit(OpCodes.Ldftn, identity);
+            il.Emit(OpCodes.Ldftn, target);
+            il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(variadic ? nameof(SystemAbi.RegisterVariadicCallback) : nameof(SystemAbi.RegisterCallback))!);
+            il.Emit(OpCodes.Pop);
+        }
         if (libcMain == 0) il.Emit(OpCodes.Call, constructors);
         il.Emit(OpCodes.Ret);
         ILGenerator lifecycle = constructors.GetILGenerator();
