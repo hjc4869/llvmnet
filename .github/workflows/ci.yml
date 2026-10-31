@@ -47,7 +47,7 @@ jobs:
       - name: Unit tests
         run: dotnet test tests/LlvmNet.UnitTests -c Release --no-build --logger "trx;LogFileName=unit-results.trx" --results-directory artifacts/tests/unit
       - name: Shell lint
-        run: shellcheck -S error scripts/*.sh scripts/ci/*.sh tests/*.sh bin/llvmnet bin/llvmnet-tool
+        run: shellcheck -S error scripts/*.sh scripts/ci/*.sh tests/*.sh tests/xp/*.sh bin/llvmnet bin/llvmnet-tool
       - name: Core and toolchain tests
         run: tests/run.sh --no-build --tag core --tag toolchain --exclude-tag slow -j 4
       - if: always()
@@ -58,6 +58,11 @@ jobs:
             artifacts/tests/results
             artifacts/tests/unit
           if-no-files-found: ignore
+      # The cross-platform bundle tests/xp.sh built: portable images with their native results, run by the xp jobs.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xp-bundle
+          path: artifacts/tests/xp/bundle.tar.gz
 
   nightly:
     name: Nightly integration (Linux x64)
@@ -105,6 +110,10 @@ jobs:
         run: |
           tests/run.sh --no-build --tag conformance --timeout-scale 2
           cp -a artifacts/tests/results artifacts/tests/results-conformance
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xp-bundle
+          path: artifacts/tests/xp/bundle.tar.gz
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -118,4 +127,46 @@ jobs:
             artifacts/tests/libcxx-conformance/failures.txt
             artifacts/tests/fortran-conformance/*.tsv
             artifacts/tests/fortran-conformance/failures.txt
+          if-no-files-found: ignore
+
+  # XP-01 to XP-03: the same portable images the Linux job built and checked against native output run under the JIT
+  # and, published from their relocatable NativeAOT projects, as native executables on each other supported host.
+  xp:
+    name: Portable images on ${{ matrix.name }}
+    needs: [pr-gate, nightly]
+    if: ${{ !cancelled() && (needs.pr-gate.result == 'success' || needs.nightly.result == 'success') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows x64, os: windows-2025 }
+          - { name: macOS ARM64, os: macos-15 }
+          - { name: Linux ARM64, os: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/download-artifact@v4
+        with:
+          name: xp-bundle
+      - name: Install the NativeAOT prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang zlib1g-dev
+      - name: Run the bundle under the JIT and as NativeAOT executables
+        shell: bash
+        run: |
+          tar xzf bundle.tar.gz
+          bash bundle/run.sh --aot --jobs 2 bundle
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xp-results-${{ matrix.os }}
+          path: |
+            bundle/results/*/results.tsv
+            bundle/results/*/host.txt
+            bundle/results/*/*-jit/stdout.diff
+            bundle/results/*/*-aot/stdout.diff
+            bundle/results/*/*-publish/publish.log
           if-no-files-found: ignore

@@ -28,7 +28,7 @@ Prefix `TC`. Owner: unassigned. Milestone: [M7](README.md#m7-toolchain-and-distr
 ### Packaging and distribution
 
 - [ ] **TC-11** (M, P0) Release artifacts from CI on a tag: `llvmnet-<version>-linux-x64.tar.xz` in thin and bundled-LLVM variants, SHA-256 sums, a signature (minisign or cosign), a `dotnet tool` package for the thin variant, and reproducibility from the tag (FD-05).
-- [ ] **TC-12** (M, P0) NativeAOT provisioning: document and script the SDK, ILCompiler package and native linker requirements, support an offline local NuGet feed, and give a precise error when a prerequisite is missing.
+- [ ] **TC-12** (M, P0) NativeAOT provisioning: document and script the SDK, ILCompiler package and native linker requirements, support an offline local NuGet feed, and give a precise error when a prerequisite is missing. — **In progress** (2026-10-31, with XP-03): the per-host requirements (MSVC, Xcode, clang, the linux-arm64 cross packages) and `--aot-project` are documented in [toolchain.md](../toolchain.md#nativeaot-on-other-hosts); the offline feed and the upfront prerequisite check are open.
 - [ ] **TC-13** (S, P0) Bundle size: include only `clang`, `flang`, `opt`, `llvm-ar/nm/ranlib`, `libLLVM`, the resource directory and Flang `.mod` files; strip binaries; measure before and after.
 - [ ] **TC-14** (M, P1) `llvmnet doctor`: checks LLVM version, .NET runtime version, missing shared libraries for bundled LLVM, sysroot completeness, and NativeAOT prerequisites.
 - [ ] **TC-15** (M, P2) Native package channels (Debian, Homebrew, winget). Post-1.0 unless trivial.

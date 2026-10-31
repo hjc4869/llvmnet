@@ -1,0 +1,56 @@
+# Cross-platform fixture set (XP-01 to XP-03). tests/xp/build.sh compiles each line natively on Linux, records what the
+# native build prints and returns, and compiles the same sources in portable mode; tests/xp/run.sh reproduces the native
+# result on any .NET host. Fixtures here must not depend on the host: no host paths, time zones, locales, permission
+# bits or process identity in their output (docs/dev/host-abi.md lists what differs between hosts).
+# name	aot	sources	flags	arguments	environment
+smoke	aot	c/smoke.c	-O1	-	-
+core	aot	c/core.c	-O1	-	-
+intrinsics	-	c/intrinsics.c	-O1	-	-
+byval	-	c/byval.c	-O0	-	-
+runtime	-	c/runtime.c	-O1	payload	LLVMNET_RUNTIME_TEST_VALUE=managed
+io	aot	c/io.c	-O1	data.bin	-
+threads	aot	c/threads.c	-O1 -pthread	-	-
+thread-stack	-	c/thread-stack.c	-O1 -pthread	-	-
+atomics	-	c/atomics.c	-O1	-	-
+atomics-contention	-	c/atomics-contention.c	-O2 -pthread	-	-
+atomic-floating	-	c/atomic-floating.c	-O1 -pthread	-	-
+atomics-wide	-	c/atomics-wide.c	-O1	-	-
+float80	aot	c/float80.c	-O1	-	-
+float80-math	-	c/float80-math.c	-O1	-	-
+unaligned	-	c/unaligned.c	-O2	-	-
+math	-	c/math.c	-O1	-	-
+signaling-nan	-	c/signaling-nan.c	-O1	-	-
+int128	-	c/int128.c	-O1	-	-
+nonlocal-jumps	-	c/nonlocal-jumps.c	-O1	-	-
+stack-jumps	-	c/stack-jumps.c	-O1	-	-
+varargs-aggregates	-	c/varargs-aggregates.c	-O1	-	-
+large-data	-	c/large-data.c	-O1	-	-
+lifecycle	-	c/lifecycle.c	-O1	-	-
+ctype	-	c/ctype.c	-O1	-	-
+time	-	c/time.c	-O1	-	-
+vector-loops	-	c/vector-loops.c	-O3 -fvectorize -fslp-vectorize	-	-
+cpp-core	aot	cpp/core.cpp	-O1 -std=c++17	-	-
+cpp-rtti	-	cpp/rtti.cpp	-O1 -std=c++17	-	-
+cpp-catch-clauses	aot	cpp/catch-clauses.cpp	-O1 -std=c++17	-	-
+cpp-exception-pointer	-	cpp/exception-pointer.cpp	-O1 -std=c++17	-	-
+cpp-nothrow	-	cpp/nothrow.cpp	-O1 -std=c++17	-	-
+cpp-exception-filters	-	cpp/exception-filters.cpp	-O1 -std=c++17	-	-
+cpp-allocation-abi	-	cpp/allocation-abi.cpp	-O1 -std=c++17	-	-
+cpp-filesystem	-	cpp/filesystem.cpp	-O1 -std=c++17	scratch-dir	-
+cpp-thread-local	aot	cpp/thread-local.cpp	-O1 -std=c++17 -pthread	-	-
+cpp-futures	-	cpp/futures.cpp	-O1 -std=c++17 -pthread	-	-
+cpp-exit-order	-	cpp/exit-order.cpp	-O1 -std=c++17	exit	-
+fortran-core	aot	fortran/core.f90	-O1	-	-
+fortran-io	-	fortran/io.f90	-O1	payload	-
+fortran-namelist	-	fortran/namelist.f90	-O1	-	-
+fortran-pack	-	fortran/pack.f90	-O1	-	-
+fortran-reshape	-	fortran/reshape.f90	-O1	-	-
+fortran-transfer	-	fortran/transfer.f90	-O1	-	-
+fortran-real-model	-	fortran/real-model.f90	-O1	-	-
+fortran-pointers	-	fortran/pointers.f90	-O1	-	-
+fortran-spread	-	fortran/spread.f90	-O1	3	-
+fortran-random	-	fortran/random.f90	-O1	-	-
+fortran-unformatted	-	fortran/unformatted.f90	-O1	data.unf	-
+fortran-derived-io	-	fortran/derived-io.f90	-O1	derived.dat	-
+fortran-complex-io	-	fortran/complex-io.f90	-O1	complex.dat	-
+cpp-streams	-	cpp/streams.cpp	-O1 -std=c++17	streams.txt	-

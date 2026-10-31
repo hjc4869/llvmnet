@@ -17,6 +17,12 @@ Related: [roadmap.md](../roadmap.md) (the earlier priority ordering), [status.md
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-10-31, M6)
+
+Measurements are in [evidence/2026-10-31-m6-cross-platform.md](../evidence/2026-10-31-m6-cross-platform.md), taken on a Windows 11 x64 machine, an Apple M6 Mac and an ARM64 container.
+
+- **M6.** XP-01, XP-02, XP-03, XP-05, XP-06 and XP-08 are done. A cross-platform bundle (`tests/xp/`, 51 fixtures in C, C++ and Fortran, 9 of them also as NativeAOT projects) is built on Linux with the native results recorded, and reproduces them on Windows x64, macOS ARM64 and Linux ARM64 under the JIT and as NativeAOT executables. macOS and ARM64 needed no runtime change. Windows needed a program-visible path form for drives (`/c/...`), directory links, errno mapping, `sh.exe` for `/bin/sh` and a UTF-8 console; what NTFS cannot express (mode bits) is documented. Unsupported hosts print one actionable line (verified on a 32-bit runtime), and `runtimeconfig.json` pins the .NET 10 band. `--aot-project` writes relocatable NativeAOT projects for publishing on other hosts, and linux-arm64 cross-publishes from Linux x64. Found on the way: every image depended on OpenSSL for 16 random bytes at startup (fixed, XP-07). CI has `xp` jobs on Windows, macOS and Linux ARM64 runners; the exit's two weeks of green runs start with the first GitHub run (FD-19).
+
 ## Progress (2026-10-31, closing M3 to M5)
 
 Measurements are in [evidence/2026-10-31-m3-m5-closeout.md](../evidence/2026-10-31-m3-m5-closeout.md).
@@ -123,7 +129,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M3 | 0.4 | done; musl is the portable C library, SPEC parity holds with the ADR-14 exclusions | 0 | 2026-10-31 |
 | M4 | 0.5 | done; libc++ localization 100%, input.output 97.8% (LC-30 services), SPEC C++ parity holds | 0 | 2026-10-31 |
 | M5 | 0.5 | done; flang-rt and portable OpenMP delivered (FT-08), 22 of 25 OpenMP speed entries pass, the rest excluded | 0 | 2026-10-31 |
-| M6 | 0.6 | not started | 4 | 2026-10-30 |
+| M6 | 0.6 | exit items done on all three hosts; two weeks of green CI runs need GitHub (FD-19) | 0 | 2026-10-31 |
 | M7 | 0.7 | not started | 11 | 2026-10-30 |
 | M8 | 0.7 | not started | 2 | 2026-10-30 |
 | M9 | 1.0-rc | not started | 6 | 2026-10-30 |

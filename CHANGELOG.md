@@ -25,6 +25,10 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Aggregates through variadic calls follow the System V classification, in registers or the overflow area (BE-19).
 - The `long double` rounding and transcendental intrinsics (`llvm.log.f80` and the others) become calls to the C library's `long double` functions (BE-37).
 - Portable threads get the stack size `pthread_attr_setstacksize` asks for (at least 8 MB), and `getrlimit(RLIMIT_STACK)` reports the process's limit on Linux, so OpenMP worker stacks follow `OMP_STACKSIZE` and the stack limit as with native libomp.
+- Portable images run on Windows x64, macOS ARM64 and Linux ARM64 under the JIT and as NativeAOT executables, checked by the `tests/xp/` bundle and CI jobs on those runners (XP-01 to XP-03). On Windows the host layer presents drives as `/c/...`, maps `/tmp` to the temporary directory, creates directory links, maps Win32 errors to errno values, runs `sh.exe` from Git for Windows for `/bin/sh` and switches an attached console to UTF-8; `docs/dev/host-abi.md` lists what differs.
+- `--aot-project <dir>` writes a relocatable NativeAOT project for publishing on another host, and `--nativeaot --runtime-id linux-arm64` cross-publishes from Linux x64 with Debian's cross packages (XP-03, XP-05).
+- An unsupported host (32-bit, big-endian, Mono, .NET before 10) prints one `llvmnet:` line naming the problem and exits with status 1 before any translated code runs, and `runtimeconfig.json` pins the .NET 10 band with `rollForward: Minor` (XP-06).
+- `getrandom`, `/dev/urandom` and the start vector's `AT_RANDOM` read the host's `/dev/urandom` on Unix hosts, so a portable program no longer needs OpenSSL on Linux (XP-07).
 
 ### Changed
 
