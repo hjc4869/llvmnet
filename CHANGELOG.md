@@ -30,6 +30,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - An unsupported host (32-bit, big-endian, Mono, .NET before 10) prints one `llvmnet:` line naming the problem and exits with status 1 before any translated code runs, and `runtimeconfig.json` pins the .NET 10 band with `rollForward: Minor` (XP-06).
 - `getrandom`, `/dev/urandom` and the start vector's `AT_RANDOM` read the host's `/dev/urandom` on Unix hosts, so a portable program no longer needs OpenSSL on Linux (XP-07).
 - Link inputs (TC-02): `-c` on `.ll`, `.bc` and `.o` inputs, `-l:<file>`, `-Wl,--whole-archive`, archives in any order with rescanning, duplicate definitions reported with both files (`duplicate definition of 'f' in b.o; it is already defined in a.o`), `-r` of archives, and the `-nostdlib`, `-nodefaultlibs`, `-nostartfiles` and `-nostdlib++` family, documented in `docs/user/driver.md`.
+- Every optimization level is tested against native output in both modes, and `-O0` and `-O3` images are JIT-validated (TC-03).
 - Table-driven driver options (TC-01): every option is handled, passed to the frontend, accepted without effect or rejected with a reason, per runtime mode; `--help` and the tables of `docs/user/driver.md` are generated from the table, and `tests/driver-options.sh` feeds every option Clang's and Flang's `--help` list to the driver. New: `-###` (print the frontend commands), `--driver-mode=`, `-x` per input, `-l:<file>`, `-Wl,--whole-archive`, `-Xlinker`, `-nostdlib++`, `-c` on `.o` inputs, and `-mllvm` in portable mode.
 
 ### Changed
