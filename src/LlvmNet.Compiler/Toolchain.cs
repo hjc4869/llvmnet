@@ -89,23 +89,33 @@ internal static class Toolchain
             File.SetUnixFileMode(output, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
     }
 
-    internal static int NativeAot(string assembly, string output, string temporary, string? rid, string preference, string instructionSet, bool verbose, bool debug, IReadOnlyList<string> systemLibraries)
+    /// <summary>
+    /// Writes the NativeAOT project for an image into <paramref name="projectDirectory"/>: NativeHost.csproj, a stub
+    /// source, and copies of the image, its managed references and system-mode bridge archives, referenced relative to
+    /// the project. The directory is relocatable: "dotnet publish NativeHost.csproj -c Release -r &lt;rid&gt;" builds it
+    /// on any host with the .NET 10 SDK and that host's native toolchain, which is how portable images are published
+    /// for Windows and macOS from a Linux build (docs/toolchain.md). Returns the assembly name, which names the executable.
+    /// </summary>
+    internal static string AotProject(string assembly, string projectDirectory, string preference, string instructionSet, bool debug, IReadOnlyList<string> systemLibraries)
     {
-        if (instructionSet == "native" && rid is not null && rid != RuntimeInformation.RuntimeIdentifier)
-            throw new ArgumentException("Host CPU instruction selection requires the current host runtime identifier.");
-        string projectDirectory = Path.Combine(temporary, "aot");
         Directory.CreateDirectory(projectDirectory);
         string projectPath = Path.Combine(projectDirectory, "NativeHost.csproj");
         string assemblyName = AssemblyName.GetAssemblyName(assembly).Name!;
+        string sourceDirectory = Path.GetDirectoryName(Path.GetFullPath(assembly))!;
+        string image = Path.GetFileName(assembly);
+        Copy(assembly);
         var references = new XElement("ItemGroup");
-        foreach (string dependency in Directory.EnumerateFiles(Path.GetDirectoryName(assembly)!, "*.dll"))
+        foreach (string dependency in Directory.EnumerateFiles(sourceDirectory, "*.dll"))
         {
             if (Path.GetFullPath(dependency) == Path.GetFullPath(assembly)) continue;
-            references.Add(new XElement("Reference", new XAttribute("Include", Path.GetFileNameWithoutExtension(dependency)), new XElement("HintPath", dependency)));
+            Copy(dependency);
+            references.Add(new XElement("Reference", new XAttribute("Include", Path.GetFileNameWithoutExtension(dependency)),
+                new XElement("HintPath", "$(MSBuildThisFileDirectory)" + Path.GetFileName(dependency))));
         }
-        foreach (string archive in Directory.EnumerateFiles(Path.GetDirectoryName(assembly)!, "*.llvmnet-host.a"))
+        foreach (string archive in Directory.EnumerateFiles(sourceDirectory, "*.llvmnet-host.a"))
         {
-            references.Add(new XElement("NativeLibrary", new XAttribute("Include", archive)));
+            Copy(archive);
+            references.Add(new XElement("NativeLibrary", new XAttribute("Include", "$(MSBuildThisFileDirectory)" + Path.GetFileName(archive))));
             references.Add(new XElement("DirectPInvoke", new XAttribute("Include", Path.GetFileNameWithoutExtension(archive) + ".so")));
         }
         foreach (string library in systemLibraries)
@@ -121,12 +131,35 @@ internal static class Toolchain
                 new XElement("IlcGenerateMapFile", debug ? "true" : "false"),
                 new XElement("IlcOptimizationPreference", preference), new XElement("InvariantGlobalization", "true"),
                 new XElement("IlcInstructionSet", instructionSet == "native" ? "native" : ""),
-                new XElement("EnableDefaultCompileItems", "false")),
+                new XElement("EnableDefaultCompileItems", "false"),
+                // Cross-publishing from Linux x64 to linux-arm64 (XP-05) links with clang and the aarch64 cross sysroot
+                // (Debian's libc6-dev-arm64-cross and libgcc-*-dev-arm64-cross) and strips with the cross objcopy.
+                new XElement("ObjCopyName", new XAttribute("Condition", "'$(RuntimeIdentifier)' == 'linux-arm64' and '$(NETCoreSdkRuntimeIdentifier)' == 'linux-x64'"), "aarch64-linux-gnu-objcopy")),
             new XElement("ItemGroup", new XElement("Compile", new XAttribute("Include", "NativeHost.cs"))), references,
             new XElement("Target", new XAttribute("Name", "UseEmittedCil"), new XAttribute("AfterTargets", "CoreCompile"),
-                new XElement("Copy", new XAttribute("SourceFiles", assembly), new XAttribute("DestinationFiles", "@(IntermediateAssembly)")))));
+                new XElement("Copy", new XAttribute("SourceFiles", "$(MSBuildThisFileDirectory)" + image), new XAttribute("DestinationFiles", "@(IntermediateAssembly)")))));
         project.Save(projectPath);
         File.WriteAllText(Path.Combine(projectDirectory, "NativeHost.cs"), "internal static class NativeHost\n{\n    private static int Main(string[] args) => 0;\n}\n");
+        // The project must build the same wherever it is placed: stop MSBuild from importing a Directory.Build.props or
+        // .targets of an enclosing tree (a repository's TreatWarningsAsErrors would turn the trim warnings into errors).
+        foreach (string name in new[] { "Directory.Build.props", "Directory.Build.targets" })
+            File.WriteAllText(Path.Combine(projectDirectory, name), "<Project />\n");
+        return assemblyName;
+
+        void Copy(string file)
+        {
+            string destination = Path.Combine(projectDirectory, Path.GetFileName(file));
+            if (Path.GetFullPath(file) != Path.GetFullPath(destination)) File.Copy(file, destination, true);
+        }
+    }
+
+    internal static int NativeAot(string assembly, string output, string temporary, string? rid, string preference, string instructionSet, bool verbose, bool debug, IReadOnlyList<string> systemLibraries)
+    {
+        if (instructionSet == "native" && rid is not null && rid != RuntimeInformation.RuntimeIdentifier)
+            throw new ArgumentException("Host CPU instruction selection requires the current host runtime identifier.");
+        string projectDirectory = Path.Combine(temporary, "aot");
+        string projectPath = Path.Combine(projectDirectory, "NativeHost.csproj");
+        string assemblyName = AotProject(assembly, projectDirectory, preference, instructionSet, debug, systemLibraries);
         string publish = Path.Combine(projectDirectory, "publish");
         List<string> arguments = ["publish", projectPath, "-c", "Release", "-r", rid ?? RuntimeInformation.RuntimeIdentifier, "-o", publish, "--nologo", "-v", verbose ? "normal" : "minimal"];
         int result = Run(Environment.GetEnvironmentVariable("LLVMNET_DOTNET") ?? "dotnet", arguments, verbose);

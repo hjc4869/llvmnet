@@ -63,6 +63,7 @@ internal static class Driver
                 "  --keep-ir <file>         Preserve linked LLVM bitcode",
                 "  --nativeaot              Publish a self-contained NativeAOT executable",
                 "  --runtime-id <rid>       NativeAOT target RID (default: current host)",
+                "  --aot-project <dir>      Write the NativeAOT project to publish on another host instead of publishing",
                 "  --aot-optimize <choice>  Balanced, Speed or Size",
                 "  --aot-instruction-set <choice> baseline (default) or native (build host CPU)",
                 "  --aot-debug              Retain NativeAOT native debug symbols",
@@ -94,6 +95,7 @@ internal static class Driver
         bool staticLink = false;
         bool defaultLibraries = true;
         string? runtimeId = null;
+        string? aotProject = null;
         string? aotInstructionSet = null;
         string aotPreference = "Balanced";
         for (int index = 0; index < arguments.Length; index++)
@@ -122,6 +124,7 @@ internal static class Driver
                 case "--check-indirect-calls": options.CheckIndirectCalls = true; break;
                 case "--aot-debug": aotDebug = true; break;
                 case "--runtime-id": runtimeId = Next(); break;
+                case "--aot-project": aotProject = Path.GetFullPath(Next()); nativeAot = true; break;
                 case "--aot-instruction-set":
                     aotInstructionSet = Next();
                     if (aotInstructionSet is not ("baseline" or "native")) throw new ArgumentException("--aot-instruction-set requires baseline or native.");
@@ -190,6 +193,8 @@ internal static class Driver
             throw new ArgumentException("--nativeaot requires an executable link, not -c, -E, -S, --emit-llvm or -shared.");
         if (!nativeAot && (runtimeId is not null || aotDebug || aotPreference != "Balanced" || aotInstructionSet is not null))
             throw new ArgumentException("NativeAOT output settings require --nativeaot.");
+        if (aotProject is not null && runtimeId is not null)
+            throw new ArgumentException("--aot-project takes no --runtime-id: the runtime identifier is chosen when the project is published (dotnet publish -r <rid>).");
         if (options.Runtime == "managed-host")
             throw new ArgumentException("--runtime=managed-host was removed (ADR-04); use --runtime=portable for a platform-neutral .NET ABI or --runtime=system for the native Linux ABI.");
         if (options.Runtime is not ("system" or "portable")) throw new ArgumentException("--runtime requires portable or system.");
@@ -345,6 +350,11 @@ internal static class Driver
                 File.Copy(linkedInput, kept, true);
                 error.KeptIr = kept;
                 throw;
+            }
+            if (aotProject is not null)
+            {
+                Toolchain.AotProject(payload, aotProject, aotPreference, aotInstructionSet ?? "baseline", aotDebug, options.SystemLibraries);
+                return 0;
             }
             if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, runtimeId, aotPreference, aotInstructionSet ?? "baseline", verbose, aotDebug, options.SystemLibraries);
             if (launcher) Toolchain.Launcher(output, payload);

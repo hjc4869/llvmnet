@@ -45,7 +45,38 @@ The output form is independent of the runtime mode:
 | `--emit-llvm -o program.bc` | Linked LLVM bitcode |
 | `-r -o combined.o` | Relocatable linked bitcode |
 
-NativeAOT options are `--runtime-id <rid>`, `--aot-optimize Balanced|Speed|Size`, `--aot-instruction-set baseline|native` and `--aot-debug`; they require `--nativeaot`, which in turn requires an executable link. The instruction set defaults to `baseline`; `native` targets the build host's CPU, requires the host's runtime identifier, and produces binaries that may not run on older CPUs. Baseline NativeAOT code with `--simd128` can be slower than scalar code (PF-08; see [video-simd128-performance.md](video-simd128-performance.md)). System mode requires `linux-x64`. Other runtime identifiers need a matching native toolchain; CI tests only `linux-x64`.
+NativeAOT options are `--runtime-id <rid>`, `--aot-optimize Balanced|Speed|Size`, `--aot-instruction-set baseline|native`, `--aot-debug` and `--aot-project <dir>` (write the project for publishing on another host, see [NativeAOT on other hosts](#nativeaot-on-other-hosts)); they require `--nativeaot`, which in turn requires an executable link. The instruction set defaults to `baseline`; `native` targets the build host's CPU, requires the host's runtime identifier, and produces binaries that may not run on older CPUs. Baseline NativeAOT code with `--simd128` can be slower than scalar code (PF-08; see [video-simd128-performance.md](video-simd128-performance.md)). System mode requires `linux-x64`. Other runtime identifiers need a matching native toolchain: `linux-arm64` can be cross-published from Linux x64, and `win-x64` and `osx-arm64` are published on those hosts.
+
+## Supported Hosts
+
+| | Linux x64 | Linux ARM64 | Windows x64 | macOS ARM64 |
+| --- | --- | --- | --- | --- |
+| Portable images (`dotnet64-v2`), JIT | yes | yes | yes | yes |
+| Portable images, NativeAOT | yes | yes, published on the host or [cross-published](#nativeaot-on-other-hosts) from Linux x64 | yes | yes |
+| System ABI (`system-linux-x64-v1`) | yes | no | no | no |
+| The compiler | yes | no | no | no |
+
+.NET 10 (LTS) is required; an image's `runtimeconfig.json` pins the framework band (`rollForward: Minor`), so a host with only a later major version refuses to run it until `DOTNET_ROLL_FORWARD=LatestMajor` is set. A host the runtime cannot support (32-bit, big-endian, Mono, .NET before 10) prints one `llvmnet:` line naming the problem and the fix and exits with status 1 before any translated code runs. The `tests/xp/` bundle (`tests/xp.sh`) checks the matrix: the fixtures in `tests/xp/fixtures.tsv` are built natively and in portable mode on Linux x64, and the portable images must reproduce the native output and exit status on each host under the JIT and as NativeAOT executables, which the CI jobs on Windows, macOS and Linux ARM64 runners do.
+
+### NativeAOT on other hosts
+
+The compiler runs on Linux x64, so a NativeAOT executable for another host is published there from a relocatable project: `--aot-project <dir>` writes `NativeHost.csproj`, the image and `LlvmNet.Runtime.dll` into `<dir>` instead of publishing, and on the target host `dotnet publish <dir>/NativeHost.csproj -c Release -r <rid> -o <out>` produces `<out>/program` (`program.exe` on Windows). The NativeAOT options (`--aot-optimize`, `--aot-debug`) are recorded in the project; the runtime identifier is chosen at publish time.
+
+```sh
+llvmnet-clang --runtime=portable program.c --aot-project program-aot   # on Linux
+dotnet publish program-aot/NativeHost.csproj -c Release -r win-x64 -o program-win   # on Windows
+```
+
+Each host needs the .NET 10 SDK, the `Microsoft.DotNet.ILCompiler` package for the runtime identifier (restored from NuGet at the first publish) and its native toolchain:
+
+| Target | Native toolchain |
+| --- | --- |
+| `linux-x64`, `linux-arm64` on the host itself | `clang` and `zlib1g-dev` (Debian/Ubuntu package names) |
+| `linux-arm64` from a Linux x64 host | `clang`, `libc6-dev-arm64-cross`, `libgcc-<version>-dev-arm64-cross` and `binutils-aarch64-linux-gnu`; then `--nativeaot --runtime-id linux-arm64` publishes directly. The generated project selects `aarch64-linux-gnu-objcopy` for the strip step. |
+| `win-x64` | Visual Studio 2022 or later with the "Desktop development with C++" workload (the MSVC linker and Windows SDK) |
+| `osx-arm64` | Xcode or the Xcode command-line tools |
+
+A missing prerequisite surfaces as the SDK's own error from `dotnet publish` (for example "Platform linker not found"); TC-12 will add an upfront check. A NativeAOT executable needs no `dotnet` on the host that runs it.
 
 ## Runtime Modes
 
@@ -82,7 +113,7 @@ The LLVM target is a fixed `x86_64-unknown-none` layout that defines the data AB
 | errno and error text | Linux numbering; musl's messages |
 | System services | Linux x86-64 system-call semantics implemented over .NET ([dev/host-abi.md](dev/host-abi.md)) |
 
-The same image is meant to run on any little-endian 64-bit .NET host, including Windows, macOS and Linux on x64 and ARM64; CI runs Linux x64 only. Programs see Linux semantics and structure layouts on every host. Paths, file-system capabilities, time-zone data and available resources still depend on the host, and services .NET cannot provide (`fork`, `exec`, sockets, hard links and others) fail with the errors [dev/host-abi.md](dev/host-abi.md) lists.
+The same image runs on every supported host ([Supported hosts](#supported-hosts)). Programs see Linux semantics and structure layouts on every host. Paths, file-system capabilities, time-zone data and available resources still depend on the host, and services .NET cannot provide (`fork`, `exec`, sockets, hard links and others) fail with the errors [dev/host-abi.md](dev/host-abi.md) lists; [its last section](dev/host-abi.md#hosts-other-than-linux) describes what Windows and macOS do differently.
 
 Native libraries cannot be linked: `--native-import` and `--system-library` are rejected, and a function the sysroot does not provide is a link error. Recompile dependencies in portable mode or call them through a managed interface. Portable libraries (`-shared`) do not link the C library, because musl's process state (thread pointer, heap, stdio) belongs to the program image; a library that calls the C library must be linked into the program as bitcode. Use scalar and pointer `CExport` signatures across assemblies; aggregate signatures are not yet a stable API.
 
