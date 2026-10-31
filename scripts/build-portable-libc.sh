@@ -32,10 +32,15 @@ cp arch/llvmnet/bits/*.h "$prefix/include/bits/"
 cp obj/include/bits/alltypes.h obj/include/bits/syscall.h "$prefix/include/bits/"
 cp -a "$root/ports/musl/include/." "$prefix/include/"
 # Source selection as in musl's Makefile with ARCH=llvmnet: generic C in src/*/ and src/malloc/mallocng/,
-# where a src/<dir>/llvmnet/<name>.c from ports/musl replaces src/<dir>/<name>.c.
+# where a src/<dir>/llvmnet/<name>.c from ports/musl replaces src/<dir>/<name>.c. The membership test is a
+# statement of its own: mawk, Debian's default awk, creates chosen[key] before it evaluates the right-hand side of
+# an assignment to it, so "chosen[key] = (key in chosen) ? ..." sees every key as present and keeps only the ports.
 mapfile -t sources < <(
     { ls src/*/*.c src/malloc/mallocng/*.c; ls src/*/llvmnet/*.c 2>/dev/null || true; } | sort |
-    awk '{ key = $0; sub("/llvmnet/", "/", key); chosen[key] = (index($0, "/llvmnet/") || !(key in chosen)) ? $0 : chosen[key] } END { for (k in chosen) print chosen[k] }' | sort)
+    awk '{ key = $0; sub("/llvmnet/", "/", key); if (index($0, "/llvmnet/") || !(key in chosen)) chosen[key] = $0 } END { for (k in chosen) print chosen[k] }' | sort)
+for source in "${sources[@]}"; do
+    [[ -f "$source" ]] || { printf 'FAIL: the musl source selection produced "%s", which is not a file\n' "$source" >&2; exit 1; }
+done
 printf '%s\n' "${sources[@]}" >"$build/sources.txt"
 flags=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -std=c99 -ffreestanding -nostdinc -D_XOPEN_SOURCE=700
     -I"$tree/arch/llvmnet" -I"$tree/arch/generic" -I"$tree/obj/src/internal" -I"$tree/src/include"

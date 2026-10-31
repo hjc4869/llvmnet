@@ -78,6 +78,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Wide float-to-integer conversions threw for legal and out-of-range inputs.
 - `lround`/`llrint`/`is.fpclass` on `long double` produced invalid IL.
 - Output names such as `System.dll` collided with framework assemblies at run time; they are now rejected.
+- `scripts/build-sysroot.sh` compiled only the ports' own musl sources where `awk` is mawk (Debian's default, so the dev container and CI), leaving the portable libc without `stdout`, `environ` or `atexit`; the source selection no longer depends on awk's evaluation order.
 
 ## [0.2.0] - 2026-09-08
 
