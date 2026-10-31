@@ -26,6 +26,7 @@ Measurements are in [evidence/2026-10-31-m7-toolchain.md](../evidence/2026-10-31
 - **TC-02.** Link inputs: `-c` on IR and objects, `-l:`, whole archives, order-independent archive resolution with rescanning, duplicate definitions naming both files, `-r` of archives without the runtime libraries, and the `-nostdlib` family, with the rules in `docs/user/driver.md`.
 - **TC-03.** The `-O1` default without vectorization is documented (ADR-11); every level from `-O0` to `-O3`, `-Os`, `-Oz` and vectorized `-O3` matches native output in both modes, and the `-O0` and `-O3` images pass JIT validation.
 - **TC-04.** `-g`, `-fno-exceptions`, `-fno-rtti`, `-fvisibility` (a managed library now exports only what a native one would), per-alias language defaults and the portable-mode rejection of `-m` flags are tested.
+- **TC-05.** The diagnostics pipeline passes the frontends' output through byte for byte, gives llvmnet's own errors Clang's form and colors, documents the exit codes, and prints stack traces only with `LLVMNET_TRACE`.
 
 ## Progress (2026-10-31, M6)
 
@@ -140,7 +141,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M4 | 0.5 | done; libc++ localization 100%, input.output 97.8% (LC-30 services), SPEC C++ parity holds | 0 | 2026-10-31 |
 | M5 | 0.5 | done; flang-rt and portable OpenMP delivered (FT-08), 22 of 25 OpenMP speed entries pass, the rest excluded | 0 | 2026-10-31 |
 | M6 | 0.6 | exit items done on all three hosts; two weeks of green CI runs need GitHub (FD-19) | 0 | 2026-10-31 |
-| M7 | 0.7 | in progress; SA-01, TC-01, TC-02, TC-03, TC-04 done | 6 | 2026-10-31 |
+| M7 | 0.7 | in progress; SA-01, TC-01, TC-02, TC-03, TC-04, TC-05 done | 5 | 2026-10-31 |
 | M8 | 0.7 | not started | 2 | 2026-10-30 |
 | M9 | 1.0-rc | not started | 6 | 2026-10-30 |
 

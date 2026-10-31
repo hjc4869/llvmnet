@@ -76,3 +76,7 @@ ADR-11's default, `-O1` without automatic vectorization, and its difference from
 - `-msse4.2` is rejected in portable mode with `option '-msse4.2' is not accepted in portable mode: ...` and accepted in system mode.
 
 45 s.
+
+## TC-05: diagnostics pipeline
+
+`tests/diagnostics.sh` compiles `tests/c/undeclared.c` with `clang-22` and with `llvmnet` under six option sets (none, `-fcolor-diagnostics`, `-fno-color-diagnostics`, `-fdiagnostics-format=msvc`, `-fdiagnostics-format=vi -fno-show-column`, `-ferror-limit=1 -Wall -Wextra`) in both modes: stderr is identical byte for byte, including the ANSI color sequences, and the exit status is the frontend's. A broken Fortran source gives the same result with `flang-22`. llvmnet's own errors use Clang's form (`file:line: error: ...`, then `llvmnet: note: ...` lines) and, with `-fcolor-diagnostics` or on a terminal, Clang's colors (`Diagnostics.cs`: bold location, bold red `error:`, bold message); `-fno-color-diagnostics` turns them off. A usage error is one `llvmnet: error:` line with exit status 2, a link error exits 1 naming the unresolved symbol, and a stack trace appears only with `LLVMNET_TRACE=1`. The exit codes are documented in [user/driver.md](../user/driver.md#exit-status).
