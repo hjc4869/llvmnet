@@ -49,6 +49,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 
 - Identical inputs now produce byte-identical assemblies (BE-05).
 - Atomics are lock-free on naturally aligned locations, about five times faster under contention (BE-16).
+- Aligned 32- and 64-bit atomics are emitted inline as `Volatile.Read` and `Interlocked` operations instead of runtime calls, and portable futexes keep waiters in hashed buckets with exact wake counts and real `FUTEX_REQUEUE`: contended mutexes 1.7 times and atomics 1.6 times faster (PF-02).
 - `atexit` and C++ static destructors run interleaved in reverse registration order, destructor attributes last (BE-08).
 - Portable mode accepts the x86-64 register-slot equivalences that system mode accepts for direct calls: `ptr` and `i64`, `i32` and `i64` in register positions, `i1` and `i8`; the entry point accepts Flang's `i64 main` under `-fdefault-integer-8`, and `--trap-missing-arguments` is available (BE-39). Both modes convert `i8` and `[1 x i8]` at direct calls, as Fortran passes `character(1)` to C `char` (BE-40).
 - Portable `memcpy`, `memmove` and `memset` use the runtime's vectorized copy and fill (LC-24).

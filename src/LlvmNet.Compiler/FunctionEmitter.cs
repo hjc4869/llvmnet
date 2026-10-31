@@ -513,6 +513,8 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         if (width is not (8 or 16 or 32 or 64))
             throw new NotSupportedException($"Atomic type: {Llvm.PrintType(type)}");
+        if (DirectAtomic(instruction, opcode, type, width))
+            return;
         Load(Llvm.LLVMGetOperand(instruction, opcode == 28 ? 1u : 0u));
         if (opcode != 27)
         {
@@ -542,22 +544,87 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Conv_I4);
         Normalize(type);
         if (opcode == 56)
+            CompareExchangeResult(instruction, type);
+    }
+
+    /// <summary>The { previous, success } pair of a cmpxchg from the previous value on the stack.</summary>
+    private void CompareExchangeResult(nint instruction, nint type)
+    {
+        LocalBuilder previous = Il.DeclareLocal(Types.Map(type));
+        LocalBuilder result = Il.DeclareLocal(Types.Map(Llvm.LLVMTypeOf(instruction)));
+        Il.Emit(OpCodes.Stloc, previous);
+        Il.Emit(OpCodes.Ldloca, result);
+        Il.Emit(OpCodes.Ldloc, previous);
+        StoreMemory(type);
+        Il.Emit(OpCodes.Ldloca, result);
+        Il.Emit(OpCodes.Conv_I);
+        Offset(Types.Offset(Llvm.LLVMTypeOf(instruction), 1));
+        Il.Emit(OpCodes.Ldloc, previous);
+        Load(Llvm.LLVMGetOperand(instruction, 1));
+        Il.Emit(OpCodes.Ceq);
+        Il.Emit(OpCodes.Stind_I1);
+        Il.Emit(OpCodes.Ldloc, result);
+    }
+
+    /// <summary>
+    /// A 32- or 64-bit atomic whose IR alignment is natural, inline: Volatile.Read for loads and Interlocked for the
+    /// rest, the instructions the runtime's aligned path (Atomics) executes, without its call, width switch and
+    /// alignment test (PF-02). Under-aligned atomics and the other operations keep the runtime path, which locks
+    /// misaligned locations.
+    /// </summary>
+    private bool DirectAtomic(nint instruction, int opcode, nint type, int width)
+    {
+        int operation = opcode == 57 ? Llvm.LLVMGetAtomicRMWBinOp(instruction) : -1;
+        if (width is not (32 or 64) || Llvm.LLVMGetAlignment(instruction) < width / 8 || TypeSystem.Kind(type) is not (8 or 12) ||
+            opcode == 57 && operation is not (0 or 1 or 2 or 3 or 5))
+            return false;
+        Type cell = width == 32 ? typeof(int) : typeof(long);
+        Type[] exchange = [cell.MakeByRefType(), cell];
+        OpCode convert = width == 32 ? OpCodes.Conv_I4 : OpCodes.Conv_I8;
+        Load(Llvm.LLVMGetOperand(instruction, opcode == 28 ? 1u : 0u));
+        switch (opcode)
         {
-            LocalBuilder previous = Il.DeclareLocal(Types.Map(type));
-            LocalBuilder result = Il.DeclareLocal(Types.Map(Llvm.LLVMTypeOf(instruction)));
-            Il.Emit(OpCodes.Stloc, previous);
-            Il.Emit(OpCodes.Ldloca, result);
-            Il.Emit(OpCodes.Ldloc, previous);
-            StoreMemory(type);
-            Il.Emit(OpCodes.Ldloca, result);
-            Il.Emit(OpCodes.Conv_I);
-            Offset(Types.Offset(Llvm.LLVMTypeOf(instruction), 1));
-            Il.Emit(OpCodes.Ldloc, previous);
-            Load(Llvm.LLVMGetOperand(instruction, 1));
-            Il.Emit(OpCodes.Ceq);
-            Il.Emit(OpCodes.Stind_I1);
-            Il.Emit(OpCodes.Ldloc, result);
+            case 27:
+                Il.Emit(OpCodes.Volatile);
+                Il.Emit(width == 32 ? OpCodes.Ldind_I4 : OpCodes.Ldind_I8);
+                break;
+            case 28:
+                Load(Llvm.LLVMGetOperand(instruction, 0));
+                Il.Emit(convert);
+                Il.Emit(OpCodes.Call, typeof(Interlocked).GetMethod(nameof(Interlocked.Exchange), exchange)!);
+                Il.Emit(OpCodes.Pop);
+                return true;
+            case 56:
+                Load(Llvm.LLVMGetOperand(instruction, 2));
+                Il.Emit(convert);
+                Load(Llvm.LLVMGetOperand(instruction, 1));
+                Il.Emit(convert);
+                Il.Emit(OpCodes.Call, typeof(Interlocked).GetMethod(nameof(Interlocked.CompareExchange), [cell.MakeByRefType(), cell, cell])!);
+                break;
+            default:
+                // xchg, add, sub, and, or. Interlocked.Add returns the new value, so the addend is taken away again.
+                Load(Llvm.LLVMGetOperand(instruction, 1));
+                Il.Emit(convert);
+                LocalBuilder? addend = null;
+                if (operation is 1 or 2)
+                {
+                    if (operation == 2) Il.Emit(OpCodes.Neg);
+                    addend = Il.DeclareLocal(cell);
+                    Il.Emit(OpCodes.Dup);
+                    Il.Emit(OpCodes.Stloc, addend);
+                }
+                string name = operation switch { 0 => nameof(Interlocked.Exchange), 1 or 2 => nameof(Interlocked.Add), 3 => nameof(Interlocked.And), _ => nameof(Interlocked.Or) };
+                Il.Emit(OpCodes.Call, typeof(Interlocked).GetMethod(name, exchange)!);
+                if (addend is not null)
+                {
+                    Il.Emit(OpCodes.Ldloc, addend);
+                    Il.Emit(OpCodes.Sub);
+                }
+                break;
         }
+        if (TypeSystem.Kind(type) == 12) Il.Emit(OpCodes.Conv_I);
+        if (opcode == 56) CompareExchangeResult(instruction, type);
+        return true;
     }
 
     private void Invoke(nint block, nint instruction)

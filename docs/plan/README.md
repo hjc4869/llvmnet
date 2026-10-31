@@ -22,6 +22,8 @@ The owner settled every open decision in [decisions.md](decisions.md): the `dotn
 Measurements are in [evidence/2026-11-01-m8-performance.md](../evidence/2026-11-01-m8-performance.md). There is no numeric target (ADR-08); M8 publishes numbers and guards them.
 
 - **PF-01.** `scripts/benchmark.py` runs 58 benchmarks (11 microbenchmarks, 42 free `llvm-test-suite` programs, the ffmpeg decode harness on two generated 1080p clips at one and four threads, and a startup probe) natively, under the JIT and as NativeAOT from the same sources, checks every output against native and records medians, user time and peak RSS. Baseline on this host: JIT 2.42 and NativeAOT 1.72 times native (geometric mean). The nightly job fails when a benchmark gets 25% slower or a geometric mean 10% slower than `tests/perf/baseline.tsv`, normalized by host speed and confirmed by a second measurement; the set, the thresholds and the baseline policy are proposed for the owner in [decisions.md](decisions.md#proposed-for-the-owner-2026-11-01-m8). The first GitHub run of the job waits for FD-19. Building the set found and fixed a host bug: `rewind(stdin)` on a redirected file did nothing.
+- **PF-02.** The four-thread ffmpeg decode is not serialized by atomics or locks: as NativeAOT it scales from one to four threads as native does (2.7 and 3.3 times), and under the JIT the shortfall is the half second of startup and compilation before the threads run compiled code. Contended locking was still slow where exercised directly, so futexes now follow the kernel's design (hashed buckets of waiters, exact wake counts, real requeue) and aligned atomics are emitted inline: the mutex microbenchmark went from 2.34 to 1.37 times native, atomics from 1.94 to 1.20 (NativeAOT at native speed). The largest single cost in the decode is zeroing stack buffers (28% of CPU), taken up by PF-04.
+- **M8 exit.** PF-01 and PF-02 are done and the benchmark table is published; the exit's nightly table on CI starts with the first GitHub run (FD-19).
 
 ## Progress (2026-10-31, M7)
 
@@ -149,7 +151,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M5 | 0.5 | done; flang-rt and portable OpenMP delivered (FT-08), 22 of 25 OpenMP speed entries pass, the rest excluded | 0 | 2026-10-31 |
 | M6 | 0.6 | exit items done on all three hosts; two weeks of green CI runs need GitHub (FD-19) | 0 | 2026-10-31 |
 | M7 | 0.7 | exit items done; signed packages from a tag need the repository on GitHub (FD-19) | 0 | 2026-10-31 |
-| M8 | 0.7 | in progress: PF-01 done (nightly benchmark table, regression thresholds); PF-02 open | 1 (PF-02) | 2026-11-01 |
+| M8 | 0.7 | exit items done (PF-01, PF-02, benchmark table published); the first GitHub run of the nightly benchmark job needs FD-19 | 0 | 2026-11-01 |
 | M9 | 1.0-rc | not started | 6 | 2026-10-30 |
 
 ### M0: Foundations

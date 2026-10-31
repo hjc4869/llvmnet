@@ -157,7 +157,7 @@ public static unsafe partial class HostSyscalls
                 Linux.Syscall.GetRobustList => GetRobustList((int)a, (nint*)b, (long*)c),
                 Linux.Syscall.Gettid => CurrentThreadId,
                 Linux.Syscall.Time => Time((long*)a),
-                Linux.Syscall.Futex => Futex((nint)a, (int)b, (int)c, (Timespec*)d),
+                Linux.Syscall.Futex => Futex((nint)a, (int)b, (int)c, (Timespec*)d, (nint)e, (int)f),
                 Linux.Syscall.SchedGetaffinity => Affinity((byte*)c, b),
                 Linux.Syscall.SetThreadArea => SetThreadPointer((nint)a),
                 Linux.Syscall.Getdents64 => DirectoryEntries((int)a, (byte*)b, (int)c),

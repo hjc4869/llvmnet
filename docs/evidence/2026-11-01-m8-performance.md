@@ -83,3 +83,36 @@ Geometric means of the ratios (startup excluded): JIT 2.42 and NativeAOT 1.72 ov
 - **salsa20 as NativeAOT** is 8.4 times native while the JIT runs it at 1.7: its rotates become calls to a width-generic funnel-shift helper, whose division by the width only disappears when the helper is inlined; PF-06 looks at the NativeAOT code.
 - **olden-voronoi** is 15 times native under the JIT and 8 as NativeAOT (PF-04, PF-06 investigate).
 - **Threads**: the four-thread ffmpeg decodes scale worse than native (PF-02).
+
+## PF-02: atomics and futex-based mutexes on the threaded ffmpeg case
+
+BE-16 made aligned atomics lock-free on 2026-10-30 (`d280b0d`), measured then only on a contention fixture; musl's mutexes and condition variables, which wait in `futex`, had been tested only functionally. The question here was whether either serializes the four-thread decode.
+
+**Where the four-thread time goes.** From the PF-01 baseline, the speedup from one to four decoder threads:
+
+| Clip | Native | JIT | NativeAOT |
+| --- | ---: | ---: | ---: |
+| HEVC 1080p 10-bit, 240 frames | 2.82 (2.216 s to 0.786 s) | 2.01 (3.158 s to 1.574 s) | 2.72 (2.666 s to 0.981 s) |
+| H.264 1080p, 240 frames | 3.16 (1.295 s to 0.410 s) | 2.65 (4.145 s to 1.565 s) | 3.32 (2.891 s to 0.872 s) |
+
+NativeAOT, which runs the same translated code without a JIT, scales as native does; the JIT engine's shortfall matches a serial part of about half a second, the process start and the compilation of the decoder before the threads run compiled code (3.158 s = 0.5 + 2.66; at four threads 0.5 + 2.66 / 2.72 = 1.48 s, measured 1.57 s). A CPU-sampling profile of the four-thread HEVC decode under the JIT (`dotnet-trace collect --profile dotnet-sampled-thread-time`, 8.3 s of thread time) agrees: threads spent 1.93 s blocked in `futex` waits, the frame threads waiting for each other's progress as they do natively, but only 0.11 s of CPU (2.3% of 4.7 s) went to the futex code and monitor contention. The largest CPU item in that profile is not threading at all: 28% (1.31 s) is `Buffer.ZeroMemoryInternal`, the zeroing of the motion-compensation functions' stack buffers on every call, which PF-04 takes up.
+
+**What the microbenchmarks showed.** The contended paths are slower than native where they are exercised directly: the `atomics` microbenchmark ran at 1.94 times native under the JIT, `mutex` (four threads on one mutex, then a condition-variable ping-pong) at 2.34. Profiles of `mutex` showed two causes:
+
+- Every atomic operation called a runtime helper (`Atomics.Load`, `CompareExchange`, `Modify`) that tests the alignment and switches on the width before reaching `Interlocked`. Aligned 32- and 64-bit atomics (musl's `a_cas`, `a_swap`, `a_fetch_add`, C11 atomics) are now emitted inline as `Volatile.Read` and `Interlocked.Exchange`, `CompareExchange`, `Add`, `And` and `Or`, the instructions the helper's aligned path ends in; under-aligned atomics, 8- and 16-bit widths and the other operations keep the helper, which locks misaligned locations as before.
+- `futex` kept one monitor per address in a `ConcurrentDictionary` that never shrank, woke with `Monitor.Pulse` (a woken thread then competed for the monitor), returned the requested rather than the actual wake count and implemented requeue as a wake of every waiter. In the contended mutex 96% of CPU samples were `Monitor.Enter_Slowpath` spinning on those monitors. Futexes are now kept as the kernel keeps them: 256 buckets hashed by address, each a short spin-locked queue of waiters; a waiter blocks on its own event, a wake takes waiters off the queue under the bucket lock and signals them after releasing it, returns the number woken, and `FUTEX_REQUEUE`/`FUTEX_CMP_REQUEUE` move waiters to the second address. No state per address outlives a wait. The priority-inheritance operations keep their owner-tracking monitors. `tests/LlvmNet.UnitTests/HostFutexTests.cs` checks the value test, timeouts, wake counts, bitsets and requeue.
+
+**Before and after** (`python3 scripts/benchmark.py --only 'mutex,atomics,ffmpeg-*' --output artifacts/bench/pf02-after`, medians of five, compared with the PF-01 baseline; host speed 0.96 of the baseline run):
+
+| Benchmark | Native (s) | JIT before | JIT after | NativeAOT before | NativeAOT after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| atomics | 0.260 | 0.507 | 0.311 | 0.383 | 0.259 |
+| mutex | 0.834 | 2.057 | 1.146 | 1.848 | 1.083 |
+| ffmpeg-hevc-1t | 2.077 | 3.158 | 3.144 | 2.666 | 2.564 |
+| ffmpeg-hevc-4t | 0.759 | 1.574 | 1.516 | 0.981 | 0.979 |
+| ffmpeg-h264-1t | 1.253 | 4.145 | 4.084 | 2.891 | 2.878 |
+| ffmpeg-h264-4t | 0.389 | 1.565 | 1.565 | 0.872 | 0.811 |
+
+atomics goes from 1.94 to 1.20 times native under the JIT and to native speed as NativeAOT; mutex from 2.34 to 1.37 and from 2.10 to 1.30. The ffmpeg decodes stay within the run-to-run noise (host-normalized 0.97 to 1.04 of the baseline), as the profile predicted: the four-thread case was not serialized by atomics or locks. Separated by an A/B run (twelve alternating runs each, medians): the old `mutex.dll` with the old runtime 1.79 s, the same `mutex.dll` with the new runtime (futex only) 1.33 s, recompiled with inline atomics 1.16 s, native 1.00 s in that run.
+
+Gates: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 92 passed, 0 failed in 503 s; `dotnet test tests/LlvmNet.UnitTests -c Release` 113 passed (five new futex tests, run three times); `tests/run.sh atomics threads host thread-stack thread-local portable-openmp fortran-concurrent lifecycle` passed before the gate; format and shellcheck clean.

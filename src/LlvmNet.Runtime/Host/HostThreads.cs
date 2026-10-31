@@ -12,7 +12,7 @@ public static unsafe partial class HostSyscalls
     private static nint processThreadPointer;
     private static int nextThreadId = 1;
     private static int clonedThreads;
-    private static readonly ConcurrentDictionary<nint, object> futexes = new();
+    private static readonly ConcurrentDictionary<nint, object> priorityFutexes = new();
     private static readonly ConcurrentDictionary<int, Thread> threads = new();
     [ThreadStatic] private static nint robustList;
 
@@ -75,52 +75,258 @@ public static unsafe partial class HostSyscalls
     }
 
     /// <summary>
-    /// futex wait and wake on per-address monitors. Requeue operations wake every waiter, which futex semantics
-    /// allow (waiters must tolerate spurious wakeups).
+    /// A thread blocked in a futex wait, queued in the bucket of the address it waits on. Each thread has one and reuses
+    /// it for every wait; a wake takes it off the queue before signaling it.
     /// </summary>
-    private static long Futex(nint address, int operation, int value, Timespec* timeout)
+    private sealed class FutexWaiter
     {
-        object queue = futexes.GetOrAdd(address, _ => new object());
-        switch (operation & FUTEX_CMD_MASK)
+        internal nint Address;
+        internal uint Bitset;
+        internal FutexWaiter? Next, Previous;
+        internal FutexWaiter? NextWoken;            // the list of waiters one wake signals once it releases the bucket
+        internal bool Queued;
+        internal readonly ManualResetEventSlim Woken = new(false);
+    }
+
+    /// <summary>
+    /// The waiters of every address that hashes to this bucket, in arrival order, under a spin lock: the critical
+    /// sections are a few pointer updates, and a monitor's adaptive spinning cost more than the futex work itself when
+    /// four threads contend for one mutex. Woken waiters are signaled after the lock is released.
+    /// </summary>
+    private sealed class FutexBucket
+    {
+        internal FutexWaiter? Head, Tail;
+        private int locked;
+
+        internal void Enter()
+        {
+            if (Interlocked.CompareExchange(ref locked, 1, 0) == 0) return;
+            var spin = new SpinWait();
+            while (Volatile.Read(ref locked) != 0 || Interlocked.CompareExchange(ref locked, 1, 0) != 0) spin.SpinOnce(-1);
+        }
+
+        internal void Exit() => Volatile.Write(ref locked, 0);
+
+        internal void Enqueue(FutexWaiter waiter)
+        {
+            waiter.Previous = Tail;
+            waiter.Next = null;
+            if (Tail is null) Head = waiter;
+            else Tail.Next = waiter;
+            Tail = waiter;
+            waiter.Queued = true;
+        }
+
+        internal void Remove(FutexWaiter waiter)
+        {
+            if (waiter.Previous is null) Head = waiter.Next;
+            else waiter.Previous.Next = waiter.Next;
+            if (waiter.Next is null) Tail = waiter.Previous;
+            else waiter.Next.Previous = waiter.Previous;
+            waiter.Next = waiter.Previous = null;
+            waiter.Queued = false;
+        }
+    }
+
+    private static readonly FutexBucket[] futexBuckets = Enumerable.Range(0, 256).Select(_ => new FutexBucket()).ToArray();
+    [ThreadStatic] private static FutexWaiter? futexWaiter;
+
+    /// <summary>Fibonacci hashing of the address's 4-byte word into 256 buckets.</summary>
+    private static int BucketIndex(nint address) => (int)(((ulong)address >> 2) * 0x9E3779B97F4A7C15ul >> 56);
+
+    private static FutexBucket BucketOf(nint address) => futexBuckets[BucketIndex(address)];
+
+    /// <summary>
+    /// futex(2). Waits, wakes and requeues work as in the kernel: a waiter queues in one of 256 buckets chosen by its
+    /// address and blocks on its own event; a wake takes matching waiters off the queue and signals them, so a woken
+    /// thread leaves without contending for the bucket, and the result is the number woken; a requeue moves waiters to
+    /// the queue of the second address. No state per address outlives a wait. The priority-inheritance operations keep
+    /// their owner-tracking monitors (<see cref="LockPriorityInheritance"/>).
+    /// </summary>
+    private static long Futex(nint address, int operation, int value, Timespec* timeout, nint address2, int value3)
+    {
+        int command = operation & FUTEX_CMD_MASK;
+        switch (command)
         {
             case FUTEX_WAIT or FUTEX_WAIT_BITSET:
-                lock (queue)
-                {
-                    if (Volatile.Read(ref *(int*)address) != value) return -EAGAIN;
-                    if (timeout == null) { Monitor.Wait(queue); return 0; }
-                    if (timeout->Duration is not TimeSpan wait) return -EINVAL;
-                    // FUTEX_WAIT takes a relative timeout; FUTEX_WAIT_BITSET an absolute monotonic or realtime one.
-                    if ((operation & FUTEX_CMD_MASK) == FUTEX_WAIT_BITSET)
-                        wait -= (operation & FUTEX_CLOCK_REALTIME) != 0 ? DateTime.UtcNow - DateTime.UnixEpoch : Monotonic;
-                    long deadline = DeadlineAfter(wait);
-                    for (int milliseconds; (milliseconds = MillisecondsUntil(deadline)) > 0;)
-                        if (Monitor.Wait(queue, milliseconds)) return 0;
-                    return -ETIMEDOUT;
-                }
+                return FutexWait(address, value, command == FUTEX_WAIT ? uint.MaxValue : (uint)value3, timeout,
+                    command == FUTEX_WAIT_BITSET, (operation & FUTEX_CLOCK_REALTIME) != 0);
             case FUTEX_WAKE or FUTEX_WAKE_BITSET:
-                lock (queue)
-                {
-                    if (value == int.MaxValue) Monitor.PulseAll(queue);
-                    else for (int index = 0; index < value; index++) Monitor.Pulse(queue);
-                }
-                return value;
+                return FutexWake(address, value, command == FUTEX_WAKE ? uint.MaxValue : (uint)value3);
             case FUTEX_REQUEUE or FUTEX_CMP_REQUEUE:
-                lock (queue) Monitor.PulseAll(queue);
-                return value;
+                return Requeue(address, address2, value, (int)(nint)timeout, command == FUTEX_CMP_REQUEUE ? value3 : null);
             case FUTEX_LOCK_PI or FUTEX_TRYLOCK_PI:
-                return LockPriorityInheritance(address, queue, (operation & FUTEX_CMD_MASK) == FUTEX_TRYLOCK_PI, timeout);
+                return LockPriorityInheritance(address, priorityFutexes.GetOrAdd(address, _ => new object()), command == FUTEX_TRYLOCK_PI, timeout);
             case FUTEX_UNLOCK_PI:
-                lock (queue)
-                {
-                    int word = Volatile.Read(ref *(int*)address);
-                    if ((word & FUTEX_TID_MASK) != CurrentThreadId) return -EPERM;
-                    Volatile.Write(ref *(int*)address, 0);
-                    Monitor.Pulse(queue);
-                }
-                return 0;
+                return UnlockPriorityInheritance(address, priorityFutexes.GetOrAdd(address, _ => new object()));
             default:
                 return -ENOSYS;
         }
+    }
+
+    /// <summary>Wakes up to <paramref name="count"/> waiters on the address (at least one, as the kernel does).</summary>
+    private static long FutexWake(nint address, int count, uint bitset)
+    {
+        if (bitset == 0) return -EINVAL;
+        FutexBucket bucket = BucketOf(address);
+        FutexWaiter? woken = null;
+        int number = 0;
+        bucket.Enter();
+        try
+        {
+            for (FutexWaiter? waiter = bucket.Head; waiter is not null && number < Math.Max(count, 1);)
+            {
+                FutexWaiter? next = waiter.Next;
+                if (waiter.Address == address && (waiter.Bitset & bitset) != 0)
+                {
+                    bucket.Remove(waiter);
+                    waiter.NextWoken = woken;
+                    woken = waiter;
+                    number++;
+                }
+                waiter = next;
+            }
+        }
+        finally { bucket.Exit(); }
+        Signal(woken);
+        return number;
+    }
+
+    /// <summary>Signals the waiters a wake took off their queue; each has stopped waiting only once its event is set.</summary>
+    private static void Signal(FutexWaiter? woken)
+    {
+        while (woken is not null)
+        {
+            FutexWaiter next = woken.NextWoken!;
+            woken.NextWoken = null;
+            woken.Woken.Set();
+            woken = next;
+        }
+    }
+
+    private static long FutexWait(nint address, int value, uint bitset, Timespec* timeout, bool absolute, bool realtime)
+    {
+        if (bitset == 0) return -EINVAL;
+        long deadline = long.MaxValue;
+        if (timeout != null)
+        {
+            if (timeout->Duration is not TimeSpan wait) return -EINVAL;
+            // FUTEX_WAIT takes a relative timeout; FUTEX_WAIT_BITSET an absolute monotonic or realtime one.
+            if (absolute) wait -= realtime ? DateTime.UtcNow - DateTime.UnixEpoch : Monotonic;
+            deadline = DeadlineAfter(wait);
+        }
+        FutexWaiter waiter = futexWaiter ??= new FutexWaiter();
+        FutexBucket bucket = BucketOf(address);
+        bucket.Enter();
+        try
+        {
+            if (Volatile.Read(ref *(int*)address) != value) return -EAGAIN;
+            waiter.Address = address;
+            waiter.Bitset = bitset;
+            bucket.Enqueue(waiter);
+        }
+        finally { bucket.Exit(); }
+        try
+        {
+            if (deadline == long.MaxValue) waiter.Woken.Wait();
+            else
+                for (int milliseconds; !waiter.Woken.IsSet && (milliseconds = MillisecondsUntil(deadline)) > 0;)
+                    waiter.Woken.Wait(milliseconds);
+        }
+        catch (ThreadInterruptedException)
+        {
+            // pthread_cancel interrupted the wait: -EINTR, unless a wake took the waiter first, which then counts.
+            if (Dequeue(waiter)) throw;
+        }
+        if (!waiter.Woken.IsSet && Dequeue(waiter)) return -ETIMEDOUT;
+        // A wake took the waiter off the queue; its signal follows as soon as the waker releases the bucket.
+        waiter.Woken.Wait();
+        waiter.Woken.Reset();
+        return 0;
+    }
+
+    /// <summary>The waiters queued on an address, for tests (tests/LlvmNet.UnitTests/HostFutexTests.cs).</summary>
+    internal static int QueuedFutexWaiters(nint address)
+    {
+        FutexBucket bucket = BucketOf(address);
+        int count = 0;
+        bucket.Enter();
+        try
+        {
+            for (FutexWaiter? waiter = bucket.Head; waiter is not null; waiter = waiter.Next)
+                if (waiter.Address == address) count++;
+        }
+        finally { bucket.Exit(); }
+        return count;
+    }
+
+    /// <summary>Takes a waiter that stopped waiting off its queue; false when a wake already did. A requeue may have moved it.</summary>
+    private static bool Dequeue(FutexWaiter waiter)
+    {
+        while (true)
+        {
+            FutexBucket bucket = BucketOf(Volatile.Read(ref waiter.Address));
+            bucket.Enter();
+            try
+            {
+                if (BucketOf(waiter.Address) != bucket) continue;
+                if (!waiter.Queued) return false;
+                bucket.Remove(waiter);
+                return true;
+            }
+            finally { bucket.Exit(); }
+        }
+    }
+
+    /// <summary>
+    /// FUTEX_REQUEUE and FUTEX_CMP_REQUEUE: wakes up to <paramref name="wake"/> waiters on the first address and moves
+    /// up to <paramref name="move"/> more to the second; the compare form first checks the first word.
+    /// </summary>
+    private static long Requeue(nint address, nint target, int wake, int move, int? expected)
+    {
+        if (wake < 0 || move < 0) return -EINVAL;
+        if (target == address) move = 0;
+        FutexBucket from = BucketOf(address), to = BucketOf(target);
+        // Two buckets lock in index order, so concurrent requeues cannot deadlock.
+        FutexBucket first = BucketIndex(address) <= BucketIndex(target) ? from : to, second = first == from ? to : from;
+        FutexWaiter? signaled = null;
+        int woken = 0, moved = 0;
+        first.Enter();
+        if (second != first) second.Enter();
+        try
+        {
+            if (expected is int compare && Volatile.Read(ref *(int*)address) != compare) return -EAGAIN;
+            // Waiters moved within one bucket go behind the end seen here and are not visited again.
+            FutexWaiter? last = from.Tail;
+            for (FutexWaiter? waiter = from.Head; waiter is not null && (woken < wake || moved < move);)
+            {
+                FutexWaiter? next = waiter == last ? null : waiter.Next;
+                if (waiter.Address == address)
+                {
+                    from.Remove(waiter);
+                    if (woken < wake)
+                    {
+                        waiter.NextWoken = signaled;
+                        signaled = waiter;
+                        woken++;
+                    }
+                    else
+                    {
+                        waiter.Address = target;
+                        to.Enqueue(waiter);
+                        moved++;
+                    }
+                }
+                waiter = next;
+            }
+        }
+        finally
+        {
+            if (second != first) second.Exit();
+            first.Exit();
+        }
+        Signal(signaled);
+        return expected is null ? woken : woken + moved;
     }
 
     /// <summary>
@@ -154,6 +360,19 @@ public static unsafe partial class HostSyscalls
                     Monitor.Wait(queue, milliseconds);
                 }
             }
+    }
+
+    /// <summary>FUTEX_UNLOCK_PI: only the owner releases; one waiter wakes to compete for the word.</summary>
+    private static long UnlockPriorityInheritance(nint address, object queue)
+    {
+        lock (queue)
+        {
+            int word = Volatile.Read(ref *(int*)address);
+            if ((word & FUTEX_TID_MASK) != CurrentThreadId) return -EPERM;
+            Volatile.Write(ref *(int*)address, 0);
+            Monitor.Pulse(queue);
+        }
+        return 0;
     }
 
     private sealed class ThreadExit : Exception;
@@ -203,7 +422,7 @@ public static unsafe partial class HostSyscalls
                 if ((flags & CLONE_CHILD_CLEARTID) != 0)
                 {
                     Volatile.Write(ref *(int*)childTid, 0);
-                    Futex(childTid, FUTEX_WAKE, 1, null);
+                    Futex(childTid, FUTEX_WAKE, 1, null, 0, 0);
                 }
                 threads.TryRemove(tid, out _);
                 Interlocked.Decrement(ref clonedThreads);

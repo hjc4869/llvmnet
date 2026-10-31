@@ -53,7 +53,7 @@ In system mode a callback may be a native function or a translated one. `SystemA
 | Processes | `exit`, `exit_group`, `getpid`, `getppid`, `gettid`, `kill`, `tkill`, `tgkill` (to this process), `rt_sigaction`, `rt_sigprocmask`, `rt_sigpending`, `wait4`, `uname`, `prlimit64`, `setrlimit`, `getrusage`, `sysinfo`, `times`, `sched_getaffinity`, `sched_yield`, `getpriority`, `setpriority` (no effect), `prctl`; `getpgrp`, `getpgid` and `getsid` return the process id; child processes through `__llvmnet_spawn` | `fork`, `vfork`, `execve` (`-ENOSYS`), `setpgid`, `setsid` (`-EPERM`), alternate signal stacks (`sigaltstack` succeeds without effect), `rt_sigsuspend` (returns `-EINTR` at once) and `rt_sigtimedwait` (`-EAGAIN`) |
 | Identity | `getuid`, `geteuid`, `getgid`, `getegid` (all 1000), `getgroups`, `setuid` and `setgid` to the same ids | other ids (`-EPERM`) |
 | Time | `clock_gettime`, `clock_getres`, `clock_nanosleep`, `nanosleep`, `gettimeofday`, `time` | |
-| Threads | `futex` (wait, wake, bitset variants, requeue as wake-all), `set_thread_area`, `set_tid_address`, `set_robust_list`, `get_robust_list`, `membarrier`, `exit` of a thread | |
+| Threads | `futex` (wait, wake, their bitset variants, requeue and compare-requeue, the priority-inheritance lock operations; wakes return the number woken), `set_thread_area`, `set_tid_address`, `set_robust_list`, `get_robust_list`, `membarrier`, `exit` of a thread | |
 | Entropy | `getrandom` | |
 
 ## Behavior that differs from a Linux kernel
