@@ -134,7 +134,14 @@ public static unsafe partial class HostSyscalls
         }
     }
 
-    private static readonly FutexBucket[] futexBuckets = Enumerable.Range(0, 256).Select(_ => new FutexBucket()).ToArray();
+    private static readonly FutexBucket[] futexBuckets = NewBuckets();
+
+    private static FutexBucket[] NewBuckets()
+    {
+        var buckets = new FutexBucket[256];
+        for (int index = 0; index < buckets.Length; index++) buckets[index] = new FutexBucket();
+        return buckets;
+    }
     [ThreadStatic] private static FutexWaiter? futexWaiter;
 
     /// <summary>Fibonacci hashing of the address's 4-byte word into 256 buckets.</summary>

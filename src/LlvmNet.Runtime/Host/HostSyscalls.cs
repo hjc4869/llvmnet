@@ -43,16 +43,24 @@ public static unsafe partial class HostSyscalls
     /// <summary>One tab-separated line per refused service (area, calls, errno, reason), for "llvmnet --print-host-limitations".</summary>
     public static IEnumerable<string> DescribeUnavailable() => Unavailable.Select(service => $"{service.Area}\t{service.Calls}\t{service.Errno}\t{service.Reason}");
 
-    private static readonly Dictionary<Linux.Syscall, int> unavailable = Unavailable
-        .SelectMany(service => service.Numbers.Select(number => (number, errno: service.Errno == "EPERM" ? EPERM : ENOSYS)))
-        .ToDictionary(pair => pair.number, pair => pair.errno);
+    /// <summary>The errno of each refused system call, indexed by number (0 for the others): consulted on every call.</summary>
+    private static readonly int[] unavailable = RefusedNumbers();
+
+    private static int[] RefusedNumbers()
+    {
+        var numbers = new int[512];
+        foreach (UnavailableService service in Unavailable)
+            foreach (Linux.Syscall number in service.Numbers)
+                numbers[(int)number] = service.Errno == "EPERM" ? EPERM : ENOSYS;
+        return numbers;
+    }
 
     [CExport("__llvmnet_syscall")]
     public static long Syscall(long number, long a, long b, long c, long d, long e, long f)
     {
         try
         {
-            if (unavailable.TryGetValue((Linux.Syscall)number, out int refused)) return -refused;
+            if ((ulong)number < (ulong)unavailable.Length && unavailable[number] is int refused and not 0) return -refused;
             return (Linux.Syscall)number switch
             {
                 Linux.Syscall.Read => Read((int)a, (nint)b, c),

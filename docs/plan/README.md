@@ -27,6 +27,7 @@ Measurements are in [evidence/2026-11-01-m8-performance.md](../evidence/2026-11-
 - **PF-03.** Portable streams get 4,096-byte buffers, glibc's size, instead of musl's 1,024, and `long double` comparisons no longer build `BigInteger` values: fwrite is 1.83 times native under the JIT (from 2.39) and 1.41 as NativeAOT (from 2.11). A host call costs 30 to 90 ns more than the kernel's own under the JIT.
 - **PF-04.** Translated methods no longer zero their locals and stack buffers on entry (an alloca's contents are undefined), and allocas of functions with variable-length arrays or `setjmp` come from a per-thread arena instead of one heap block each: H.264 decoding went from 3.20 to 2.20 times native under the JIT and from 2.23 to 1.46 as NativeAOT, varargs and printf by a quarter. HEVC and SPEC deepsjeng gain little.
 - **PF-05.** `calli`, which llvmnet emits for indirect calls, is faster than delegates, interfaces or a `switch` over direct calls; ffmpeg's 9 to 24 million indirect calls per decode cost milliseconds, so nothing changes.
+- **PF-10.** A JIT hello world starts in 36 ms (from 39; any `dotnet program.dll` takes 17), NativeAOT in 2 ms like native. Invariant globalization turned out to break IANA time-zone names on Windows: the JIT keeps ICU, and NativeAOT executables for Windows, which had resolved `Europe/London` to UTC, keep it now too.
 - **M8 exit.** PF-01 and PF-02 are done and the benchmark table is published; the exit's nightly table on CI starts with the first GitHub run (FD-19).
 
 ## Progress (2026-10-31, M7)

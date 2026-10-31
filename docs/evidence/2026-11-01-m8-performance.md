@@ -224,3 +224,19 @@ A translated indirect call loads the target address and executes `calli` with th
 
 The A/B runs in this file use `scripts/ab-time.py` (alternating runs, medians), the PF-03 tables `tests/perf/probes/hostcall.c` and `tests/perf/probes/fwrite-buffer.c`.
 
+## PF-10: startup latency
+
+A hello-world program (`tests/perf/hello.c`), A/B with `scripts/ab-time.py` (40 to 60 alternating runs, medians): native 1 ms, NativeAOT 2 ms, the JIT 38 ms, and an empty C# program that writes the same line on the same runtime 17 ms, which is the floor of any `dotnet program.dll`. Of the 21 ms above it, most is JIT compilation before `main` (`DOTNET_JitDisasmSummary=1`): 194 methods, 28 of them translated (musl's start-up, `puts`, `exit`) and 166 from the runtime library and the base library, among them about 35 generic LINQ methods instantiated by three expressions that run at every start (copying the environment, building the table of refused system calls, creating the futex buckets) and the `Dictionary` the table used. These are now loops and an array indexed by system-call number (also one lookup less per system call): 134 methods before `main`, and the hello-world program starts in 36 ms instead of 39; MiBench jpeg, whose 0.09 s are mostly start-up, in 86 ms instead of 88.
+
+Measured and not adopted:
+
+| Variant (hello world, JIT) | Median |
+| --- | ---: |
+| as emitted | 37 ms |
+| `System.Globalization.Invariant` (no ICU) | 36 ms |
+| `TieredPGO` off | 37 ms |
+| tiered compilation off | 58 ms |
+| `LlvmNet.Runtime.dll` compiled ReadyToRun for linux-x64 (157 KB to 370 KB) | 35 ms |
+| ReadyToRun runtime and no ICU | 32 ms |
+
+**Invariant globalization is not safe for portable images.** On the Windows host, a portable program that sets `TZ=Europe/London` printed `2024-07-01 13:00:00 +0100 isdst=1` for 12:00 UTC, and `12:00:00 +0000 isdst=0` with `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`: .NET on Windows needs ICU to map IANA zone names to its own zones, so the generated zone information (LC-09) silently becomes UTC. The JIT's `runtimeconfig.json`, shared by every host, therefore keeps ICU. NativeAOT projects had set `InvariantGlobalization` unconditionally, which made exactly that happen in win-x64 executables: published on the Windows host, the same program printed `12:00:00 +0000` with the old setting and `13:00:00 +0100` with the new one, which sets it only for runtime identifiers other than `win-*` (`ToolchainTests.NativeAotProjectsKeepIcuOnWindows`; `dotnet msbuild -getProperty` gives `true` for linux-x64 and osx-arm64 and nothing for win-x64). ReadyToRun would save 3 ms on linux-x64 only and more than double the runtime library that every portable image carries; it belongs to the ReadyToRun evaluation of PF-06 (TC-08). NativeAOT executables already start as fast as native ones.

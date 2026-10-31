@@ -129,7 +129,10 @@ internal static class Toolchain
                 new XElement("AllowUnsafeBlocks", "true"), new XElement("StripSymbols", debug ? "false" : "true"),
                 new XElement("DebugType", debug ? "portable" : "none"),
                 new XElement("IlcGenerateMapFile", debug ? "true" : "false"),
-                new XElement("IlcOptimizationPreference", preference), new XElement("InvariantGlobalization", "true"),
+                new XElement("IlcOptimizationPreference", preference),
+                // No ICU on Linux and macOS, where the host needs none; Windows needs it to resolve IANA time-zone
+                // names (TZ=Europe/London) to its own zones, so a win-* executable keeps it (PF-10).
+                new XElement("InvariantGlobalization", new XAttribute("Condition", "!$(RuntimeIdentifier.StartsWith('win'))"), "true"),
                 new XElement("IlcInstructionSet", instructionSet == "native" ? "native" : ""),
                 new XElement("EnableDefaultCompileItems", "false"),
                 // Cross-publishing from Linux x64 to linux-arm64 (XP-05) links with clang and the aarch64 cross sysroot

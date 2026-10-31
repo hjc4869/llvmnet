@@ -20,8 +20,21 @@ public static unsafe class ProcessRuntime
         string[] values = [Environment.GetCommandLineArgs().FirstOrDefault() ?? Environment.ProcessPath ?? "program", .. arguments];
         Arguments = Strings(values);
         ArgumentCount = values.Length;
-        EnvironmentVector = Strings(Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().Select(item => $"{item.Key}={item.Value}").ToArray());
+        EnvironmentVector = Strings(EnvironmentEntries());
         return values.Length;
+    }
+
+    /// <summary>
+    /// The process environment as "name=value" strings. A loop rather than LINQ: this runs at every start, and each
+    /// generic LINQ method it would instantiate is another JIT compilation before main (PF-10).
+    /// </summary>
+    private static string[] EnvironmentEntries()
+    {
+        System.Collections.IDictionary variables = Environment.GetEnvironmentVariables();
+        var entries = new string[variables.Count];
+        int index = 0;
+        foreach (System.Collections.DictionaryEntry item in variables) entries[index++] = $"{item.Key}={item.Value}";
+        return entries;
     }
 
     /// <summary>
@@ -32,7 +45,7 @@ public static unsafe class ProcessRuntime
     {
         HostSyscalls.InitializeHost();
         string[] values = [Environment.GetCommandLineArgs().FirstOrDefault() ?? Environment.ProcessPath ?? "program", .. arguments];
-        string[] environment = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().Select(item => $"{item.Key}={item.Value}").ToArray();
+        string[] environment = EnvironmentEntries();
         int slots = values.Length + 1 + environment.Length + 1 + 2 * 8;
         nint vector = (nint)NativeMemory.AllocZeroed((nuint)slots, (nuint)IntPtr.Size);
         argumentAllocations.Add(vector);
