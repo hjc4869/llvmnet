@@ -14,31 +14,4 @@ What llvmnet supports today and its known limitations. Open work and milestones 
 
 ## Known Limitations
 
-Compiler:
-
-- The driver is not a complete Clang driver; native linker options are rejected.
-- Rejected LLVM constructs include computed goto (`indirectbr`), `callbr`, integers wider than 128 bits, `half`, `bfloat` and `fp128` (so Fortran `REAL(16)` and `__float128`), scalable vectors, the `x86_fp80` `minimum`/`maximum`, `canonicalize` and saturating-conversion intrinsics, ifuncs and inline assembly with instructions; [user/support-matrix.md](user/support-matrix.md) has the full list.
-- Vector IR runs as scalar code, except through the opt-in SIMD128 header.
-- `longjmp` cannot cross native frames. External thread-local globals need a bitcode definition.
-- Functions with many aggregate values or `setjmp` sites can exceed CLR method limits, and very large functions may run without JIT optimization; `--diagnose-limits` reports both.
-- Emitted assemblies carry no debug information; `-g` adds source locations to compiler errors.
-
-Portable mode:
-
-- Services .NET cannot provide are unavailable: `fork`, `exec`, sockets, hard links, FIFOs, SysV IPC, memory protection and asynchronous signals. [dev/host-abi.md](dev/host-abi.md) lists every difference from Linux.
-- Only the C and C.UTF-8 locales.
-- The floating-point environment is fixed: round to nearest, no exception flags.
-- `__linux__` and the other host macros are not defined, so code that selects platform code by them needs a portable path.
-- Windows and macOS differ from Linux where their file systems and shells do (Windows permission bits, symbolic-link privileges, `/bin/sh` from Git for Windows); [dev/host-abi.md](dev/host-abi.md#hosts-other-than-linux) lists the differences. Running the compiler itself on Windows or macOS is not supported ([toolchain.md](toolchain.md#supported-hosts)).
-
-System mode:
-
-- Linux x86-64 only.
-- Native code cannot call translated variadic or aggregate callbacks. Thread cancellation, `pthread_exit`, signal handlers in translated code, external native TLS globals and callbacks on threads created by native libraries are incomplete.
-- No native C++ library interchange: C++ library code must be linked as bitcode.
-- OpenMP needs a staged LLVM OpenMP runtime on the loader path.
-
-Workloads:
-
-- ffmpeg's FATE suite is not run, and not every enabled decoder has a test fixture.
-- SPEC runs use explicitly selected inputs and are not reportable results.
+[user/limitations.md](user/limitations.md) is the one page of what llvmnet does not do: the LLVM constructs the compiler rejects and the system calls the portable host refuses are generated from the code (BE-02 and the runtime's own table), and the remaining limits of each mode, of the other hosts and of the workload gates are listed with it.

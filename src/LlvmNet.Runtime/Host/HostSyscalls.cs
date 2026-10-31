@@ -12,11 +12,47 @@ namespace LlvmNet.Runtime;
 /// </summary>
 public static unsafe partial class HostSyscalls
 {
+    /// <summary>One service the host cannot provide: the calls, the errno they return and the reason, for docs/user/limitations.md.</summary>
+    internal sealed record UnavailableService(string Area, string Calls, string Errno, string Reason, params Linux.Syscall[] Numbers);
+
+    /// <summary>
+    /// The services .NET cannot provide, refused by name with the errno a program sees. Everything else that is not
+    /// implemented returns -ENOSYS without a name. scripts/limitations.py generates the user-facing table from this
+    /// list through "llvmnet --print-host-limitations" (TC-17); docs/dev/host-abi.md states the contract.
+    /// </summary>
+    internal static readonly UnavailableService[] Unavailable =
+    [
+        new("Processes", "fork, vfork, clone, clone3", "ENOSYS", ".NET cannot duplicate a process or create a raw thread; posix_spawn, system and popen start child processes, and pthread_create goes through the host's thread entry point", Linux.Syscall.Fork, Linux.Syscall.Vfork, Linux.Syscall.Clone, Linux.Syscall.Clone3),
+        new("Processes", "execve, execveat", "ENOSYS", "a .NET process cannot replace its image; posix_spawn starts the program as a child", Linux.Syscall.Execve, Linux.Syscall.Execveat),
+        new("Processes", "setpgid, setsid", "EPERM", "process groups and sessions are not controllable from .NET; getpgrp and getsid report the process id", Linux.Syscall.Setpgid, Linux.Syscall.Setsid),
+        new("Processes", "ptrace, personality, chroot, mount, umount2, unshare, seccomp", "ENOSYS", "no process tracing, execution domains, root changes, mounts, namespaces or system-call filters in a managed process", Linux.Syscall.Ptrace, Linux.Syscall.Personality, Linux.Syscall.Chroot, Linux.Syscall.Mount, Linux.Syscall.Umount2, Linux.Syscall.Unshare, Linux.Syscall.Seccomp),
+        new("Processes", "sched_setaffinity", "ENOSYS", "managed threads have no processor affinity; sched_getaffinity reports the processors .NET uses", Linux.Syscall.SchedSetaffinity),
+        new("Processes", "process_vm_readv, process_vm_writev", "ENOSYS", "another process's memory is not reachable", Linux.Syscall.ProcessVmReadv, Linux.Syscall.ProcessVmWritev),
+        new("Sockets", "socket, socketpair, connect, bind, listen, accept, accept4, send and receive calls, shutdown, getsockname, getpeername, setsockopt, getsockopt", "ENOSYS", "sockets are not provided in 1.0 (LC-13); a later release may implement them over .NET sockets", Linux.Syscall.Socket, Linux.Syscall.Socketpair, Linux.Syscall.Connect, Linux.Syscall.Bind, Linux.Syscall.Listen, Linux.Syscall.Accept, Linux.Syscall.Accept4, Linux.Syscall.Sendto, Linux.Syscall.Recvfrom, Linux.Syscall.Sendmsg, Linux.Syscall.Recvmsg, Linux.Syscall.Shutdown, Linux.Syscall.Getsockname, Linux.Syscall.Getpeername, Linux.Syscall.Setsockopt, Linux.Syscall.Getsockopt),
+        new("File system", "link, linkat", "EPERM", ".NET cannot create hard links (LC-30)", Linux.Syscall.Link, Linux.Syscall.Linkat),
+        new("File system", "mknod, mknodat", "EPERM", "no device files or named pipes; an existing FIFO is reported as a regular file (LC-30)", Linux.Syscall.Mknod, Linux.Syscall.Mknodat),
+        new("File system", "setxattr, getxattr, listxattr, removexattr and their l- and f- forms", "ENOSYS", "extended attributes have no .NET interface", Linux.Syscall.Setxattr, Linux.Syscall.Lsetxattr, Linux.Syscall.Fsetxattr, Linux.Syscall.Getxattr, Linux.Syscall.Lgetxattr, Linux.Syscall.Fgetxattr, Linux.Syscall.Listxattr, Linux.Syscall.Llistxattr, Linux.Syscall.Flistxattr, Linux.Syscall.Removexattr, Linux.Syscall.Lremovexattr, Linux.Syscall.Fremovexattr),
+        new("File system", "inotify_init, inotify_init1, inotify_add_watch, inotify_rm_watch", "ENOSYS", "file-system notification is not provided", Linux.Syscall.InotifyInit, Linux.Syscall.InotifyInit1, Linux.Syscall.InotifyAddWatch, Linux.Syscall.InotifyRmWatch),
+        new("File system", "splice, tee, vmsplice", "ENOSYS", "pipe-to-pipe and pipe-to-memory transfers are not provided; read and write work on pipes", Linux.Syscall.Splice, Linux.Syscall.Tee, Linux.Syscall.Vmsplice),
+        new("Descriptors", "epoll_create, epoll_create1, epoll_ctl, epoll_wait, epoll_pwait", "ENOSYS", "no epoll; poll, ppoll, select and pselect work on pipes and files", Linux.Syscall.EpollCreate, Linux.Syscall.EpollCreate1, Linux.Syscall.EpollCtl, Linux.Syscall.EpollWait, Linux.Syscall.EpollPwait),
+        new("Descriptors", "eventfd, eventfd2, signalfd, signalfd4, timerfd_create, memfd_create, userfaultfd, io_uring_setup", "ENOSYS", "these descriptor kinds have no .NET equivalent; pipes serve as wake-up descriptors", Linux.Syscall.Eventfd, Linux.Syscall.Eventfd2, Linux.Syscall.Signalfd, Linux.Syscall.Signalfd4, Linux.Syscall.TimerfdCreate, Linux.Syscall.MemfdCreate, Linux.Syscall.Userfaultfd, Linux.Syscall.IoUringSetup),
+        new("Interprocess communication", "shmget, shmat, shmdt, shmctl, semget, semop, semctl, msgget, msgsnd, msgrcv, msgctl, mq_open", "ENOSYS", "System V and POSIX message queues, semaphores and shared memory are not provided (LC-30); shared file mappings within one process work", Linux.Syscall.Shmget, Linux.Syscall.Shmat, Linux.Syscall.Shmdt, Linux.Syscall.Shmctl, Linux.Syscall.Semget, Linux.Syscall.Semop, Linux.Syscall.Semctl, Linux.Syscall.Msgget, Linux.Syscall.Msgsnd, Linux.Syscall.Msgrcv, Linux.Syscall.Msgctl, Linux.Syscall.MqOpen),
+        new("Timers", "timer_create", "ENOSYS", "POSIX interval timers that deliver signals are not provided; nanosleep, clock_nanosleep and alarm-free waits work", Linux.Syscall.TimerCreate),
+    ];
+
+    /// <summary>One tab-separated line per refused service (area, calls, errno, reason), for "llvmnet --print-host-limitations".</summary>
+    public static IEnumerable<string> DescribeUnavailable() => Unavailable.Select(service => $"{service.Area}\t{service.Calls}\t{service.Errno}\t{service.Reason}");
+
+    private static readonly Dictionary<Linux.Syscall, int> unavailable = Unavailable
+        .SelectMany(service => service.Numbers.Select(number => (number, errno: service.Errno == "EPERM" ? EPERM : ENOSYS)))
+        .ToDictionary(pair => pair.number, pair => pair.errno);
+
     [CExport("__llvmnet_syscall")]
     public static long Syscall(long number, long a, long b, long c, long d, long e, long f)
     {
         try
         {
+            if (unavailable.TryGetValue((Linux.Syscall)number, out int refused)) return -refused;
             return (Linux.Syscall)number switch
             {
                 Linux.Syscall.Read => Read((int)a, (nint)b, c),
@@ -59,7 +95,6 @@ public static unsafe partial class HostSyscalls
                 Linux.Syscall.Dup3 => (int)a == (int)b ? -EINVAL : Duplicate((int)a, (int)b, (int)c),
                 Linux.Syscall.Nanosleep => Sleep((Timespec*)a),
                 Linux.Syscall.Getpid => Environment.ProcessId,
-                Linux.Syscall.Fork or Linux.Syscall.Vfork or Linux.Syscall.Execve => -ENOSYS,   // posix_spawn goes to __llvmnet_spawn
                 Linux.Syscall.Exit => ExitThread((int)a),
                 Linux.Syscall.Wait4 => Wait((int)a, (int*)b, (int)c),
                 Linux.Syscall.Kill => (int)a == Environment.ProcessId || (int)a == 0 || (int)a == -1 ? Raise((int)b) : -ESRCH,
@@ -85,7 +120,6 @@ public static unsafe partial class HostSyscalls
                 Linux.Syscall.Rmdir => Unlink(AT_FDCWD, (nint)a, AT_REMOVEDIR),
                 Linux.Syscall.Unlink => Unlink(AT_FDCWD, (nint)a, 0),
                 Linux.Syscall.Unlinkat => Unlink((int)a, (nint)b, (int)c),
-                Linux.Syscall.Link or Linux.Syscall.Linkat => -EPERM,  // .NET cannot create hard links
                 Linux.Syscall.Symlink => SymbolicLink((nint)a, AT_FDCWD, (nint)b),
                 Linux.Syscall.Symlinkat => SymbolicLink((nint)a, (int)b, (nint)c),
                 Linux.Syscall.Readlink => ReadLink(AT_FDCWD, (nint)a, (byte*)b, c),
@@ -96,7 +130,6 @@ public static unsafe partial class HostSyscalls
                 Linux.Syscall.Chown or Linux.Syscall.Lchown => ChangeOwner(AT_FDCWD, (nint)a, (int)b, (int)c),
                 Linux.Syscall.Fchown => ChangeOwner((int)a, 0, (int)b, (int)c),
                 Linux.Syscall.Fchownat => ChangeOwner((int)a, (nint)b, (int)c, (int)d),
-                Linux.Syscall.Mknod or Linux.Syscall.Mknodat => -EPERM,  // no device files or named pipes
                 Linux.Syscall.Umask => SetFileCreationMask((int)a),
                 Linux.Syscall.Gettimeofday => TimeOfDay((long*)a),
                 Linux.Syscall.Getrusage => ResourceUsage((int)a, (long*)b),
@@ -108,7 +141,6 @@ public static unsafe partial class HostSyscalls
                 Linux.Syscall.Getgroups => Groups((int)a, (uint*)b),
                 Linux.Syscall.Getppid => 1,
                 Linux.Syscall.Getpgrp or Linux.Syscall.Getpgid or Linux.Syscall.Getsid => Environment.ProcessId,
-                Linux.Syscall.Setpgid or Linux.Syscall.Setsid => -EPERM,
                 Linux.Syscall.Getpriority => 20,                       // nice value 0, offset by 20 as the kernel reports it
                 Linux.Syscall.Setpriority => 0,
                 Linux.Syscall.RtSigpending => PendingSignals((ulong*)a),

@@ -71,7 +71,10 @@ internal static class Linux
     /// <summary>The identity every portable program sees on every host: one user and group, number 1000.</summary>
     internal const int UserId = 1000, GroupId = 1000;
 
-    /// <summary>System call numbers the host implements; any other number returns -ENOSYS.</summary>
+    /// <summary>
+    /// System call numbers the host implements, and the ones it refuses by name (<see cref="HostSyscalls.Unavailable"/>);
+    /// any other number returns -ENOSYS.
+    /// </summary>
     internal enum Syscall : long
     {
         Read = 0, Write = 1, Open = 2, Close = 3, Stat = 4, Fstat = 5, Lstat = 6, Poll = 7, Lseek = 8, Mmap = 9, Mprotect = 10,
@@ -92,6 +95,17 @@ internal static class Linux
         Linkat = 265, Symlinkat = 266, Readlinkat = 267, Fchmodat = 268, Faccessat = 269, Pselect6 = 270, Ppoll = 271,
         SetRobustList = 273, GetRobustList = 274, Utimensat = 280, Fallocate = 285, Dup3 = 292, Pipe2 = 293, Preadv = 295, Pwritev = 296, Prlimit64 = 302,
         Syncfs = 306, Renameat2 = 316, Getrandom = 318, Membarrier = 324, CopyFileRange = 326, Preadv2 = 327, Pwritev2 = 328, Faccessat2 = 439,
+        // Refused by name: services .NET cannot provide (HostSyscalls.Unavailable gives the errno and the reason).
+        Shmget = 29, Shmat = 30, Shmctl = 31, Socket = 41, Connect = 42, Accept = 43, Sendto = 44, Recvfrom = 45, Sendmsg = 46,
+        Recvmsg = 47, Shutdown = 48, Bind = 49, Listen = 50, Getsockname = 51, Getpeername = 52, Socketpair = 53, Setsockopt = 54,
+        Getsockopt = 55, Clone = 56, Semget = 64, Semop = 65, Semctl = 66, Shmdt = 67, Msgget = 68, Msgsnd = 69, Msgrcv = 70, Msgctl = 71,
+        Ptrace = 101, Personality = 135, Chroot = 161, Mount = 165, Umount2 = 166, Setxattr = 188, Lsetxattr = 189, Fsetxattr = 190,
+        Getxattr = 191, Lgetxattr = 192, Fgetxattr = 193, Listxattr = 194, Llistxattr = 195, Flistxattr = 196, Removexattr = 197,
+        Lremovexattr = 198, Fremovexattr = 199, SchedSetaffinity = 203, EpollCreate = 213, TimerCreate = 222, EpollWait = 232,
+        EpollCtl = 233, MqOpen = 240, InotifyInit = 253, InotifyAddWatch = 254, InotifyRmWatch = 255, Unshare = 272, Splice = 275,
+        Tee = 276, Vmsplice = 278, EpollPwait = 281, Signalfd = 282, TimerfdCreate = 283, Eventfd = 284, Accept4 = 288, Signalfd4 = 289,
+        Eventfd2 = 290, EpollCreate1 = 291, InotifyInit1 = 294, ProcessVmReadv = 310, ProcessVmWritev = 311, Seccomp = 317,
+        MemfdCreate = 319, Execveat = 322, Userfaultfd = 323, IoUringSetup = 425, Clone3 = 435,
     }
 
     /// <summary>struct stat as the x86-64 kernel fills it (144 bytes).</summary>

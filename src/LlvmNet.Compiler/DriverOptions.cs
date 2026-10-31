@@ -156,6 +156,7 @@ internal static class DriverOptions
         new("-print-prog-name=", OptionKind.Joined, Hidden, "", H, value: "<name>"),
         new("--print-driver-reference", OptionKind.Flag, Hidden, "", H),
         new("--print-option-table", OptionKind.Flag, Hidden, "", H),
+        new("--print-host-limitations", OptionKind.Flag, Hidden, "", H),
         // Frontend options: the documented examples; every other option that starts with - is forwarded as well.
         new("-O", OptionKind.Joined, Frontend, "Optimization level. The default is -O1 without automatic vectorization (ADR-11); -O0 is accepted and -O3 fully tested", F, value: "<level>"),
         new("-fvectorize", OptionKind.Flag, Frontend, "Enable loop vectorization (also -fslp-vectorize); the vector IR is scalarized to CIL", F),

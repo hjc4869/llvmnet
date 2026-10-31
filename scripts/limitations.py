@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Generate docs/user/limitations.md, the one page of what llvmnet does not do (TC-17).
+
+Two parts come from code: the LLVM constructs the compiler rejects, from the generated support matrix (BE-02,
+docs/user/support-matrix.md), and the system services the portable host refuses by name, from the runtime's own table
+(HostSyscalls.Unavailable, printed by "llvmnet --print-host-limitations"). The rest is the fixed text below, kept here
+so that the page is produced by one command: tests/limitations.sh regenerates it and fails when it is out of date.
+
+Usage: limitations.py <llvmnet> <support-matrix.md> <output.md>
+"""
+import re
+import subprocess
+import sys
+
+HEADER = """# Limitations
+
+What llvmnet does not do, in one place. The two tables are generated from code: the compiler's rejected constructs from the probes behind [support-matrix.md](support-matrix.md), and the portable host's refused system calls from the runtime's own table; `scripts/limitations.py` writes this page and `tests/limitations.sh` keeps it current. Everything else here is the documented state of the 0.x releases; the plan items in parentheses track the open ones.
+"""
+
+COMPILER = """## Compiler
+
+Programs are compiled through Clang and Flang 22 and translated from LLVM IR to CIL; what the frontends reject is theirs to report. The backend rejects the constructs below with a compile error naming the function and the instruction ([driver.md](driver.md#exit-status)); everything else in the support matrix is translated.
+
+{rejected}
+
+Further limits of the translation:
+
+- Vector IR runs as scalar code: LLVM's vectorizers are off by default and their output is scalarized (ADR-10); the opt-in `--simd128` header path maps `wasm_simd128.h` intrinsics to `Vector128` ([simd128.md](simd128.md)).
+- `longjmp` cannot cross native frames (system mode), and an external thread-local global needs a bitcode definition (SA-03).
+- A function with very many aggregate values or `setjmp` sites can exceed the CLR's limits on locals, and a very large function runs without JIT optimization; `--diagnose-limits` reports both (BE-25, BE-26).
+- Emitted assemblies carry no debug information yet, so stack traces show LLVM symbol names without source lines; `-g` gives compiler diagnostics a `file:line:col` location (BE-28).
+- Native code cannot call a translated variadic or aggregate callback (system mode, SA-02).
+"""
+
+PORTABLE = """## Portable mode
+
+A portable program (`dotnet64-v2`) contains musl, libc++ and flang-rt, and reaches the operating system through the host layer in `LlvmNet.Runtime`, which implements Linux system-call semantics over .NET ([dev/host-abi.md](../dev/host-abi.md)). The services .NET cannot provide are refused with the errno below; a number the host does not implement at all returns `ENOSYS` without a name.
+
+{unavailable}
+
+Behavior that differs from a Linux kernel, in short ([dev/host-abi.md](../dev/host-abi.md#behavior-that-differs-from-a-linux-kernel) has the full list):
+
+- Signals raised inside the process are delivered synchronously on the raising thread; `SIGINT`, `SIGTERM`, `SIGHUP` and `SIGQUIT` from outside reach a handler on a .NET signal thread; faults such as `SIGSEGV` are not delivered, the CLR reports them.
+- Child processes are host processes that inherit only the standard descriptors; `system` and `popen` need `/bin/sh` on the host.
+- File mappings are copies written back at `msync` and `munmap`; there is no memory protection.
+- The process runs as user and group 1000 and owns every file it can see; inode numbers are hashes of the path.
+- Descriptor-relative calls (`openat` and the other `*at` calls) resolve against the directory's path, so they are not safe against a directory being replaced between calls.
+- Only the C and C.UTF-8 locales exist; the floating-point environment is fixed to round-to-nearest without exception flags.
+- `__linux__`, `__unix__`, `__x86_64__` and the other host macros are not defined (ADR-14); a program that selects platform code by them needs a portable path or a documented per-program flag.
+- Thread stacks are at least 8 MB and `CLOCK_THREAD_CPUTIME_ID` reports process time.
+"""
+
+HOSTS = """## Hosts other than Linux
+
+The same image runs on Linux x64 and ARM64, Windows x64 and macOS ARM64 ([deployment.md](deployment.md#supported-hosts)); macOS and ARM64 behave like Linux x64 in every host-interface check. On Windows the file system and the shell differ ([dev/host-abi.md](../dev/host-abi.md#hosts-other-than-linux)):
+
+- Paths: a drive is a root directory named by its letter (`/c/Users/...`), `/tmp` is the temporary directory, the file system is case-insensitive.
+- Permissions: there are no mode bits; `stat` reports `0644` or `0755`, `chmod` sets or clears the read-only attribute, and no directory is unsearchable.
+- Symbolic links need the create-symbolic-link privilege (Developer Mode or an elevated process).
+- `system` and `popen` need `sh.exe` from Git for Windows on `PATH`.
+- Time-zone abbreviations from generated zoneinfo images are numeric (`+01`).
+
+The compiler itself runs on Linux x64 only (ADR-05): NativeAOT executables for Windows and macOS are published on those hosts from the project `--aot-project` writes.
+"""
+
+SYSTEM = """## System mode
+
+- Linux x86-64 only (`system-linux-x64-v1`); a Linux ARM64 system ABI is post-1.0 (SA-08).
+- Native code cannot call translated variadic or aggregate callbacks (SA-02); thread cancellation and `pthread_exit` across managed frames (SA-05), signal handlers in translated code (SA-06), external native TLS globals (SA-03) and callbacks on threads created by native libraries (SA-04) are incomplete.
+- No native C++ library interchange: C++ library code must be linked as bitcode (the optional libstdc++ archive, or libc++ in portable mode).
+- OpenMP needs a staged LLVM OpenMP runtime on the loader path (`scripts/install-system-openmp.sh`).
+- `-static` is not accepted: the host's C library and native libraries are reached through generated bridges.
+"""
+
+WORKLOADS = """## Workloads
+
+- ffmpeg's FATE suite is not run; the ffmpeg profile is checked on a fixture set and, locally, on private media (WG-04).
+- SPEC CPU runs use explicitly selected inputs and are not reportable results; the portable-mode exclusions (`fork`, glibc-specific behavior, prototypes that contradict the definition) are listed in the SPEC evidence (ADR-14).
+"""
+
+
+def rejected_rows(matrix):
+    """The rejected rows of the support matrix, grouped by its sections."""
+    sections, current = [], None
+    for line in matrix.splitlines():
+        if line.startswith("## "):
+            current = (line[3:].strip(), [])
+            sections.append(current)
+        elif current and line.startswith("| `") and "| rejected |" in line:
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            current[1].append((cells[0], cells[2]))
+    lines = ["| Construct | Diagnostic |", "| --- | --- |"]
+    for name, rows in sections:
+        for construct, diagnostic in rows:
+            lines.append(f"| {name}: {construct} | {diagnostic} |")
+    count = sum(len(rows) for _, rows in sections)
+    total = re.search(r"(\d+) of (\d+) constructs are translated", matrix)
+    summary = f"{count} of the {total.group(2)} probed constructs are rejected ({total.group(1)} translated)." if total else f"{count} constructs are rejected."
+    return summary + "\n\n" + "\n".join(lines)
+
+
+def unavailable_rows(table):
+    lines = ["| Area | Calls | Result | Why |", "| --- | --- | --- | --- |"]
+    for line in table.splitlines():
+        area, calls, errno, reason = line.split("\t")
+        lines.append(f"| {area} | {calls} | `{errno}` | {reason} |")
+    return "\n".join(lines)
+
+
+def main():
+    llvmnet, matrix_path, output = sys.argv[1:4]
+    with open(matrix_path) as handle:
+        matrix = handle.read()
+    table = subprocess.run([llvmnet, "--print-host-limitations"], check=True, capture_output=True, text=True).stdout
+    page = "\n".join([HEADER, COMPILER.format(rejected=rejected_rows(matrix)), PORTABLE.format(unavailable=unavailable_rows(table)), HOSTS, SYSTEM, WORKLOADS])
+    with open(output, "w") as handle:
+        handle.write(page)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

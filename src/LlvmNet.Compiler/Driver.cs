@@ -220,6 +220,12 @@ internal static class Driver
         }
         if (parsed.Any(argument => argument.Is("--print-driver-reference"))) { Console.Write(DriverOptions.Reference()); return 0; }
         if (parsed.Any(argument => argument.Is("--print-option-table"))) { Console.Write(DriverOptions.OptionTable()); return 0; }
+        if (parsed.Any(argument => argument.Is("--print-host-limitations")))
+        {
+            // The services the portable host cannot provide, as the runtime declares them (scripts/limitations.py).
+            foreach (string line in HostSyscalls.DescribeUnavailable()) Console.WriteLine(line);
+            return 0;
+        }
         var invocation = new Invocation(parsed, driver);
         driver = invocation.Driver;
         CompilerOptions options = invocation.Options;
