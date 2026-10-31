@@ -17,289 +17,348 @@ internal sealed class CompilerOptions
     internal List<string> CilReferences { get; } = [];
 }
 
+/// <summary>One link input: a source or object with the language in effect for it (from -x), or an archive with its whole-archive state.</summary>
+internal sealed record LinkInput(string Path, string? Language, bool WholeArchive);
+
+/// <summary>
+/// The interpreted command line: every option classified by the table (<see cref="DriverOptions"/>) for the selected
+/// runtime mode, with the handled ones applied, the forwarded ones collected in order and the rejected ones reported.
+/// </summary>
+internal sealed class Invocation
+{
+    internal CompilerOptions Options { get; } = new();
+    internal string Driver { get; private set; }
+    internal List<string> Frontend { get; } = [];
+    internal List<LinkInput> Inputs { get; } = [];
+    internal List<string> SearchPaths { get; } = [];
+    internal List<string> Libraries { get; } = [];
+    internal string? Output { get; private set; }
+    internal string? KeepIr { get; private set; }
+    internal bool CompileOnly { get; private set; }
+    internal bool Textual { get; private set; }
+    internal bool Preprocess { get; private set; }
+    internal bool EmitLlvm { get; private set; }
+    internal bool DependencyOnly { get; private set; }
+    internal bool SyntaxOnly { get; private set; }
+    internal bool Relocatable { get; private set; }
+    internal bool DryRun { get; private set; }
+    internal bool AotDebug { get; private set; }
+    internal bool LinkerVersion { get; private set; }
+    internal bool StartFiles { get; private set; } = true;
+    internal bool DefaultLibraries { get; private set; } = true;
+    internal bool CxxLibraries { get; private set; } = true;
+    internal bool ModuleDirectoryGiven { get; private set; }
+    internal string? RuntimeId { get; private set; }
+    internal string? AotProject { get; private set; }
+    internal string? AotInstructionSet { get; private set; }
+    internal string AotPreference { get; private set; } = "Balanced";
+    /// <summary>Queries the frontend answers (--version, -dumpmachine, -print-...), run instead of a compilation.</summary>
+    internal List<string> Queries { get; } = [];
+
+    internal Invocation(IReadOnlyList<ParsedArgument> arguments, string driver)
+    {
+        Driver = driver;
+        // The mode decides how several options are treated, so it is read before anything is classified.
+        foreach (ParsedArgument argument in arguments)
+            if (argument.Is("--runtime")) Options.Runtime = argument.Value!;
+        if (Options.Runtime == "managed-host")
+            throw new ArgumentException("--runtime=managed-host was removed (ADR-04); use --runtime=portable for a platform-neutral .NET ABI or --runtime=system for the native Linux ABI.");
+        if (Options.Runtime is not ("system" or "portable")) throw new ArgumentException("--runtime requires portable or system.");
+        List<string> linker = [];
+        string? language = null;
+        bool wholeArchive = false;
+        foreach (ParsedArgument argument in arguments)
+        {
+            if (argument.Spec is null)
+            {
+                // Linker options between inputs apply to the archives that follow them (--whole-archive).
+                wholeArchive = ApplyLinker(linker, wholeArchive);
+                linker.Clear();
+                Inputs.Add(new LinkInput(argument.Text, language, wholeArchive));
+                continue;
+            }
+            OptionSpec spec = argument.Spec;
+            switch (spec.For(Options.Runtime))
+            {
+                case Handling.Rejected:
+                    throw new ArgumentException(DriverOptions.RejectionMessage(spec, argument.Text, Options.Runtime));
+                case Handling.Ignored:
+                    if (Options.Verbose || arguments.Any(other => other.Is("-v"))) Console.Error.WriteLine("llvmnet: note: " + DriverOptions.IgnoredNote(spec, argument.Text, Options.Runtime));
+                    continue;
+                case Handling.Forwarded:
+                    Frontend.AddRange(argument.AsGiven.Select(text => text.Replace("\0", "", StringComparison.Ordinal)));
+                    if (spec.Name is "-module-dir" or "-J") ModuleDirectoryGiven = true;
+                    continue;
+            }
+            string value = argument.Value ?? "";
+            switch (spec.Name)
+            {
+                case "-c": CompileOnly = true; break;
+                case "-S": Textual = true; CompileOnly = true; break;
+                case "-E": Preprocess = true; break;
+                case "-M" or "-MM": DependencyOnly = true; Frontend.Add(argument.Text); break;
+                case "-fsyntax-only": SyntaxOnly = true; Frontend.Add(argument.Text); break;
+                case "-emit-llvm" or "--emit-llvm": EmitLlvm = true; break;
+                case "-r": Relocatable = true; EmitLlvm = true; break;
+                case "-shared" or "--emit-library": Options.Library = true; break;
+                case "-o": Output = value; break;
+                case "-x": language = value == "none" ? null : value; break;
+                case "-###": DryRun = true; break;
+                case "-L": SearchPaths.Add(value); break;
+                case "-l": Libraries.Add(value); break;
+                case "-nostdlib": StartFiles = false; DefaultLibraries = false; break;
+                case "-nostartfiles": StartFiles = false; break;
+                case "-nodefaultlibs": DefaultLibraries = false; break;
+                case "-nostdlib++": CxxLibraries = false; break;
+                case "-Wl,": linker.AddRange(value.Split(',')); break;
+                case "-Xlinker": linker.Add(value); break;
+                case "--runtime": break;
+                case "--portable-sysroot": PortableAbi.SysrootOverride = Path.GetFullPath(value); break;
+                case "--simd128": Options.Simd128 = true; break;
+                case "--cil-reference": Options.CilReferences.Add(Path.GetFullPath(value)); break;
+                case "--system-library": Options.SystemLibraries.Add(value); break;
+                case "--nativeaot": Options.NativeAot = true; break;
+                case "--runtime-id": RuntimeId = value; break;
+                case "--aot-project": AotProject = Path.GetFullPath(value); Options.NativeAot = true; break;
+                case "--aot-optimize":
+                    AotPreference = value;
+                    if (AotPreference is not ("Balanced" or "Speed" or "Size")) throw new ArgumentException("--aot-optimize requires Balanced, Speed or Size.");
+                    break;
+                case "--aot-instruction-set":
+                    AotInstructionSet = value;
+                    if (AotInstructionSet is not ("baseline" or "native")) throw new ArgumentException("--aot-instruction-set requires baseline or native.");
+                    break;
+                case "--aot-debug": AotDebug = true; break;
+                case "--keep-ir": KeepIr = Path.GetFullPath(value); break;
+                case "--trap-missing-arguments": Options.TrapMissingArguments = true; break;
+                case "--diagnose-limits": Options.DiagnoseLimits = true; break;
+                case "--check-indirect-calls": Options.CheckIndirectCalls = true; break;
+                case "-v": Options.Verbose = true; Queries.Add("-v"); break;
+                case "--driver-mode":
+                    Driver = value switch
+                    {
+                        "gcc" or "clang" => "clang",
+                        "g++" or "clang++" => "clang++",
+                        "flang" => "flang",
+                        _ => throw new ArgumentException($"--driver-mode requires gcc, g++, clang, clang++ or flang, not '{value}'.")
+                    };
+                    break;
+                case "--version" or "-dumpmachine" or "-dumpversion" or "-print-search-dirs" or "-print-resource-dir" or "-print-target-triple" or "-print-file-name=" or "-print-prog-name=":
+                    Queries.Add(argument.Text);
+                    break;
+                default: throw new InvalidOperationException($"option {spec.Name} is in the table as handled but not implemented.");
+            }
+        }
+        if (linker.Count != 0)
+        {
+            // Trailing linker options have no archive to apply to, but must still be valid.
+            ApplyLinker(linker, wholeArchive);
+            linker.Clear();
+        }
+        Validate();
+    }
+
+    private bool ApplyLinker(List<string> linker, bool wholeArchive)
+    {
+        foreach (ParsedArgument argument in DriverOptions.ParseLinker(linker))
+        {
+            OptionSpec spec = argument.Spec!;
+            switch (spec.For(Options.Runtime))
+            {
+                case Handling.Rejected:
+                    throw new ArgumentException(DriverOptions.RejectionMessage(spec, "-Wl," + argument.Text, Options.Runtime));
+                case Handling.Ignored:
+                    if (Options.Verbose) Console.Error.WriteLine("llvmnet: note: " + DriverOptions.IgnoredNote(spec, "-Wl," + argument.Text, Options.Runtime));
+                    continue;
+            }
+            switch (spec.Name)
+            {
+                case "--whole-archive": wholeArchive = true; break;
+                case "--no-whole-archive": wholeArchive = false; break;
+                case "--version": LinkerVersion = true; break;
+                case "--start-group" or "--end-group" or "-(" or "-)": break;
+                default: throw new InvalidOperationException($"linker option {spec.Name} is in the table as handled but not implemented.");
+            }
+        }
+        return wholeArchive;
+    }
+
+    private void Validate()
+    {
+        bool nativeAot = Options.NativeAot;
+        if (nativeAot && (CompileOnly || Preprocess || DependencyOnly || SyntaxOnly || EmitLlvm || Options.Library))
+            throw new ArgumentException("--nativeaot requires an executable link, not -c, -E, -S, --emit-llvm or -shared.");
+        if (!nativeAot && (RuntimeId is not null || AotDebug || AotPreference != "Balanced" || AotInstructionSet is not null))
+            throw new ArgumentException("NativeAOT output settings require --nativeaot.");
+        if (AotProject is not null && RuntimeId is not null)
+            throw new ArgumentException("--aot-project takes no --runtime-id: the runtime identifier is chosen when the project is published (dotnet publish -r <rid>).");
+        if (Options.Runtime != "system" && Options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
+        if (PortableAbi.SysrootOverride is not null && Options.Runtime != "portable") throw new ArgumentException("--portable-sysroot requires --runtime=portable.");
+        if (Options.Runtime == "system" && RuntimeId is not null && RuntimeId != "linux-x64")
+            throw new ArgumentException("The current system ABI profile requires NativeAOT RID linux-x64.");
+        if (LinkerVersion && (Inputs.Count != 0 || Output is not null || CompileOnly || Preprocess || DependencyOnly || EmitLlvm || nativeAot || Options.Library))
+            throw new ArgumentException("-Wl,--version is an informational query, not a link operation.");
+    }
+}
+
 internal static class Driver
 {
     internal static int Run(string[] arguments)
     {
         arguments = Toolchain.ExpandResponseFiles(arguments);
         string driver = Environment.GetEnvironmentVariable("LLVMNET_DRIVER") ?? "clang";
-        if (arguments.Length == 1 && (arguments[0] is "--version" or "-v" or "-dumpmachine" or "-dumpversion" or "-print-search-dirs" or "-print-resource-dir" || arguments[0].StartsWith("-print-file-name=", StringComparison.Ordinal)))
+        List<ParsedArgument> parsed = DriverOptions.Parse(arguments);
+        if (arguments.Length == 0 || parsed.Any(argument => argument.Is("--help")))
         {
-            string executable = driver == "flang" ? Toolchain.Executable("flang-22", "LLVMNET_FLANG") : Toolchain.Executable(driver == "clang++" ? "clang++-22" : "clang-22", "LLVMNET_CLANG");
-            if (arguments[0] == "--version")
+            Console.Write(DriverOptions.Help(driver));
+            return arguments.Length == 0 ? 2 : 0;
+        }
+        if (parsed.Any(argument => argument.Is("--print-driver-reference"))) { Console.Write(DriverOptions.Reference()); return 0; }
+        if (parsed.Any(argument => argument.Is("--print-option-table"))) { Console.Write(DriverOptions.OptionTable()); return 0; }
+        var invocation = new Invocation(parsed, driver);
+        driver = invocation.Driver;
+        CompilerOptions options = invocation.Options;
+        string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");
+        string flang = Toolchain.Executable("flang-22", "LLVMNET_FLANG");
+        Toolchain.DryRun = invocation.DryRun;
+        if (invocation.Queries.Count != 0 && (invocation.Queries.Count > 1 || invocation.Queries[0] != "-v" || invocation.Inputs.Count == 0))
+        {
+            // Frontend queries are answered by the selected frontend, as Clang answers them without compiling anything.
+            string executable = driver == "flang" ? flang : driver == "clang++" ? Toolchain.Executable("clang++-22", "LLVMNET_CLANG") : clang;
+            if (invocation.Queries.Contains("--version"))
             {
                 Console.WriteLine($"llvmnet {BuildInfo.Version} (LLVM {Llvm.Version}; ABIs system-linux-x64-v1, {PortableAbi.Tag})");
                 Console.WriteLine("Frontend follows:");
             }
-            return Toolchain.Run(executable, arguments);
+            return Toolchain.Run(executable, [.. invocation.Queries.Where(query => query != "-v" || invocation.Inputs.Count == 0), .. invocation.Frontend], options.Verbose);
         }
-        if (arguments.Length == 0 || arguments.Contains("--help"))
+        if (invocation.LinkerVersion)
         {
-            Console.WriteLine(string.Join(Environment.NewLine, new[]
-            {
-                "llvmnet: Clang/LLVM 22 to unsafe .NET 10 CIL",
-                "Usage: llvmnet [frontend options] inputs... -o output",
-                "  -c                       Compile to LLVM bitcode; do not link",
-                "  -S -emit-llvm            Emit textual LLVM IR",
-                "  -E                       Preprocess with the selected frontend",
-                "  -M / -MM / -MD / -MMD    Clang dependency-file options",
-                "  -L<dir> -l<name>         Link LLVM bitcode archives (-lc, -lm, -lpthread, -ldl, -lrt, -lc++ are built in)",
-                "  -nostdlib, -nodefaultlibs, -nostartfiles  Portable: omit the sysroot libraries and/or start object",
-                "  -r                       Link to a relocatable bitcode object",
-                "  -shared / --emit-library Emit a CIL library without an entry point",
-                "  --cil-reference <dll>    Resolve ABI-compatible managed CExport methods",
-                "  --system-library <file>  Additional native library in system ABI mode",
-                "  --runtime <mode>         portable (default) or system",
-                "  --simd128                Enable architecture-neutral SIMD128 helper calls",
-                "  --trap-missing-arguments Trap invalid void calls with missing arguments",
-                "  --diagnose-limits        Report per-function IL size, locals and JIT optimization thresholds",
-                "  --check-indirect-calls   Debug: verify each indirect call's CIL signature against its target",
-                "  --portable-sysroot <dir> Use another portable sysroot (default: the toolchain's sysroot/" + PortableAbi.Tag + ")",
-                "  --emit-llvm              Stop after LLVM linking",
-                "  --keep-ir <file>         Preserve linked LLVM bitcode",
-                "  --nativeaot              Publish a self-contained NativeAOT executable",
-                "  --runtime-id <rid>       NativeAOT target RID (default: current host)",
-                "  --aot-project <dir>      Write the NativeAOT project to publish on another host instead of publishing",
-                "  --aot-optimize <choice>  Balanced, Speed or Size",
-                "  --aot-instruction-set <choice> baseline (default) or native (build host CPU)",
-                "  --aot-debug              Retain NativeAOT native debug symbols",
-                "  @response-file           Read quoted compiler arguments from a file",
-                "A .dll output is managed CIL; other executable outputs are Unix launchers unless --nativeaot is selected.",
-                "LLVMNET_CLANG, LLVMNET_FLANG and LLVMNET_OPT override bundled/PATH tool selection."
-            }));
-            return arguments.Length == 0 ? 2 : 0;
-        }
-        var options = new CompilerOptions();
-        List<string> frontend = [];
-        List<string> inputs = [];
-        List<string> libraries = [];
-        List<string> searchPaths = [];
-        string? output = null;
-        string? keepIr = null;
-        bool compileOnly = false;
-        bool textual = false;
-        bool preprocess = false;
-        bool emitLlvm = false;
-        bool dependencyOnly = false;
-        bool syntaxOnly = false;
-        bool relocatable = false;
-        bool nativeAot = false;
-        bool aotDebug = false;
-        bool verbose = false;
-        bool linkerVersion = false;
-        bool startFiles = true;
-        bool staticLink = false;
-        bool defaultLibraries = true;
-        string? runtimeId = null;
-        string? aotProject = null;
-        string? aotInstructionSet = null;
-        string aotPreference = "Balanced";
-        for (int index = 0; index < arguments.Length; index++)
-        {
-            string argument = arguments[index];
-            string Next() => ++index < arguments.Length ? arguments[index] : throw new ArgumentException($"Missing value for {argument}");
-            switch (argument)
-            {
-                case "-o": output = Next(); break;
-                case "-v": verbose = true; break;
-                case "-Wl,--version": linkerVersion = true; break;
-                case "-r": relocatable = true; emitLlvm = true; break;
-                case "-M": case "-MM": dependencyOnly = true; frontend.Add(argument); break;
-                case "-fsyntax-only": syntaxOnly = true; frontend.Add(argument); break;
-                case "-pipe": case "-fuse-ld=lld": case "-flto": case "-flto=full": case "-flto=thin": break;
-                case "--runtime": options.Runtime = Next(); break;
-                case "--system-library": options.SystemLibraries.Add(Next()); break;
-                case "--nativeaot": nativeAot = true; break;
-                case "--simd128": options.Simd128 = true; break;
-                case "--trap-missing-arguments": options.TrapMissingArguments = true; break;
-                case "--diagnose-limits": options.DiagnoseLimits = true; break;
-                case "--portable-sysroot": PortableAbi.SysrootOverride = Path.GetFullPath(Next()); break;
-                case "-nostdlib": startFiles = false; defaultLibraries = false; break;
-                case "-nostartfiles": startFiles = false; break;
-                case "-nodefaultlibs": defaultLibraries = false; break;
-                case "--check-indirect-calls": options.CheckIndirectCalls = true; break;
-                case "--aot-debug": aotDebug = true; break;
-                case "--runtime-id": runtimeId = Next(); break;
-                case "--aot-project": aotProject = Path.GetFullPath(Next()); nativeAot = true; break;
-                case "--aot-instruction-set":
-                    aotInstructionSet = Next();
-                    if (aotInstructionSet is not ("baseline" or "native")) throw new ArgumentException("--aot-instruction-set requires baseline or native.");
-                    break;
-                case "--aot-optimize":
-                    aotPreference = Next();
-                    if (aotPreference is not ("Balanced" or "Speed" or "Size")) throw new ArgumentException("--aot-optimize requires Balanced, Speed or Size.");
-                    break;
-                case "-c": compileOnly = true; break;
-                case "-S": textual = true; compileOnly = true; break;
-                case "-E": preprocess = true; break;
-                case "-emit-llvm": case "--emit-llvm": emitLlvm = true; break;
-                case "--emit-library": case "-shared": options.Library = true; break;
-                case "--cil-reference": options.CilReferences.Add(Path.GetFullPath(Next())); break;
-                case "--keep-ir": keepIr = Path.GetFullPath(Next()); break;
-                case "--native-import":
-                    throw new ArgumentException("--native-import was removed (ADR-04, SA-01): --runtime=system resolves every native function through generated bridges; add the library with --system-library <shared-library>.");
-                case "-L": searchPaths.Add(Next()); break;
-                case "-l": libraries.Add(Next()); break;
-                case "-I":
-                case "-isystem":
-                case "-idirafter":
-                case "-iquote":
-                case "-include":
-                case "-imacros":
-                case "-D":
-                case "-U":
-                case "-x":
-                case "-MF":
-                case "-MT":
-                case "-MQ":
-                case "--sysroot":
-                case "-isysroot":
-                case "-target":
-                case "-Xclang":
-                case "-J":
-                case "-module-dir":
-                    frontend.Add(argument);
-                    frontend.Add(Next());
-                    break;
-                default:
-                    if (argument.StartsWith("--runtime=", StringComparison.Ordinal)) options.Runtime = argument[10..];
-                    else if (argument.StartsWith("-o", StringComparison.Ordinal) && argument.Length > 2) output = argument[2..];
-                    else if (argument == "-Wl,--start-group" || argument == "-Wl,--end-group") { }
-                    else if (argument.StartsWith("-L", StringComparison.Ordinal))
-                        searchPaths.Add(argument[2..]);
-                    else if (argument.StartsWith("-l", StringComparison.Ordinal))
-                        libraries.Add(argument[2..]);
-                    else if (argument == "-static") staticLink = true;
-                    else if (argument.StartsWith("-Wl,", StringComparison.Ordinal) || argument is "-rdynamic")
-                        throw new NotSupportedException($"Native linker option {argument} is not a CIL linker option; use --emit-library, --cil-reference or --system-library.");
-                    else if (argument.StartsWith('-'))
-                        frontend.Add(argument);
-                    else
-                        inputs.Add(argument);
-                    break;
-            }
-        }
-        if (nativeAot && (compileOnly || preprocess || dependencyOnly || syntaxOnly || emitLlvm || options.Library))
-            throw new ArgumentException("--nativeaot requires an executable link, not -c, -E, -S, --emit-llvm or -shared.");
-        if (!nativeAot && (runtimeId is not null || aotDebug || aotPreference != "Balanced" || aotInstructionSet is not null))
-            throw new ArgumentException("NativeAOT output settings require --nativeaot.");
-        if (aotProject is not null && runtimeId is not null)
-            throw new ArgumentException("--aot-project takes no --runtime-id: the runtime identifier is chosen when the project is published (dotnet publish -r <rid>).");
-        if (options.Runtime == "managed-host")
-            throw new ArgumentException("--runtime=managed-host was removed (ADR-04); use --runtime=portable for a platform-neutral .NET ABI or --runtime=system for the native Linux ABI.");
-        if (options.Runtime is not ("system" or "portable")) throw new ArgumentException("--runtime requires portable or system.");
-        // A portable program is always one statically linked image; system mode links the native C library dynamically.
-        if (staticLink && options.Runtime == "system")
-            throw new NotSupportedException("Native linker option -static is not a CIL linker option in system mode; system programs use the host's shared C library.");
-        if (options.Runtime != "system" && options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
-        if (PortableAbi.SysrootOverride is not null && options.Runtime != "portable") throw new ArgumentException("--portable-sysroot requires --runtime=portable.");
-        if (options.Runtime == "system" && runtimeId is not null && runtimeId != "linux-x64")
-            throw new ArgumentException("The current system ABI profile requires NativeAOT RID linux-x64.");
-        if (linkerVersion)
-        {
-            if (inputs.Count != 0 || output is not null || compileOnly || preprocess || dependencyOnly || emitLlvm || nativeAot || options.Library)
-                throw new ArgumentException("-Wl,--version is an informational query, not a link operation.");
             Console.WriteLine("LLD-compatible llvmnet linker interface (LLVM 22.1.8; emits CIL, not native images)");
             return 0;
         }
-        options.Verbose = verbose;
-        options.NativeAot = nativeAot;
+        List<string> frontend = invocation.Frontend;
         if (options.Simd128)
             frontend.InsertRange(0, ["-D__LLVMNET_SIMD128__=1", "-I", Path.Combine(Toolchain.Root, "sysroot", "simd128", "include")]);
-        string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");
+        List<LinkInput> inputs = invocation.Inputs;
+        bool verbose = options.Verbose;
         // Preprocessing, dependency generation and -fsyntax-only run the frontend alone, with the mode's headers.
-        if (preprocess || dependencyOnly || syntaxOnly)
+        if (invocation.Preprocess || invocation.DependencyOnly || invocation.SyntaxOnly)
         {
             List<string> preprocessing = [.. frontend];
-            if (preprocess) preprocessing.Add("-E");
-            preprocessing.AddRange(inputs);
-            if (output is not null)
-                preprocessing.AddRange(["-o", output]);
-            bool fortranInput = driver == "flang" || inputs.Any(input => IsFortran(input));
+            if (invocation.Preprocess) preprocessing.Add("-E");
+            foreach (LinkInput input in inputs)
+            {
+                if (input.Language is not null) preprocessing.AddRange(["-x", input.Language]);
+                preprocessing.Add(input.Path);
+            }
+            if (invocation.Output is not null)
+                preprocessing.AddRange(["-o", invocation.Output]);
+            bool fortranInput = driver == "flang" || inputs.Any(IsFortran);
             if (options.Runtime == "portable") preprocessing.InsertRange(0, PortableAbi.Arguments(frontend, fortranInput, driver == "clang++" || inputs.Any(IsCpp)));
             if (driver == "clang++") preprocessing.Insert(0, "--driver-mode=g++");
-            return Toolchain.Run(fortranInput ? Toolchain.Executable("flang-22", "LLVMNET_FLANG") : clang, preprocessing, verbose, options.Runtime == "portable");
+            return Toolchain.Run(fortranInput ? flang : clang, preprocessing, verbose, options.Runtime == "portable");
         }
         if (inputs.Count == 0)
             throw new ArgumentException("No input files.");
-        if (compileOnly && inputs.Count != 1 && output is not null)
+        if (invocation.CompileOnly && inputs.Count != 1 && invocation.Output is not null)
             throw new ArgumentException("Cannot use one -o with multiple inputs and -c.");
 
         string temporary = Path.Combine(Path.GetTempPath(), $"llvmnet-{Guid.NewGuid():N}");
         Directory.CreateDirectory(temporary);
         try
         {
-            List<string> bitcode = [];
-            foreach (string input in inputs)
+            List<(string Path, bool WholeArchive)> bitcode = [];
+            foreach (LinkInput input in inputs)
             {
-                string extension = Path.GetExtension(input);
-                // With -c, LLVM IR is compiled like a source, which records the ABI tag that link inputs need.
-                if (extension is ".o" or ".a" || extension is ".bc" or ".ll" && !compileOnly)
+                string extension = Path.GetExtension(input.Path);
+                bool ir = input.Language == "ir" || input.Language is null && extension is ".bc" or ".ll";
+                if (extension is ".o" or ".a" && input.Language is null || ir && !invocation.CompileOnly)
                 {
-                    if (compileOnly)
-                        throw new NotSupportedException("-c requires a source or LLVM IR input, not an object or archive.");
-                    bitcode.Add(input);
+                    if (invocation.CompileOnly)
+                    {
+                        // -c on an object re-tags nothing: the object keeps the tag it has, which must match the mode.
+                        if (extension == ".a") throw new NotSupportedException("-c requires a source, LLVM IR or an object, not an archive.");
+                        string copy = invocation.Output ?? Path.GetFileNameWithoutExtension(input.Path) + ".o";
+                        if (!invocation.DryRun) Llvm.Link([input.Path], [false], copy, options.AbiTag);
+                        continue;
+                    }
+                    bitcode.Add((input.Path, input.WholeArchive && extension == ".a"));
                     continue;
                 }
                 bool fortran = driver == "flang" || IsFortran(input);
                 bool cpp = driver == "clang++" || IsCpp(input);
-                if (!fortran && !frontend.Contains("-x") && extension is not (".c" or ".cc" or ".cpp" or ".cxx" or ".C" or ".i" or ".ii" or ".ll" or ".bc"))
-                    throw new NotSupportedException($"Unsupported input kind: {input}");
-                string destination = compileOnly ? output ?? Path.GetFileNameWithoutExtension(input) + (textual ? ".ll" : ".o") : Path.Combine(temporary, $"input{bitcode.Count}.bc");
-                List<string> command = ["-O1", "-fno-vectorize", "-fno-slp-vectorize"];
+                if (!fortran && input.Language is null && extension is not (".c" or ".cc" or ".cpp" or ".cxx" or ".C" or ".i" or ".ii" or ".ll" or ".bc"))
+                    throw new NotSupportedException($"Unsupported input kind: {input.Path} (name the language with -x)");
+                string destination = invocation.CompileOnly ? invocation.Output ?? Path.GetFileNameWithoutExtension(input.Path) + (invocation.Textual ? ".ll" : ".o") : Path.Combine(temporary, $"input{bitcode.Count}.bc");
+                List<string> command = ["-O1"];
+                if (!frontend.Contains("-fvectorize") && !frontend.Contains("-fslp-vectorize")) command.AddRange(["-fno-vectorize", "-fno-slp-vectorize"]);
                 if (driver == "clang++") command.Add("--driver-mode=g++");
-                if (options.Runtime == "portable") command.AddRange(PortableAbi.Arguments(frontend, fortran, cpp));
+                // LLVM IR gets the mode's target and macros only; its headers and feature macros do not apply.
+                if (options.Runtime == "portable") command.AddRange(ir ? PortableAbi.Arguments(frontend, true, false) : PortableAbi.Arguments(frontend, fortran, cpp));
                 if (fortran)
                 {
-                    if (!frontend.Any(argument => argument.StartsWith("-J", StringComparison.Ordinal) || argument == "-module-dir"))
-                        command.AddRange(["-module-dir", compileOnly ? Path.GetDirectoryName(Path.GetFullPath(destination))! : temporary]);
+                    if (!invocation.ModuleDirectoryGiven)
+                        command.AddRange(["-module-dir", invocation.CompileOnly ? Path.GetDirectoryName(Path.GetFullPath(destination))! : temporary]);
                 }
                 else
                     command.Add("-fno-stack-protector");
                 // Mixed-language builds pass Fortran module options to every input; Clang does not accept them.
-                command.AddRange([.. fortran ? frontend : WithoutFortranOptions(frontend), "-emit-llvm", textual ? "-S" : "-c", input, "-o", destination]);
-                int result = Toolchain.Run(fortran ? Toolchain.Executable("flang-22", "LLVMNET_FLANG") : clang, command, verbose, options.Runtime == "portable");
+                command.AddRange(fortran ? frontend : WithoutFortranOptions(frontend));
+                command.AddRange(["-emit-llvm", invocation.Textual ? "-S" : "-c"]);
+                if (input.Language is not null) command.AddRange(["-x", input.Language]);
+                command.AddRange([input.Path, "-o", destination]);
+                int result = Toolchain.Run(fortran ? flang : clang, command, verbose, options.Runtime == "portable");
                 if (result != 0)
                     return result;
-                Llvm.StampAbi(destination, options.AbiTag, textual);
-                bitcode.Add(destination);
+                if (invocation.DryRun) continue;
+                if (!File.Exists(destination))
+                    throw new InvalidOperationException($"the frontend did not write {destination}; an option such as -fdriver-only or a -print query stops it before code generation.");
+                try { Llvm.StampAbi(destination, options.AbiTag, invocation.Textual); }
+                catch (InvalidOperationException error)
+                {
+                    throw new InvalidOperationException($"the frontend's output {destination} is not LLVM {(invocation.Textual ? "IR" : "bitcode")} ({error.Message}); an option such as --analyze, -emit-ast or --precompile changes what the frontend writes.");
+                }
+                bitcode.Add((destination, false));
             }
-            if (compileOnly)
+            if (invocation.CompileOnly || invocation.DryRun)
                 return 0;
-            foreach (string library in libraries)
+            foreach (string library in invocation.Libraries)
             {
                 // Parts of the C library in both modes; in portable mode the sysroot also supplies the C++ and Fortran runtimes.
                 if (library is "c" or "m" or "pthread" or "dl" or "rt" or "util" or "crypt" or "resolv" ||
                     options.Runtime == "portable" && library is "c++" or "c++abi" or "stdc++" or "supc++" or "flang_rt.runtime" or "FortranRuntime" or "FortranDecimal")
                     continue;
-                string? archive = searchPaths.Select(directory => Path.Combine(directory, $"lib{library}.a")).FirstOrDefault(File.Exists);
+                // -l:name names the file exactly; -lname looks for libname.a.
+                string file = library.StartsWith(':') ? library[1..] : $"lib{library}.a";
+                string? archive = invocation.SearchPaths.Select(directory => Path.Combine(directory, file)).FirstOrDefault(File.Exists);
                 if (archive is null)
-                    throw new FileNotFoundException($"Cannot find LLVM bitcode archive lib{library}.a in the -L directories. Native libraries need --runtime=system with --system-library.");
-                bitcode.Add(archive);
+                    throw new FileNotFoundException($"Cannot find LLVM bitcode archive {file} in the -L directories ({string.Join(", ", invocation.SearchPaths.DefaultIfEmpty("none given"))}). Native libraries need --runtime=system with --system-library.");
+                bitcode.Add((archive, false));
             }
             // Portable executables link musl's start object and the sysroot archives, in dependency order. Libraries do
             // not: musl keeps per-process state (thread pointer, heap, stdio) that one image per process must own.
             if (options.Runtime == "portable" && !options.Library)
             {
                 PortableAbi.RequireSysroot();
-                if (startFiles) bitcode.Add(PortableAbi.Library("crt1.o"));
-                if (defaultLibraries)
+                if (invocation.StartFiles) bitcode.Add((PortableAbi.Library("crt1.o"), false));
+                if (invocation.DefaultLibraries)
                     foreach (string archive in new[] { "libomp.a", "libflang_rt.runtime.a", "libc++.a", "libc++abi.a", "libc.a", "libclang_rt.builtins.a" })
-                        if (File.Exists(PortableAbi.Library(archive))) bitcode.Add(PortableAbi.Library(archive));
+                        if ((invocation.CxxLibraries || archive is not ("libc++.a" or "libc++abi.a")) && File.Exists(PortableAbi.Library(archive)))
+                            bitcode.Add((PortableAbi.Library(archive), false));
             }
             // System executables take the Fortran runtime from flang-rt built against glibc; the C library is native.
             string systemFortran = Path.Combine(Toolchain.Root, "sysroot", "system-linux-x64-v1", "lib", "libflang_rt.runtime.a");
-            if (options.Runtime == "system" && !options.Library && defaultLibraries && File.Exists(systemFortran))
-                bitcode.Add(systemFortran);
+            if (options.Runtime == "system" && !options.Library && invocation.DefaultLibraries && File.Exists(systemFortran))
+                bitcode.Add((systemFortran, false));
             string linked = Path.Combine(temporary, "linked.bc");
-            if (bitcode.All(path => Path.GetExtension(path) == ".a"))
-                throw new ArgumentException("Provide at least one explicit object or source as the link root.");
-            Llvm.Link(bitcode.ToArray(), linked, options.AbiTag);
-            if (keepIr is not null)
-                File.Copy(linked, keepIr, true);
-            output ??= options.Library ? "a.dll" : relocatable ? "a.o" : emitLlvm ? "a.bc" : "a.out";
-            output = Path.GetFullPath(output);
-            if (emitLlvm)
+            if (bitcode.All(input => Path.GetExtension(input.Path) == ".a" && !input.WholeArchive))
+                throw new ArgumentException("Provide at least one explicit object or source as the link root, or -Wl,--whole-archive before an archive.");
+            Llvm.Link([.. bitcode.Select(input => input.Path)], [.. bitcode.Select(input => input.WholeArchive)], linked, options.AbiTag);
+            if (invocation.KeepIr is not null)
+                File.Copy(linked, invocation.KeepIr, true);
+            string output = Path.GetFullPath(invocation.Output ?? (options.Library ? "a.dll" : invocation.Relocatable ? "a.o" : invocation.EmitLlvm ? "a.bc" : "a.out"));
+            if (invocation.EmitLlvm)
             {
                 File.Copy(linked, output, true);
                 return 0;
@@ -323,6 +382,7 @@ internal static class Driver
             string linkedInput = linked;
             linked = lowered;
             using var module = new LlvmModule(linked);
+            bool nativeAot = options.NativeAot;
             bool launcher = !nativeAot && !options.Library && !output.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
             string payloadDirectory = nativeAot ? Path.Combine(temporary, "payload") : launcher ? output + ".llvmnet" : Path.GetDirectoryName(output)!;
             Directory.CreateDirectory(payloadDirectory);
@@ -339,12 +399,12 @@ internal static class Driver
                 error.KeptIr = kept;
                 throw;
             }
-            if (aotProject is not null)
+            if (invocation.AotProject is not null)
             {
-                Toolchain.AotProject(payload, aotProject, aotPreference, aotInstructionSet ?? "baseline", aotDebug, options.SystemLibraries);
+                Toolchain.AotProject(payload, invocation.AotProject, invocation.AotPreference, invocation.AotInstructionSet ?? "baseline", invocation.AotDebug, options.SystemLibraries);
                 return 0;
             }
-            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, runtimeId, aotPreference, aotInstructionSet ?? "baseline", verbose, aotDebug, options.SystemLibraries);
+            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, invocation.RuntimeId, invocation.AotPreference, invocation.AotInstructionSet ?? "baseline", verbose, invocation.AotDebug, options.SystemLibraries);
             if (launcher) Toolchain.Launcher(output, payload);
             return 0;
         }
@@ -359,13 +419,15 @@ internal static class Driver
         List<string> result = [];
         for (int index = 0; index < arguments.Count; index++)
         {
-            if (arguments[index] is "-module-dir" or "-J") { index++; continue; }
+            if (arguments[index] is "-module-dir" or "-J" or "-fintrinsic-modules-path") { index++; continue; }
             if (arguments[index].StartsWith("-J", StringComparison.Ordinal) || arguments[index].StartsWith("-fintrinsic-modules-path", StringComparison.Ordinal)) continue;
             result.Add(arguments[index]);
         }
         return result;
     }
 
-    private static bool IsFortran(string path) => Path.GetExtension(path).ToLowerInvariant() is ".f" or ".for" or ".f90" or ".f95" or ".f03" or ".f08";
-    private static bool IsCpp(string path) => Path.GetExtension(path) is ".cc" or ".cpp" or ".cxx" or ".C" or ".ii";
+    private static bool IsFortran(LinkInput input) => input.Language is "f95" or "f95-cpp-input" ||
+        input.Language is null && Path.GetExtension(input.Path).ToLowerInvariant() is ".f" or ".for" or ".f90" or ".f95" or ".f03" or ".f08";
+    private static bool IsCpp(LinkInput input) => input.Language is "c++" or "c++-header" or "c++-cpp-output" or "objective-c++" ||
+        input.Language is null && Path.GetExtension(input.Path) is ".cc" or ".cpp" or ".cxx" or ".C" or ".ii";
 }

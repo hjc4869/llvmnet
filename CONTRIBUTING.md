@@ -49,3 +49,4 @@ The runner builds the solution once, runs tests in parallel, continues after fai
 - Never commit licensed SPEC material, private media or machine-specific paths. Everything generated goes under `artifacts/`; see [docs/dev/artifacts.md](docs/dev/artifacts.md).
 - Record user-visible changes in [CHANGELOG.md](CHANGELOG.md).
 - Keep C# consistent with the surrounding code and [.editorconfig](.editorconfig). Warnings are errors.
+- Driver options live in the table in `src/LlvmNet.Compiler/DriverOptions.cs`; `--help` and the tables of [docs/user/driver.md](docs/user/driver.md) are generated from it (`tests/run.sh driver-reference` regenerates the page). `src/LlvmNet.Compiler/FrontendOptions.cs` is generated from the frontends' `--help` by `scripts/frontend-options.py`; rerun it after an LLVM upgrade (`tests/driver-options.sh` checks it).

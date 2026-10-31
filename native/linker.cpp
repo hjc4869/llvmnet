@@ -1,6 +1,8 @@
 #include <llvm-c/Core.h>
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/IR/DiagnosticInfo.h>
+#include <llvm/IR/DiagnosticPrinter.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -12,6 +14,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -112,12 +115,50 @@ static void wrapLargeMicrotasks(llvm::Module &module)
     }
 }
 
-extern "C" int llvmnet_link(const char *const *paths, unsigned count,
+// A duplicate definition is reported by LLVM's linker through the context's diagnostic handler as "Linking globals
+// named 'x': symbol multiply defined!"; the driver's message names both files, so the file that first defined each
+// symbol is recorded as modules are linked.
+struct LinkDiagnostics {
+    std::string last;
+    std::map<std::string, std::string> definedIn;
+
+    void record(const llvm::Module &module, const std::string &file)
+    {
+        for (const llvm::GlobalValue &value : module.global_values())
+            if (!value.isDeclarationForLinker() && !value.hasLocalLinkage())
+                definedIn.emplace(value.getName().str(), file);
+    }
+
+    std::string describe(const std::string &file)
+    {
+        std::string symbol;
+        if (size_t open = last.find('\''); open != std::string::npos)
+            if (size_t close = last.find('\'', open + 1); close != std::string::npos)
+                symbol = last.substr(open + 1, close - open - 1);
+        auto first = definedIn.find(symbol);
+        if (!symbol.empty() && first != definedIn.end())
+            return "duplicate definition of '" + symbol + "' in " + file + "; it is already defined in " + first->second;
+        return "cannot link " + file + ": " + (last.empty() ? std::string("LLVM linker error") : last);
+    }
+};
+
+extern "C" int llvmnet_link(const char *const *paths, const int *wholeArchive, unsigned count,
                             const char *output, const char *abi, char **message)
 {
     llvm::LLVMContext context;
+    LinkDiagnostics diagnostics;
+    context.setDiagnosticHandlerCallBack(
+        [](const llvm::DiagnosticInfo *info, void *state) {
+            std::string text;
+            llvm::raw_string_ostream stream(text);
+            llvm::DiagnosticPrinterRawOStream printer(stream);
+            info->print(printer);
+            static_cast<LinkDiagnostics *>(state)->last = text;
+        },
+        &diagnostics);
     auto linked = std::make_unique<llvm::Module>("llvmnet", context);
     std::vector<std::unique_ptr<llvm::Module>> members;
+    std::vector<std::string> memberFiles;
     auto fail = [&](const std::string &text) {
         *message = LLVMCreateMessage(text.c_str());
         return 1;
@@ -149,7 +190,19 @@ extern "C" int llvmnet_link(const char *const *paths, unsigned count,
                 auto module = llvm::parseBitcodeFile(*data, context);
                 if (!module)
                     return fail(path.str() + ": archive members must be LLVM bitcode: " + llvm::toString(module.takeError()));
+                auto name = child.getName();
+                std::string memberFile = path.str() + "(" + (name ? name->str() : (*module)->getModuleIdentifier()) + ")";
+                if (wholeArchive[index]) {
+                    // --whole-archive: every member is linked like an object, in archive order.
+                    if (std::string problem = incompatible(**module, memberFile); !problem.empty())
+                        return fail(problem);
+                    diagnostics.record(**module, memberFile);
+                    if (llvm::Linker::linkModules(*linked, std::move(*module)))
+                        return fail(diagnostics.describe(memberFile));
+                    continue;
+                }
                 members.push_back(std::move(*module));
+                memberFiles.push_back(memberFile);
             }
             if (iteration)
                 return fail(llvm::toString(std::move(iteration)));
@@ -164,8 +217,9 @@ extern "C" int llvmnet_link(const char *const *paths, unsigned count,
             }
             if (std::string problem = incompatible(*module, path.str()); !problem.empty())
                 return fail(problem);
+            diagnostics.record(*module, path.str());
             if (llvm::Linker::linkModules(*linked, std::move(module)))
-                return fail("LLVM object link failed: " + path.str());
+                return fail(diagnostics.describe(path.str()));
         }
     }
     bool progress;
@@ -173,7 +227,8 @@ extern "C" int llvmnet_link(const char *const *paths, unsigned count,
         progress = false;
         lowerExtendedIntrinsics(*linked);
         wrapLargeMicrotasks(*linked);
-        for (auto &member : members) {
+        for (size_t memberIndex = 0; memberIndex < members.size(); ++memberIndex) {
+            auto &member = members[memberIndex];
             if (!member)
                 continue;
             bool needed = false;
@@ -189,16 +244,17 @@ extern "C" int llvmnet_link(const char *const *paths, unsigned count,
             }
             if (!needed)
                 continue;
-            if (std::string problem = incompatible(*member, "archive member " + member->getModuleIdentifier()); !problem.empty())
+            if (std::string problem = incompatible(*member, "archive member " + memberFiles[memberIndex]); !problem.empty())
                 return fail(problem);
+            diagnostics.record(*member, memberFiles[memberIndex]);
             if (llvm::Linker::linkModules(*linked, std::move(member)))
-                return fail("LLVM archive member link failed");
+                return fail(diagnostics.describe(memberFiles[memberIndex]));
             progress = true;
         }
     } while (progress);
     std::string verification;
-    llvm::raw_string_ostream diagnostics(verification);
-    if (llvm::verifyModule(*linked, &diagnostics))
+    llvm::raw_string_ostream verifier(verification);
+    if (llvm::verifyModule(*linked, &verifier))
         return fail(verification);
     std::error_code error;
     llvm::raw_fd_ostream destination(output, error, llvm::sys::fs::OF_None);

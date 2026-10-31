@@ -8,7 +8,7 @@ internal static unsafe class Llvm
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_constant_bits")]
     private static extern uint ConstantBits(nint value, byte* destination, uint capacity);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_link")]
-    private static extern int LinkFiles(nint* paths, uint count, [MarshalAs(UnmanagedType.LPUTF8Str)] string output, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, out nint message);
+    private static extern int LinkFiles(nint* paths, int* wholeArchive, uint count, [MarshalAs(UnmanagedType.LPUTF8Str)] string output, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, out nint message);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_stamp_abi")]
     private static extern int StampFile([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, int textual, out nint message);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_create_native_shim")]
@@ -41,16 +41,22 @@ internal static unsafe class Llvm
         throw new InvalidOperationException(text);
     }
 
-    internal static void Link(string[] paths, string output, string abi)
+    /// <summary>
+    /// Links objects and archives into one bitcode module: every object, and the archive members that resolve a
+    /// referenced symbol (rescanning until none does) or every member of an archive marked whole-archive.
+    /// </summary>
+    internal static void Link(string[] paths, bool[] wholeArchive, string output, string abi)
     {
         nint[] pointers = new nint[paths.Length];
+        int[] whole = wholeArchive.Select(flag => flag ? 1 : 0).ToArray();
         try
         {
             for (int index = 0; index < paths.Length; index++)
                 pointers[index] = Marshal.StringToCoTaskMemUTF8(paths[index]);
             fixed (nint* pointer = pointers)
+            fixed (int* flags = whole)
             {
-                if (LinkFiles(pointer, (uint)paths.Length, output, abi, out nint message) == 0)
+                if (LinkFiles(pointer, flags, (uint)paths.Length, output, abi, out nint message) == 0)
                     return;
                 string text = Marshal.PtrToStringUTF8(message) ?? "LLVM link failed";
                 LLVMDisposeMessage(message);

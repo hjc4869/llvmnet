@@ -22,6 +22,7 @@ The owner settled every open decision in [decisions.md](decisions.md): the `dotn
 Measurements are in [evidence/2026-10-31-m7-toolchain.md](../evidence/2026-10-31-m7-toolchain.md).
 
 - **SA-01.** `--native-import` is removed; `--system-library` is the one native path in system mode, and the option fails with that guidance.
+- **TC-01.** The driver's options are one table with four treatments per runtime mode (handled, passed to the frontend, accepted without effect, rejected with a reason), from which `--help` and the tables of `docs/user/driver.md` are generated; every option Clang's and Flang's `--help` list works or fails with a clear error in both modes (`tests/driver-options.sh`).
 
 ## Progress (2026-10-31, M6)
 
@@ -136,7 +137,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M4 | 0.5 | done; libc++ localization 100%, input.output 97.8% (LC-30 services), SPEC C++ parity holds | 0 | 2026-10-31 |
 | M5 | 0.5 | done; flang-rt and portable OpenMP delivered (FT-08), 22 of 25 OpenMP speed entries pass, the rest excluded | 0 | 2026-10-31 |
 | M6 | 0.6 | exit items done on all three hosts; two weeks of green CI runs need GitHub (FD-19) | 0 | 2026-10-31 |
-| M7 | 0.7 | in progress; SA-01 done | 10 | 2026-10-31 |
+| M7 | 0.7 | in progress; SA-01, TC-01 done | 9 | 2026-10-31 |
 | M8 | 0.7 | not started | 2 | 2026-10-30 |
 | M9 | 1.0-rc | not started | 6 | 2026-10-30 |
 

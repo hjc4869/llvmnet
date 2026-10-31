@@ -174,6 +174,9 @@ internal static class Toolchain
         return 0;
     }
 
+    /// <summary>With -###, every command is printed instead of run.</summary>
+    internal static bool DryRun { get; set; }
+
     internal static int Run(string executable, IEnumerable<string> arguments, bool verbose = false, bool isolatedHeaders = false)
     {
         var start = new ProcessStartInfo(executable) { UseShellExecute = false };
@@ -181,7 +184,8 @@ internal static class Toolchain
             foreach (string name in new[] { "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH", "SDKROOT" })
                 start.Environment.Remove(name);
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
-        if (verbose) Console.Error.WriteLine(executable + " " + string.Join(" ", start.ArgumentList.Select(argument => System.Text.Json.JsonSerializer.Serialize(argument))));
+        if (verbose || DryRun) Console.Error.WriteLine(executable + " " + string.Join(" ", start.ArgumentList.Select(argument => System.Text.Json.JsonSerializer.Serialize(argument))));
+        if (DryRun) return 0;
         using Process process = Process.Start(start) ?? throw new InvalidOperationException($"Cannot start {executable}");
         process.WaitForExit();
         return process.ExitCode;

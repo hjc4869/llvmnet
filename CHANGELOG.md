@@ -29,6 +29,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - `--aot-project <dir>` writes a relocatable NativeAOT project for publishing on another host, and `--nativeaot --runtime-id linux-arm64` cross-publishes from Linux x64 with Debian's cross packages (XP-03, XP-05).
 - An unsupported host (32-bit, big-endian, Mono, .NET before 10) prints one `llvmnet:` line naming the problem and exits with status 1 before any translated code runs, and `runtimeconfig.json` pins the .NET 10 band with `rollForward: Minor` (XP-06).
 - `getrandom`, `/dev/urandom` and the start vector's `AT_RANDOM` read the host's `/dev/urandom` on Unix hosts, so a portable program no longer needs OpenSSL on Linux (XP-07).
+- Table-driven driver options (TC-01): every option is handled, passed to the frontend, accepted without effect or rejected with a reason, per runtime mode; `--help` and the tables of `docs/user/driver.md` are generated from the table, and `tests/driver-options.sh` feeds every option Clang's and Flang's `--help` list to the driver. New: `-###` (print the frontend commands), `--driver-mode=`, `-x` per input, `-l:<file>`, `-Wl,--whole-archive`, `-Xlinker`, `-nostdlib++`, `-c` on `.o` inputs, and `-mllvm` in portable mode.
 
 ### Changed
 
@@ -43,6 +44,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Portable mode accepts the x86-64 register-slot equivalences that system mode accepts for direct calls: `ptr` and `i64`, `i32` and `i64` in register positions, `i1` and `i8`; the entry point accepts Flang's `i64 main` under `-fdefault-integer-8`, and `--trap-missing-arguments` is available (BE-39). Both modes convert `i8` and `[1 x i8]` at direct calls, as Fortran passes `character(1)` to C `char` (BE-40).
 - Portable `memcpy`, `memmove` and `memset` use the runtime's vectorized copy and fill (LC-24).
 - In portable mode `_GNU_SOURCE` also declares the LFS64 names (`stat64`, `off64_t`, `open64`), as glibc does.
+- Native-only options that build systems pass (`-fPIC`, `-pie`, `-Wl,-rpath`, `-Wl,--as-needed`, `-Wl,-z,...`, `-s`, `-static-libgcc`, `-rtlib=`, `-z`) are accepted without effect instead of rejected; `-v` prints the reason. `-m<option>` in portable mode, native linker options without a CIL equivalent (`-e`, `-T`, `-u`, `-Wa,`, `-Wl,--wrap`, ...), `-fsanitize=` and profiling instrumentation now fail as `option '...' is not accepted: <reason>` (TC-01).
 
 ### Removed
 

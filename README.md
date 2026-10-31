@@ -38,7 +38,7 @@ bin/llvmnet main.c libexample.a --emit-llvm -o program.bc
 
 Objects and archives contain LLVM bitcode. Explicit object files are always linked; archive members are linked when they resolve undefined symbols, with rescanning for dependencies between archives. `-lc`, `-lm`, `-lpthread`, `-ldl` and `-lrt` need no archive in either mode; portable mode also provides `-lc++` and the Fortran runtime.
 
-`bin/llvmnet --help` lists the driver options. `--keep-ir linked.bc` keeps the linked bitcode, `LLVMNET_TRACE=1` prints compiler stack traces, and `LLVMNET_CLANG`, `LLVMNET_FLANG` and `LLVMNET_OPT` select other frontend executables. The driver is not a complete Clang replacement; [docs/toolchain.md](docs/toolchain.md#driver-contract) describes what it accepts.
+`bin/llvmnet --help` lists the driver options and [docs/user/driver.md](docs/user/driver.md) is the reference: the command line follows Clang's, every option llvmnet does not handle is passed to the frontend, and the options it accepts without effect or rejects are listed with the reason. `--keep-ir linked.bc` keeps the linked bitcode, `LLVMNET_TRACE=1` prints compiler stack traces, and `LLVMNET_CLANG`, `LLVMNET_FLANG` and `LLVMNET_OPT` select other frontend executables.
 
 ## Runtime Modes
 

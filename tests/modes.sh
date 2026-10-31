@@ -18,9 +18,9 @@ reject() {
     grep -q "$diagnostic" "$output/rejected.err"
 }
 reject 'Managed reference ABI mismatch' --runtime=portable "$root/tests/c/link-main.c" --cil-reference "$output/SystemLibrary.dll" -o "$output/bad.dll"
-reject 'native-import was removed' --runtime=system "$root/tests/c/smoke.c" --native-import 'abs=libc.so.6!abs' -o "$output/bad.dll"
+reject 'native-import.*was removed' --runtime=system "$root/tests/c/smoke.c" --native-import 'abs=libc.so.6!abs' -o "$output/bad.dll"
 reject 'requires --runtime=system' --runtime=portable "$root/tests/c/smoke.c" --system-library libc.so.6 -o "$output/bad.dll"
-reject 'cannot change the versioned portable ABI' --runtime=portable -fshort-wchar "$root/tests/c/smoke.c" -o "$output/bad.dll"
+reject 'change the versioned portable ABI' --runtime=portable -fshort-wchar "$root/tests/c/smoke.c" -o "$output/bad.dll"
 reject 'requires an executable link' --nativeaot -c "$root/tests/c/smoke.c" -o "$output/bad.o"
 reject 'require --nativeaot' --aot-debug "$root/tests/c/smoke.c" -o "$output/bad"
 reject 'managed-host was removed' --runtime=managed-host "$root/tests/c/smoke.c" -o "$output/bad.dll"
