@@ -13,4 +13,13 @@ for runtime in system portable; do
         diff -u "$output/native.txt" "$output/cil-$runtime.txt"
     done
 done
-printf 'PASS: stdio, file descriptors, stat layout, errno, parsing, scanf and managed qsort callbacks (system and portable)\n'
+# Standard input redirected from a file seeks and stats as that file; from a pipe it does not seek.
+printf 'abcdefghijklmnopqrstuvwxyz\nsecond line\nthird line\n' >"$output/stdin.txt"
+clang-22 -O1 "$root/tests/c/stdin-seek.c" -o "$output/stdin-native"
+"$llvmnet" "$root/tests/c/stdin-seek.c" -o "$output/stdin-seek.dll"
+for program in "$output/stdin-native" "dotnet $output/stdin-seek.dll"; do
+    # shellcheck disable=SC2086 # the program is a command with its arguments
+    { $program <"$output/stdin.txt"; printf 'abcdefgh\n' | $program; } >"$output/stdin-${program##*/}.txt"
+done
+diff -u "$output/stdin-stdin-native.txt" "$output/stdin-stdin-seek.dll.txt"
+printf 'PASS: stdio, file descriptors, stat layout, errno, parsing, scanf managed qsort callbacks (system and portable), and standard input redirected from a file seeks as that file\n'

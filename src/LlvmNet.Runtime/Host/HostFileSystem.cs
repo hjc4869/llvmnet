@@ -69,6 +69,18 @@ public static unsafe partial class HostSyscalls
             OpenFile? file = directory == AT_FDCWD ? null : Lookup(directory);
             if (directory == AT_FDCWD) path = Directory.GetCurrentDirectory();
             else if (file is null) return -EBADF;
+            else if (RedirectedFile(file) is FileStream redirected)
+                using (redirected)
+                {
+                    stat->Device = 1;
+                    stat->Inode = (ulong)file.GetHashCode();
+                    stat->Mode = S_IFREG | (OperatingSystem.IsWindows() ? 0x1a4u : (uint)File.GetUnixFileMode(redirected.SafeFileHandle) & 0xfff);
+                    stat->Size = redirected.Length;
+                    stat->Blocks = (stat->Size + 511) / 512;
+                    stat->Access = Timespec.From(File.GetLastAccessTimeUtc(redirected.SafeFileHandle));
+                    stat->Modification = stat->Change = Timespec.From(File.GetLastWriteTimeUtc(redirected.SafeFileHandle));
+                    return 0;
+                }
             else if (file.Path is null)
             {
                 stat->Device = 1;

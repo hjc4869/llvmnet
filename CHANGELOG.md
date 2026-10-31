@@ -72,6 +72,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Portable paths with a trailing slash (`mkdir("dir/")`) or repeated slashes failed with `ENOENT`.
 - `std::filesystem::copy_file` failed for every file in portable mode: the host now implements `sendfile` and `copy_file_range`.
 - Timed futex waits and `nanosleep` could end up to a millisecond early, so `condition_variable::wait_for` reported no timeout and callers waiting for one never returned.
+- On Linux and macOS, `lseek` on a portable program's standard input redirected from a file failed with `ESPIPE` and `fstat` reported a FIFO, so `rewind(stdin)` silently did nothing (mafft's `pairlocalalign` read no sequences). A standard stream redirected from or to a regular file now seeks and stats as that file, and reads still move the offset the shell shares.
 
 - System-mode `exit()` skipped `atexit` handlers and all destructors.
 - `long double` stores overwrote the 6 bytes after the value.

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 using static LlvmNet.Runtime.Linux;
 
 namespace LlvmNet.Runtime;
@@ -227,7 +228,8 @@ public static unsafe partial class HostSyscalls
             file.EntryIndex = (int)Math.Min(entry, int.MaxValue);
             return entry;
         }
-        if (file.Stream is not { CanSeek: true } stream) return -ESPIPE;
+        using FileStream? redirected = RedirectedFile(file);
+        if ((redirected ?? file.Stream) is not { CanSeek: true } stream) return -ESPIPE;
         lock (stream)
         {
             long length = stream.Length;
@@ -242,8 +244,30 @@ public static unsafe partial class HostSyscalls
             };
             if (position == -2) return -ENXIO;
             if (position < 0) return -EINVAL;
-            return stream.Seek(position, SeekOrigin.Begin);
+            position = stream.Seek(position, SeekOrigin.Begin);
+            // FileStream keeps its own offset; reading SafeFileHandle moves the descriptor's (lseek), as reads use it.
+            if (redirected is not null) _ = redirected.SafeFileHandle;
+            return position;
         }
+    }
+
+    /// <summary>
+    /// A standard stream the shell redirected from or to a regular file, as a FileStream over the descriptor, or null.
+    /// Reads and writes stay on the console stream, whose read(2) and write(2) move the descriptor's offset as natively
+    /// (other commands of the shell share it); the FileStream, created per call from that offset, only seeks and sizes
+    /// it. Windows standard handles are not descriptors 0 to 2, so there they stay streams.
+    /// </summary>
+    private static FileStream? RedirectedFile(OpenFile file)
+    {
+        if (file.Kind != FileKind.Console || file.Terminal || OperatingSystem.IsWindows()) return null;
+        try
+        {
+            var stream = new FileStream(new SafeFileHandle(file.Console, false), file.Console == 0 ? FileAccess.Read : FileAccess.Write, 0);
+            if (stream.CanSeek) return stream;
+            stream.Dispose();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { }
+        return null;
     }
 
     private static long Close(int descriptor)
