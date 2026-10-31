@@ -58,7 +58,12 @@ for name, value in [('%{bin-dir}', '$test_output'), ('%{libcxx-dir}', os.path.jo
                     ('%{compile_flags}', '$compile_flags'), ('%{link_flags}', ''),
                     ('%{exec}', '%{executor} --execdir %{temp} -- ')]:
     config.substitutions.append((name, value))
-libcxx.test.config.configure(libcxx.test.params.DEFAULT_PARAMETERS, libcxx.test.features.DEFAULT_FEATURES, config, lit_config)
+# musl accepts every locale name and behaves as C.UTF-8 under all of them, so libc++'s probes would believe that
+# fr_FR.UTF-8 and the other named locales exist. The sysroot has data for C and C.UTF-8 only: the tests that REQUIRE a
+# named locale are unsupported here, as on any platform without it.
+features = [feature for feature in libcxx.test.features.DEFAULT_FEATURES
+            if not (isinstance(feature._name, str) and feature._name.startswith('locale.'))]
+libcxx.test.config.configure(libcxx.test.params.DEFAULT_PARAMETERS, features, config, lit_config)
 EOF
 # Like the llvm-lit script a CMake build generates: map libc++'s source configuration to the one above.
 cat >"$test_output/lit.py" <<EOF
