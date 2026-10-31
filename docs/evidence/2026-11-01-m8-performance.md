@@ -117,6 +117,8 @@ atomics goes from 1.94 to 1.20 times native under the JIT and to native speed as
 
 Gates: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 92 passed, 0 failed in 503 s; `dotnet test tests/LlvmNet.UnitTests -c Release` 113 passed (five new futex tests, run three times); `tests/run.sh atomics threads host thread-stack thread-local portable-openmp fortran-concurrent lifecycle` passed before the gate; format and shellcheck clean.
 
+**Follow-up fix (2026-11-01).** musl's libc-test suite (`tests/run.sh libc-conformance`, nightly) then found two problems the core gate does not exercise, and the futex code was fixed in its own commit: a dead thread's robust priority-inheritance mutex is released by musl with a plain `FUTEX_WAKE`, which no longer reached the `FUTEX_LOCK_PI` waiters (`functional/pthread_robust` hung), and `pthread_cancel`, which interrupts the target thread, could interrupt the bucket lock's fallback to `Thread.Sleep(0)` inside a wake and abandon it (`functional/pthread_cancel-points` and `regression/pthread_cancel-sem_wait` hung). The wake now also pulses priority-inheritance waiters, and the bucket lock and the wait for a wake's signal spin and yield without sleeping. After the fix libc-test fails exactly the tests it failed before M8 (functional 60 of 67, regression 59 of 67, math 192 of 195, api 74 of 74).
+
 ## PF-13: register callbacks once
 
 Every evaluation of a function's address emitted `ldftn` twice and a call to `SystemAbi.RegisterCallback` (or `RegisterVariadicCallback`), a `ConcurrentDictionary.GetOrAdd`, in both modes. The registration maps the pointer to its method for the runtime (`SystemAbi.ResolveCallback`: `atexit` handlers, `pthread_key` destructors, the C++ terminate handler, and calls through a variadic pointer type to a function that is not variadic); in portable mode the pointer is the method itself, so only the mapping, not the value, needed it. The compiler now records every function whose address the module takes and the module initializer registers each one once, before any translated code runs; the address itself is a single `ldftn` (in system mode, of the native-callable stub, as before). Registering in the initializer keeps every lookup the runtime does working in both modes, which dropping registration in portable mode would not have for the legacy variadic-pointer calls (`tests/legacy-callbacks.sh`).
@@ -129,3 +131,43 @@ The `callback` microbenchmark stores one of two function addresses into a table 
 | NativeAOT | 0.781 | 0.354 | 0.350 |
 
 `python3 scripts/benchmark.py --only 'callback,startup,calli,tramp3d,bullet,functionobjects,ffmpeg-hevc-1t,ffmpeg-h264-1t' --output artifacts/bench/pf13-after` against the baseline (host-normalized): callback 0.64 (JIT) and 0.40 (NativeAOT), the others 0.92 to 1.04, within noise; startup 48 ms against 52 ms, so registering every address-taken function of a program up front costs nothing measurable (musl and libc++ included). Gates: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 92 passed, 0 failed in 501 s; unit tests 113 passed; `tests/run.sh legacy-callbacks varargs-callbacks indirect-calls aggregate-callbacks lifecycle exit-order cpp-terminate system-abi` passed before the gate.
+
+## PF-03: stdio buffers and the cost of a host call
+
+musl already buffers stdio in portable mode; the per-call host writes the item names belonged to the hand-written C library that LC-17 deleted. What remained to measure was the cost of a host call and musl's buffer size, and the printf gap of PF-01.
+
+**Host-call cost.** A probe (2 million calls each, timed inside the program with `clock_gettime`; native glibc, native musl, llvmnet JIT and NativeAOT; the regular file is in the session's scratch directory):
+
+| Call | glibc | musl | JIT | NativeAOT |
+| --- | ---: | ---: | ---: | ---: |
+| `syscall(SYS_getpid)` | 41 ns | 37 ns | 63 ns | 13 ns |
+| `write` of 1 byte to `/dev/null` | 58 ns | 57 ns | 61 to 83 ns | 20 ns |
+| `write` of 1 byte to a regular file | 143 ns | | 237 ns | 174 ns |
+| `write` of 4,096 bytes to a regular file | 635 ns | | 695 ns | 717 ns |
+| `fputc` to a regular file, per character | 13.2 ns | | 17.4 ns | 13.5 ns |
+
+A host call costs 30 to 90 ns more than the kernel's own system call under the JIT and less than that as NativeAOT (where the host answers `getpid` and `/dev/null` without entering the kernel at all); for buffered output it is a few percent.
+
+**Buffer size.** The `fwrite` microbenchmark (1 GiB in 256-byte calls, then read back) with buffers given to `setvbuf` (musl ignores a size without a buffer):
+
+| Buffer | glibc | musl | JIT | NativeAOT |
+| --- | ---: | ---: | ---: | ---: |
+| default (glibc 4,096 from `st_blksize`, musl 1,024) | 0.456 s | 0.581 s | 1.002 s | 0.837 s |
+| 4,096 bytes | 0.402 s | 0.432 s | 0.742 s | 0.568 s |
+| 65,536 bytes | 0.408 s | 0.398 s | 0.605 s | 0.468 s |
+
+musl's 1 KB buffer makes four times the write calls glibc makes, and each costs more here. The port now gives streams a 4,096-byte buffer (`ports/musl/src/stdio/llvmnet/__fdopen.c`, `stdout.c`, `stdin.c`), the size glibc takes from `st_blksize` on Linux file systems: a fully buffered stream is flushed where a native glibc build flushes it, so output that interleaves buffered standard output with unbuffered standard error in one file comes out in the same order as natively. Larger buffers would gain another 18%, but would also move those flush points away from native builds and cost memory per open stream; `BUFSIZ`, part of the frozen `dotnet64-v2` ABI, stays 1,024, so `setbuf` is unchanged.
+
+**printf.** A profile of the printf microbenchmark (`%d %s %.3f %08x %ld`, 5 million lines) put 3.2 s of its 7.4 s of CPU in `Float80.Compare`: musl formats floating point with `long double` arithmetic, and the comparison scaled both operands to a common exponent as `BigInteger` values, thousands of bits wide when one operand is zero. It now compares sign, normalized binary exponent and significand directly (exact for zeros of both signs, denormals, unnormals and infinities, checked against the `BigInteger` order over all pairs of 310 encodings in `Float80Tests.ComparisonsFollowTheExactValues`). Almost all the rest, 49% before and 97% after, is the zeroing of `printf_core`'s 7 KB stack buffer on every call, which PF-04 removes.
+
+**Before and after** (`python3 scripts/benchmark.py --only 'printf,fwrite,float80,varargs,mafft,lame,ptrdist-yacr2,olden-voronoi,almabench' --output artifacts/bench/pf03-after`, against the PF-01 baseline):
+
+| Benchmark | Native (s) | JIT before | JIT after | NativeAOT before | NativeAOT after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| fwrite | 0.412 | 1.027 | 0.756 | 0.906 | 0.580 |
+| printf | 0.888 | 5.681 | 4.643 | 6.235 | 5.179 |
+| float80 | 0.006 | 1.717 | 1.518 | 1.487 | 1.365 |
+| olden-voronoi | 0.080 | 1.377 | 0.986 | 0.747 | 0.641 |
+| mafft (47 MB of output) | 8.021 | 17.376 | 16.467 | 16.907 | 16.529 |
+
+The other benchmarks of that run (varargs, lame, ptrdist-yacr2, almabench) are within 0.95 to 1.07 of the baseline. Gates: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 92 passed, 0 failed in 503 s (with the rebuilt sysroot: 1,347 of 1,347 musl sources); unit tests 114 passed.

@@ -250,6 +250,25 @@ public readonly struct Float80
         return Pack(sum, BigInteger.One, scale, left.Negative != right.Negative && addend.Negative);
     }
 
+    /// <summary>
+    /// The order of two values that are not NaN, as the exact numbers significand times two to the scale: zeros of
+    /// either sign are equal, then the signs decide, then the magnitudes, compared by binary exponent and significand
+    /// once both are normalized. No wide integers are built (printf compares long doubles for every digit it writes).
+    /// </summary>
+    private static int Order(Float80 left, Float80 right)
+    {
+        if (left.IsInfinity || right.IsInfinity)
+            return left.IsInfinity && right.IsInfinity ? left.Negative == right.Negative ? 0 : left.Negative ? -1 : 1 : left.IsInfinity ? left.Negative ? -1 : 1 : right.Negative ? 1 : -1;
+        if (left.Significand == 0 || right.Significand == 0)
+            return left.Significand == right.Significand ? 0 : left.Significand == 0 ? right.Negative ? 1 : -1 : left.Negative ? -1 : 1;
+        if (left.Negative != right.Negative)
+            return left.Negative ? -1 : 1;
+        int leftShift = BitOperations.LeadingZeroCount(left.Significand), rightShift = BitOperations.LeadingZeroCount(right.Significand);
+        int leftExponent = left.Scale - leftShift, rightExponent = right.Scale - rightShift;
+        int magnitude = leftExponent != rightExponent ? leftExponent.CompareTo(rightExponent) : (left.Significand << leftShift).CompareTo(right.Significand << rightShift);
+        return left.Negative ? -magnitude : magnitude;
+    }
+
     // llvm.maxnum and llvm.minnum (C fmaxl, fminl): a NaN operand yields the other one; LLVM leaves the sign of zero open.
     public static Float80 MaxNumber(Float80 left, Float80 right) => left.IsNan ? right : right.IsNan ? left : Compare(left, right, 3) != 0 ? left : right;
     public static Float80 MinNumber(Float80 left, Float80 right) => left.IsNan ? right : right.IsNan ? left : Compare(left, right, 5) != 0 ? left : right;
@@ -257,17 +276,7 @@ public readonly struct Float80
     public static int Compare(Float80 left, Float80 right, int predicate)
     {
         bool unordered = left.IsNan || right.IsNan;
-        int order = 0;
-        if (!unordered)
-        {
-            if (left.IsInfinity || right.IsInfinity)
-                order = left.IsInfinity && right.IsInfinity ? left.Negative == right.Negative ? 0 : left.Negative ? -1 : 1 : left.IsInfinity ? left.Negative ? -1 : 1 : right.Negative ? 1 : -1;
-            else
-            {
-                int scale = Math.Min(left.Scale, right.Scale);
-                order = (left.Signed << (left.Scale - scale)).CompareTo(right.Signed << (right.Scale - scale));
-            }
-        }
+        int order = unordered ? 0 : Order(left, right);
         bool result = predicate switch
         {
             0 => false,

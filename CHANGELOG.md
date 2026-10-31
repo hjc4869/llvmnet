@@ -51,6 +51,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Atomics are lock-free on naturally aligned locations, about five times faster under contention (BE-16).
 - Aligned 32- and 64-bit atomics are emitted inline as `Volatile.Read` and `Interlocked` operations instead of runtime calls, and portable futexes keep waiters in hashed buckets with exact wake counts and real `FUTEX_REQUEUE`: contended mutexes 1.7 times and atomics 1.6 times faster (PF-02).
 - Taking a function's address no longer registers it with the runtime each time; the module initializer registers every address-taken function once (PF-13).
+- Portable streams have 4,096-byte buffers, the size glibc uses on Linux file systems, instead of musl's 1,024, so buffered output is flushed where native builds flush it; `BUFSIZ` stays 1,024. `long double` comparisons no longer go through `BigInteger` (PF-03).
 - `atexit` and C++ static destructors run interleaved in reverse registration order, destructor attributes last (BE-08).
 - Portable mode accepts the x86-64 register-slot equivalences that system mode accepts for direct calls: `ptr` and `i64`, `i32` and `i64` in register positions, `i1` and `i8`; the entry point accepts Flang's `i64 main` under `-fdefault-integer-8`, and `--trap-missing-arguments` is available (BE-39). Both modes convert `i8` and `[1 x i8]` at direct calls, as Fortran passes `character(1)` to C `char` (BE-40).
 - Portable `memcpy`, `memmove` and `memset` use the runtime's vectorized copy and fill (LC-24).
@@ -76,6 +77,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Portable paths with a trailing slash (`mkdir("dir/")`) or repeated slashes failed with `ENOENT`.
 - `std::filesystem::copy_file` failed for every file in portable mode: the host now implements `sendfile` and `copy_file_range`.
 - Timed futex waits and `nanosleep` could end up to a millisecond early, so `condition_variable::wait_for` reported no timeout and callers waiting for one never returned.
+- Portable robust priority-inheritance mutexes whose owner died, and `pthread_cancel` during a futex wake, could leave waiters blocked after the PF-02 futex change; fixed before release (`functional/pthread_robust`, `functional/pthread_cancel-points` and `regression/pthread_cancel-sem_wait` pass again).
 - On Linux and macOS, `lseek` on a portable program's standard input redirected from a file failed with `ESPIPE` and `fstat` reported a FIFO, so `rewind(stdin)` silently did nothing (mafft's `pairlocalalign` read no sequences). A standard stream redirected from or to a regular file now seeks and stats as that file, and reads still move the offset the shell shares.
 
 - System-mode `exit()` skipped `atexit` handlers and all destructors.

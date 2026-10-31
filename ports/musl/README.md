@@ -16,6 +16,7 @@ This directory holds the llvmnet port of musl 1.2.5. `scripts/build-portable-lib
 - `src/process/llvmnet/posix_spawn.c` starts host processes through `__llvmnet_spawn`, so `posix_spawn`, `system` and `popen` work; `fork` and `exec` are not available.
 - `src/signal/llvmnet/restore.c` defines empty `__restore` and `__restore_rt`: the host calls signal handlers as ordinary functions, but `sigaction` needs the symbols.
 - `src/string/llvmnet/memcpy.c`, `memmove.c` and `memset.c` call the compiler builtins, which the backend lowers to the runtime's vectorized copy and fill.
+- `src/stdio/llvmnet/__fdopen.c`, `stdout.c` and `stdin.c` give streams a 4096-byte buffer instead of `BUFSIZ` (1024), the size glibc takes from `st_blksize`, so output is flushed where native builds flush it and each host write carries more data; `BUFSIZ` stays 1024.
 - `src/fenv/llvmnet/fenv.c` describes the CIL floating-point environment: round to nearest only and no exception flags. Selecting another rounding mode or raising an exception fails.
 - `src/math/llvmnet/roundevenl.c` adds C23's `roundevenl`, which the linker substitutes for `llvm.roundeven.f80`; the other `long double` intrinsics (`llvm.log.f80` and the rest) become calls to musl's generic C functions (`logl`).
 

@@ -1,3 +1,4 @@
+using System.Numerics;
 using LlvmNet.Runtime;
 
 namespace LlvmNet.UnitTests;
@@ -95,5 +96,49 @@ public sealed class Float80Tests
         Float80 fused = Float80.FusedMultiplyAdd(Float80.Add(Value(1), Value(Math.ScaleB(1, -40))),
             Float80.Subtract(Value(1), Value(Math.ScaleB(1, -40))), Value(-1));
         Assert.Equal(-Math.ScaleB(1, -80), Float80.ToDouble(fused));
+    }
+
+    /// <summary>
+    /// Ordered comparisons agree with the exact values, significand times two to the scale, for zeros of both signs,
+    /// denormals, unnormals (integer bit clear), normals across the exponent range and infinities.
+    /// </summary>
+    [Fact]
+    public void ComparisonsFollowTheExactValues()
+    {
+        var random = new Random(80);
+        ulong[] significands = [0, 1, 0x8000000000000000, 0xffffffffffffffff, 0x4000000000000000, 0xc000000000000001];
+        int[] exponents = [0, 1, 2, 64, 0x3ffe, 0x3fff, 0x4000, 0x7ffd, 0x7ffe];
+        var values = new List<Float80>();
+        foreach (ulong significand in significands)
+            foreach (int exponent in exponents)
+                foreach (int sign in new[] { 0, 0x8000 })
+                    values.Add(new Float80(unchecked((long)significand), sign | exponent));
+        for (int index = 0; index < 200; index++)
+            values.Add(new Float80(random.NextInt64(), random.Next(0x10000)));
+        values.Add(new Float80(long.MinValue, 0x7fff));
+        values.Add(new Float80(long.MinValue, 0xffff));
+        values.RemoveAll(value => (value.SignExponent & 0x7fff) == 0x7fff && (value.Significand & 0x7fffffffffffffff) != 0);
+        static int Exact(Float80 value, out BigInteger magnitude)
+        {
+            int exponent = value.SignExponent & 0x7fff;
+            magnitude = (BigInteger)value.Significand << ((exponent == 0 ? 1 : exponent) - 1);
+            return (value.SignExponent & 0x8000) != 0 ? -1 : 1;
+        }
+        foreach (Float80 left in values)
+            foreach (Float80 right in values)
+            {
+                bool leftInfinite = (left.SignExponent & 0x7fff) == 0x7fff, rightInfinite = (right.SignExponent & 0x7fff) == 0x7fff;
+                int expected;
+                if (leftInfinite || rightInfinite)
+                    expected = Math.Sign((leftInfinite ? ((left.SignExponent & 0x8000) != 0 ? -2 : 2) : 0) - (rightInfinite ? ((right.SignExponent & 0x8000) != 0 ? -2 : 2) : 0));
+                else
+                {
+                    BigInteger a = Exact(left, out BigInteger leftMagnitude) * leftMagnitude, b = Exact(right, out BigInteger rightMagnitude) * rightMagnitude;
+                    expected = a.CompareTo(b);
+                }
+                Assert.Equal(expected < 0 ? 1 : 0, Float80.Compare(left, right, 4));
+                Assert.Equal(expected == 0 ? 1 : 0, Float80.Compare(left, right, 1));
+                Assert.Equal(expected > 0 ? 1 : 0, Float80.Compare(left, right, 2));
+            }
     }
 }
