@@ -30,7 +30,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - An unsupported host (32-bit, big-endian, Mono, .NET before 10) prints one `llvmnet:` line naming the problem and exits with status 1 before any translated code runs, and `runtimeconfig.json` pins the .NET 10 band with `rollForward: Minor` (XP-06).
 - `getrandom`, `/dev/urandom` and the start vector's `AT_RANDOM` read the host's `/dev/urandom` on Unix hosts, so a portable program no longer needs OpenSSL on Linux (XP-07).
 - Link inputs (TC-02): `-c` on `.ll`, `.bc` and `.o` inputs, `-l:<file>`, `-Wl,--whole-archive`, archives in any order with rescanning, duplicate definitions reported with both files (`duplicate definition of 'f' in b.o; it is already defined in a.o`), `-r` of archives, and the `-nostdlib`, `-nodefaultlibs`, `-nostartfiles` and `-nostdlib++` family, documented in `docs/user/driver.md`.
-- Every optimization level is tested against native output in both modes, and `-O0` and `-O3` images are JIT-validated (TC-03).
+- Every optimization level is tested against native output in both modes, and `-O0` and `-O3` images are JIT-validated (TC-03); `-fno-exceptions`, `-fno-rtti`, `-fvisibility`, `-g` and the per-alias language defaults are tested (TC-04).
 - Table-driven driver options (TC-01): every option is handled, passed to the frontend, accepted without effect or rejected with a reason, per runtime mode; `--help` and the tables of `docs/user/driver.md` are generated from the table, and `tests/driver-options.sh` feeds every option Clang's and Flang's `--help` list to the driver. New: `-###` (print the frontend commands), `--driver-mode=`, `-x` per input, `-l:<file>`, `-Wl,--whole-archive`, `-Xlinker`, `-nostdlib++`, `-c` on `.o` inputs, and `-mllvm` in portable mode.
 
 ### Changed
@@ -46,6 +46,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Portable mode accepts the x86-64 register-slot equivalences that system mode accepts for direct calls: `ptr` and `i64`, `i32` and `i64` in register positions, `i1` and `i8`; the entry point accepts Flang's `i64 main` under `-fdefault-integer-8`, and `--trap-missing-arguments` is available (BE-39). Both modes convert `i8` and `[1 x i8]` at direct calls, as Fortran passes `character(1)` to C `char` (BE-40).
 - Portable `memcpy`, `memmove` and `memset` use the runtime's vectorized copy and fill (LC-24).
 - In portable mode `_GNU_SOURCE` also declares the LFS64 names (`stat64`, `off64_t`, `open64`), as glibc does.
+- A managed library (`-shared`) exports only its external, default-visibility definitions, as a native shared library does; static functions and hidden-visibility definitions are private methods (TC-04). `-r` no longer links the runtime libraries into a relocatable object.
 - Native-only options that build systems pass (`-fPIC`, `-pie`, `-Wl,-rpath`, `-Wl,--as-needed`, `-Wl,-z,...`, `-s`, `-static-libgcc`, `-rtlib=`, `-z`) are accepted without effect instead of rejected; `-v` prints the reason. `-m<option>` in portable mode, native linker options without a CIL equivalent (`-e`, `-T`, `-u`, `-Wa,`, `-Wl,--wrap`, ...), `-fsanitize=` and profiling instrumentation now fail as `option '...' is not accepted: <reason>` (TC-01).
 
 ### Removed

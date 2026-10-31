@@ -104,6 +104,26 @@ try
             methods++;
         }
         Console.WriteLine($"IL-only: {methods} method bodies, {imports} explicit P/Invoke imports.");
+        // The C names a library exports (CExport attributes on public static methods), for the visibility tests.
+        List<string> exports = [];
+        foreach (TypeDefinitionHandle typeHandle in metadata.TypeDefinitions)
+            foreach (MethodDefinitionHandle methodHandle in metadata.GetTypeDefinition(typeHandle).GetMethods())
+            {
+                MethodDefinition method = metadata.GetMethodDefinition(methodHandle);
+                if (!method.Attributes.HasFlag(MethodAttributes.Public)) continue;
+                foreach (CustomAttributeHandle attributeHandle in method.GetCustomAttributes())
+                {
+                    CustomAttribute attribute = metadata.GetCustomAttribute(attributeHandle);
+                    if (attribute.Constructor.Kind != HandleKind.MemberReference) continue;
+                    MemberReference constructor = metadata.GetMemberReference((MemberReferenceHandle)attribute.Constructor);
+                    if (constructor.Parent.Kind != HandleKind.TypeReference ||
+                        metadata.GetString(metadata.GetTypeReference((TypeReferenceHandle)constructor.Parent).Name) != "CExportAttribute") continue;
+                    BlobReader reader = metadata.GetBlobReader(attribute.Value);
+                    reader.ReadUInt16();
+                    exports.Add(reader.ReadSerializedString() ?? "");
+                }
+            }
+        if (exports.Count > 0) Console.WriteLine("exports: " + string.Join(" ", exports.Order(StringComparer.Ordinal)));
         foreach (CustomAttributeHandle attributeHandle in metadata.GetAssemblyDefinition().GetCustomAttributes())
         {
             CustomAttribute attribute = metadata.GetCustomAttribute(attributeHandle);

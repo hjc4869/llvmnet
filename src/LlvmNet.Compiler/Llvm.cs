@@ -196,12 +196,21 @@ internal static unsafe class Llvm
     [DllImport(Library)] private static extern uint LLVMGetDebugLocLine(nint value);
     [DllImport(Library)] private static extern uint LLVMGetDebugLocColumn(nint value);
     [DllImport(Library)] internal static extern int LLVMGetLinkage(nint global);
+    [DllImport(Library)] internal static extern int LLVMGetVisibility(nint global);
     [DllImport(Library)] internal static extern nint LLVMGetNamedFunction(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
     [DllImport(Library)] internal static extern nint LLVMGetFirstGlobalIFunc(nint module);
     [DllImport(Library)] internal static extern nint LLVMGetNextGlobalIFunc(nint ifunc);
     [DllImport(Library)] internal static extern nint LLVMIsAGlobalIFunc(nint value);
     [DllImport(Library)] internal static extern nint LLVMIsAGlobalVariable(nint value);
     internal const int ExternalWeakLinkage = 12;
+    internal const int InternalLinkage = 8, PrivateLinkage = 9;
+    internal const int DefaultVisibility = 0;
+
+    /// <summary>
+    /// True for a definition a managed library exports: external linkage (not internal or private) and default
+    /// visibility, so -fvisibility=hidden and visibility attributes select the exports as they do for a native library.
+    /// </summary>
+    internal static bool IsExported(nint global) => LLVMGetLinkage(global) is not (InternalLinkage or PrivateLinkage) && LLVMGetVisibility(global) == DefaultVisibility;
 
     /// <summary>Human-readable symbol name: demangled for C++ and Rust, unchanged otherwise.</summary>
     internal static string Demangle(string name)

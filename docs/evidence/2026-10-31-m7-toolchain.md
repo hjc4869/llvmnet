@@ -64,3 +64,15 @@ The rules are written down in [user/driver.md](../user/driver.md#link-inputs). T
 ## TC-03: optimization levels
 
 ADR-11's default, `-O1` without automatic vectorization, and its difference from Clang's `-O0` are documented in [user/driver.md](../user/driver.md#defaults). `tests/optimization-levels.sh` checks with `-###` that the frontend receives `-O1 -fno-vectorize -fno-slp-vectorize` by default, `-O3` without the `-fno-` options when `-fvectorize -fslp-vectorize` is given, and the user's `-O0` after the default. It then compiles six fixtures (`c/core.c`, `c/intrinsics.c`, `c/byval.c`, `c/unaligned.c`, `cpp/core.cpp`, `fortran/core.f90`) at `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, `-Oz` and `-O3 -fvectorize -fslp-vectorize` (Flang: `-O0` to `-O3`) in both modes: 80 images, each with stdout and exit status identical to the native build at the same level, and each `main` carrying `optnone` at `-O0` and not at `-O3` (Clang's marks; Flang sets none). Every method of the 24 `-O0` and `-O3` images JIT-compiles (`LlvmNet.Checks jit-all`: 1,610 methods, 0 failures), so unoptimized output, with its many locals and allocas, is verifiable in the FD-15 sense. 166 s.
+
+## TC-04: language and codegen options
+
+`tests/language-options.sh` (both modes):
+
+- `-g`: the diagnostic for computed goto names the file and line (`tests/c/computed-goto.c:2: error: ...` with `note: in function 'main'`); without `-g` the note says to compile with `-g` for a location.
+- Language defaults per alias equal the frontend's own (`tests/c/dialect.c` prints `c 201710` under `llvmnet-clang` and `c++ 201703` under `llvmnet-clang++` or `--driver-mode=g++`, as `clang-22` and `clang++-22` do); `-std=c11` and `-std=c++20` override.
+- `-fno-exceptions -fno-rtti`: `tests/cpp/no-eh.cpp` (virtual dispatch, templates, `std::vector`, `std::unique_ptr`) matches native output under the JIT and NativeAOT, with no `invoke` or `landingpad` in the program's functions and no `type_info` for its classes.
+- `-fvisibility=hidden`: a managed library built from `tests/c/visibility.c` exports `exported_function exported_user` (`LlvmNet.Checks inspect` now lists the exports); a client resolves them through `--cil-reference` and fails to resolve `hidden_function`. Without the option every external definition is exported and the static one never is. Before this change a library exported every function, static ones included.
+- `-msse4.2` is rejected in portable mode with `option '-msse4.2' is not accepted in portable mode: ...` and accepted in system mode.
+
+45 s.

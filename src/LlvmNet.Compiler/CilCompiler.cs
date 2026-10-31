@@ -263,21 +263,24 @@ internal sealed class CilCompiler(CompilerOptions options)
             if (Llvm.LLVMIsDeclaration(function) != 0)
                 continue;
             nint signature = Llvm.LLVMGlobalGetValueType(function);
+            // A library exports its external, default-visibility definitions as public CExport methods (-fvisibility and
+            // visibility attributes decide, as for a native library); the rest, and everything in an executable, is private.
+            bool exported = options.Library && Llvm.IsExported(function);
             MethodBuilder method;
             try
             {
-                method = Program.DefineMethod(Llvm.Name(function), MethodAttributes.Public | MethodAttributes.Static,
+                method = Program.DefineMethod(Llvm.Name(function), (exported ? MethodAttributes.Public : MethodAttributes.Private) | MethodAttributes.Static,
                     Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
             }
             catch (Exception error) { throw CompilationError.InFunction(error, function); }
-            method.SetCustomAttribute(new CustomAttributeBuilder(typeof(CExportAttribute).GetConstructor([typeof(string)])!, [Llvm.Name(function)]));
+            if (exported) method.SetCustomAttribute(new CustomAttributeBuilder(typeof(CExportAttribute).GetConstructor([typeof(string)])!, [Llvm.Name(function)]));
             Methods[function] = method;
         }
         for (nint alias = Llvm.LLVMGetFirstGlobalAlias(module); alias != 0; alias = Llvm.LLVMGetNextGlobalAlias(alias))
         {
-            // Library builds export each public alias of a defined function under its own name too.
-            if (Methods.TryGetValue(ResolveAlias(alias), out MethodInfo? aliased) && aliased is MethodBuilder builder &&
-                Llvm.LLVMGetLinkage(alias) is not (8 or 9))
+            // Library builds export each public alias of an exported function under its own name too.
+            if (options.Library && Methods.TryGetValue(ResolveAlias(alias), out MethodInfo? aliased) && aliased is MethodBuilder builder &&
+                builder.IsPublic && Llvm.IsExported(alias))
                 builder.SetCustomAttribute(new CustomAttributeBuilder(typeof(CExportAttribute).GetConstructor([typeof(string)])!, [Llvm.Name(alias)]));
         }
         for (nint ifunc = Llvm.LLVMGetFirstGlobalIFunc(module); ifunc != 0; ifunc = Llvm.LLVMGetNextGlobalIFunc(ifunc))
