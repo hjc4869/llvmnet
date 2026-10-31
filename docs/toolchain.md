@@ -76,7 +76,14 @@ Each host needs the .NET 10 SDK, the `Microsoft.DotNet.ILCompiler` package for t
 | `win-x64` | Visual Studio 2022 or later with the "Desktop development with C++" workload (the MSVC linker and Windows SDK) |
 | `osx-arm64` | Xcode or the Xcode command-line tools |
 
-A missing prerequisite surfaces as the SDK's own error from `dotnet publish` (for example "Platform linker not found"); TC-12 will add an upfront check. A NativeAOT executable needs no `dotnet` on the host that runs it.
+Before `dotnet publish` runs, the driver checks the prerequisites it can see from the build host and reports a missing one in a single line naming the fix: `NativeAOT prerequisite missing: the .NET 10 SDK ...`, `... a C compiler and linker for linux-x64. Install clang ...`, `... zlib's development files are missing ...`, `... the aarch64 cross sysroot is missing ...`, `... the offline feed <dir> has no ... package ...`, or `... win-x64 executables cannot be published from linux-x64 ...` (`tests/aot-offline.sh` checks each). What the SDK finds out later (a package missing from NuGet, a linker failure) surfaces as its own error. A NativeAOT executable needs no `dotnet` on the host that runs it.
+
+**Offline hosts.** The first publish for a runtime identifier restores the ILCompiler packages, the runtime pack and the ILLink tasks from NuGet. `scripts/nativeaot-feed.sh <feed-dir> [rid...]` fills a folder feed with those packages on a host that has access (reusing the user's package cache where it already has them), and `LLVMNET_NUGET_FEED=<feed-dir>` makes every generated NativeAOT project restore from that feed alone (its `nuget.config` clears the other sources), including the projects `--aot-project` writes for other hosts.
+
+```sh
+scripts/nativeaot-feed.sh /srv/llvmnet-feed linux-x64 linux-arm64      # with network access
+LLVMNET_NUGET_FEED=/srv/llvmnet-feed llvmnet-clang program.c --nativeaot -o program   # without
+```
 
 ## Runtime Modes
 

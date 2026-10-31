@@ -80,3 +80,20 @@ ADR-11's default, `-O1` without automatic vectorization, and its difference from
 ## TC-05: diagnostics pipeline
 
 `tests/diagnostics.sh` compiles `tests/c/undeclared.c` with `clang-22` and with `llvmnet` under six option sets (none, `-fcolor-diagnostics`, `-fno-color-diagnostics`, `-fdiagnostics-format=msvc`, `-fdiagnostics-format=vi -fno-show-column`, `-ferror-limit=1 -Wall -Wextra`) in both modes: stderr is identical byte for byte, including the ANSI color sequences, and the exit status is the frontend's. A broken Fortran source gives the same result with `flang-22`. llvmnet's own errors use Clang's form (`file:line: error: ...`, then `llvmnet: note: ...` lines) and, with `-fcolor-diagnostics` or on a terminal, Clang's colors (`Diagnostics.cs`: bold location, bold red `error:`, bold message); `-fno-color-diagnostics` turns them off. A usage error is one `llvmnet: error:` line with exit status 2, a link error exits 1 naming the unresolved symbol, and a stack trace appears only with `LLVMNET_TRACE=1`. The exit codes are documented in [user/driver.md](../user/driver.md#exit-status).
+
+## TC-12: NativeAOT provisioning
+
+`scripts/nativeaot-feed.sh artifacts/tests/aot-offline/feed linux-x64` fills a folder feed with the six packages a publish restores (ILCompiler 10.0.14 and its linux-x64 package, the NETCore and NativeAOT runtime packs, the ILLink tasks, the ASP.NET runtime pack the SDK's restore graph includes), from the user's package cache or NuGet. `tests/aot-offline.sh` then publishes `tests/c/core.c` with `LLVMNET_NUGET_FEED` set to that feed and `NUGET_PACKAGES` set to an empty directory: the publish succeeds from the feed alone (the generated project's `nuget.config` clears every other source), and `--aot-project` records the feed too. The prerequisite check (`Toolchain.CheckNativeAotPrerequisites`) runs before `dotnet publish` and reports each missing piece in one line, checked by the test with a stand-in `dotnet` that has only the runtime, an empty feed, a `PATH` without a C compiler, and a `win-x64` target:
+
+```
+llvmnet: error: NativeAOT prerequisite missing: the .NET 10 SDK. '.../runtime-only-dotnet --list-sdks' reports no SDK (only a runtime is installed); install the .NET 10 SDK, not just the runtime.
+llvmnet: error: NativeAOT prerequisite missing: the offline feed .../empty-feed has no microsoft.dotnet.ilcompiler package; fill it with "scripts/nativeaot-feed.sh .../empty-feed linux-x64" on a host with access to NuGet.
+llvmnet: error: NativeAOT prerequisite missing: a C compiler and linker for linux-x64. Install clang (Debian and Ubuntu: apt-get install clang zlib1g-dev); the SDK runs 'clang' or 'gcc' from PATH, or the one named by CppCompilerAndLinker.
+llvmnet: error: NativeAOT prerequisite missing: win-x64 executables cannot be published from linux-x64. Write the project with --aot-project <dir> and run "dotnet publish NativeHost.csproj -c Release -r win-x64" on a Windows host.
+```
+
+The check also probes the native linker with a one-line program (`-lz` included, `--target=aarch64-linux-gnu` for the cross target) and names zlib or the cross sysroot when that fails. 14 s with the packages cached.
+
+## Gate for TC-02 to TC-05 and TC-12
+
+The five items were tested together in one run of the working tree holding all of them: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 90 passed, 0 failed in 596 s (the five new tests included; `link-inputs` 18 s, `optimization-levels` 191 s, `language-options` 53 s, `diagnostics` 3 s, `aot-offline` 14 s); `dotnet test tests/LlvmNet.UnitTests -c Release` 108 passed; `dotnet format whitespace llvmnet.slnx --verify-no-changes` and `shellcheck -S error` clean. The items were then committed one by one.
