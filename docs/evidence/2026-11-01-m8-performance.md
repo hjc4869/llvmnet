@@ -205,3 +205,22 @@ H.264 decoding goes from 3.20 to 2.20 times native under the JIT and from 2.23 t
 The gate found one test that depended on zeroed stack memory: `tests/c/musl/stdio.c` mixed positional and non-positional `printf` arguments, which is undefined (Clang warns) and makes musl read its uninitialized `nl_arg` array; native musl printed `(null)` because its fresh stack happened to hold zeros. The fixture now uses a valid format (its next line already tests positional arguments).
 
 Gates: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 91 passed and `musl` failed as described, then passed with the corrected fixture; unit tests 114 passed; libc-test fails exactly the tests it failed before M8; `JOBS=8 FUZZ_SEEDS=200 FUZZ_GENERATORS=csmith tests/run.sh fuzz` compiled 200 csmith programs at `-O0` to `-O3` in both modes: 173 matched native in every mode, 25 were skipped because the native program did not finish in 10 s, 2 were rejected with a diagnostic as before, none differed. YARPGen was not run: one of its first 100 native programs needs more than 40 GB on its own, and the fuzz test's default of `nproc/2` parallel jobs had exhausted this host's memory (the test runs here inside memory-capped scopes since); `tests/run.sh stack nonlocal-jumps large-locals vectors atomics fortran-stack cpp exception-pointer semantics io` passed before the gate.
+
+## PF-05: indirect calls
+
+A translated indirect call loads the target address and executes `calli` with the call site's signature; a function's address is a `ldftn` of its method (PF-13). The alternatives were measured with a probe that dispatches 200 million calls in the `calli` microbenchmark's pattern, through a table of eight functions chosen by a pseudo-random index (`dotnet run -c Release --project tests/perf/probes/dispatch`, and published as NativeAOT; second of two rounds, nanoseconds per call):
+
+| Dispatch | JIT | NativeAOT |
+| --- | ---: | ---: |
+| `calli` through a table of addresses (what llvmnet emits) | 8.04 | 6.98 |
+| direct calls behind a `switch` on the index | 8.49 | 8.06 |
+| delegate table | 12.78 | 8.51 |
+| interface table | 14.28 | 9.10 |
+| one target: `calli` | 1.73 | 1.96 |
+| one target: delegate (guarded devirtualization under the JIT) | 1.41 | 1.78 |
+| one target: direct call | 1.21 | 1.57 |
+
+`calli` is the fastest polymorphic dispatch in both engines; a delegate is 0.2 to 0.3 ns faster only at a call site that always reaches one target, and would need an object per function address plus a lookup from the C pointer at every call, which costs more than it saves. Counted with `--check-indirect-calls` and a temporary counter in the runtime (not committed), the ffmpeg decodes make 9.3 million indirect calls for the 240 HEVC frames and 23.9 million for the 240 H.264 frames, mostly DSP function-table calls; at the 0.5 ns `calli` costs over a direct call that is 5 and 12 ms of 3-second decodes. Indirect calls therefore stay as they are. x264 is not in the benchmark set (proposed for later in [decisions.md](../plan/decisions.md#proposed-for-the-owner-2026-11-01-m8)).
+
+The A/B runs in this file use `scripts/ab-time.py` (alternating runs, medians), the PF-03 tables `tests/perf/probes/hostcall.c` and `tests/perf/probes/fwrite-buffer.c`.
+
