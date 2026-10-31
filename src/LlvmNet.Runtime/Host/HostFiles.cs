@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using static LlvmNet.Runtime.Linux;
 
@@ -475,8 +474,8 @@ public static unsafe partial class HostSyscalls
         public override bool CanWrite => true;
         public override long Length => throw new NotSupportedException();
         public override long Position { get => 0; set { } }
-        public override int Read(byte[] buffer, int offset, int count) { RandomNumberGenerator.Fill(buffer.AsSpan(offset, count)); return count; }
-        public override int Read(Span<byte> buffer) { RandomNumberGenerator.Fill(buffer); return buffer.Length; }
+        public override int Read(byte[] buffer, int offset, int count) { HostRandom.Fill(buffer.AsSpan(offset, count)); return count; }
+        public override int Read(Span<byte> buffer) { HostRandom.Fill(buffer); return buffer.Length; }
         public override void Write(byte[] buffer, int offset, int count) { }
         public override void Flush() { }
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();

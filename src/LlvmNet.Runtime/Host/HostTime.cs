@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
 using static LlvmNet.Runtime.Linux;
 
 namespace LlvmNet.Runtime;
@@ -93,7 +92,7 @@ public static unsafe partial class HostSyscalls
     {
         if (length < 0) return -EINVAL;
         int count = (int)Math.Min(length, 33554431);
-        RandomNumberGenerator.Fill(new Span<byte>(buffer, count));
+        HostRandom.Fill(new Span<byte>(buffer, count));
         return count;
     }
 }

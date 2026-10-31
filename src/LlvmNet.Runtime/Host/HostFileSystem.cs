@@ -112,7 +112,7 @@ public static unsafe partial class HostSyscalls
             stat->Device = 1;
             stat->Inode = InodeOf(path);
             stat->Mode = S_IFLNK | 0x1ff;
-            stat->Size = Encoding.UTF8.GetByteCount(link.LinkTarget!);
+            stat->Size = Encoding.UTF8.GetByteCount(HostPaths.ToProgram(link.LinkTarget!));
             stat->Access = Timespec.From(link.LastAccessTimeUtc);
             stat->Modification = stat->Change = Timespec.From(link.LastWriteTimeUtc);
             return 0;
@@ -209,7 +209,13 @@ public static unsafe partial class HostSyscalls
             Directory.Delete(path);
             return 0;
         }
-        if (link) { File.Delete(path); return 0; }
+        if (link)
+        {
+            // Windows keeps directory links apart from file links; Unix unlinks either the same way.
+            if (OperatingSystem.IsWindows() && (File.GetAttributes(path) & FileAttributes.Directory) != 0) Directory.Delete(path);
+            else File.Delete(path);
+            return 0;
+        }
         if (Directory.Exists(path)) return -EISDIR;
         if (!File.Exists(path)) return Missing(path);
         File.Delete(path);
@@ -253,7 +259,11 @@ public static unsafe partial class HostSyscalls
         if (target.Length == 0) return -ENOENT;
         if (File.Exists(path) || Directory.Exists(path) || SymbolicLinkAt(path) is not null) return -EEXIST;
         if (!Directory.Exists(Path.GetDirectoryName(path))) return Missing(path);
-        File.CreateSymbolicLink(path, target);
+        // A link to a directory must be a directory link on Windows; on Unix both calls create the same link.
+        string hostTarget = HostPaths.ToHost(target);
+        string resolvedTarget = Path.IsPathRooted(hostTarget) ? hostTarget : Path.Combine(Path.GetDirectoryName(path)!, hostTarget);
+        if (Directory.Exists(resolvedTarget)) Directory.CreateSymbolicLink(path, hostTarget);
+        else File.CreateSymbolicLink(path, hostTarget);
         return 0;
     }
 
@@ -261,7 +271,7 @@ public static unsafe partial class HostSyscalls
     {
         if (size <= 0) return -EINVAL;
         string path = Resolve(directory, pathPointer);
-        string? target = path == "/proc/self/exe" ? Environment.ProcessPath : SymbolicLinkAt(path)?.LinkTarget;
+        string? target = HostPaths.ToProgram(path == "/proc/self/exe" ? Environment.ProcessPath : SymbolicLinkAt(path)?.LinkTarget);
         if (target is null) return File.Exists(path) || Directory.Exists(path) ? -EINVAL : Missing(path);
         byte[] bytes = Encoding.UTF8.GetBytes(target);
         int length = (int)Math.Min(bytes.Length, size);
@@ -317,7 +327,7 @@ public static unsafe partial class HostSyscalls
 
     private static long CurrentDirectory(byte* buffer, long size)
     {
-        byte[] path = Encoding.UTF8.GetBytes(Directory.GetCurrentDirectory().Replace('\\', '/'));
+        byte[] path = Encoding.UTF8.GetBytes(HostPaths.ToProgram(Directory.GetCurrentDirectory()));
         if (path.Length + 1 > size) return -ERANGE;
         path.CopyTo(new Span<byte>(buffer, path.Length));
         buffer[path.Length] = 0;

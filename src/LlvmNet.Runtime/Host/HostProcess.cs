@@ -215,7 +215,7 @@ public static unsafe partial class HostSyscalls
             var start = new ProcessStartInfo(executable)
             {
                 UseShellExecute = false,
-                WorkingDirectory = directory != 0 ? Path.GetFullPath(Text(directory)) : Directory.GetCurrentDirectory()
+                WorkingDirectory = directory != 0 ? Path.GetFullPath(HostPaths.ToHost(Text(directory))) : Directory.GetCurrentDirectory()
             };
             for (nint* argument = (nint*)arguments + 1; arguments != 0 && *argument != 0; argument++)
                 start.ArgumentList.Add(Text(*argument));
@@ -276,17 +276,40 @@ public static unsafe partial class HostSyscalls
     /// <summary>execvp's search: a name without a slash is looked up in PATH (from the child's environment), others are paths.</summary>
     private static string? FindExecutable(string program, bool search, nint environment)
     {
-        if (program.Contains('/') || !search)
-        {
-            string full = Path.GetFullPath(program);
-            return File.Exists(full) ? full : null;
-        }
         string? path = environment == 0 ? Environment.GetEnvironmentVariable("PATH")
             : Strings(environment).FirstOrDefault(variable => variable.StartsWith("PATH=", StringComparison.Ordinal))?[5..];
+        if (program.Contains('/') || !search)
+        {
+            string full = Path.GetFullPath(HostPaths.ToHost(program));
+            if (File.Exists(full)) return full;
+            return OperatingSystem.IsWindows() ? WindowsShell(program, path) : null;
+        }
         foreach (string directory in (path ?? "/usr/local/bin:/bin:/usr/bin").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
             string candidate = Path.Combine(directory, program);
             if (File.Exists(candidate)) return candidate;
+            if (OperatingSystem.IsWindows() && File.Exists(candidate + ".exe")) return candidate + ".exe";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Windows has no /bin/sh, which system and popen run. The shell of the same name from Git for Windows (or MSYS2 or
+    /// Cygwin) stands in: sh.exe or bash.exe on PATH, else beside the git.exe on PATH as Git for Windows lays them out.
+    /// </summary>
+    private static string? WindowsShell(string program, string? path)
+    {
+        if (program is not ("/bin/sh" or "/usr/bin/sh" or "/bin/bash" or "/usr/bin/bash")) return null;
+        string name = Path.GetFileName(program) + ".exe";
+        string[] directories = (path ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+        foreach (string directory in directories)
+            if (File.Exists(Path.Combine(directory, name))) return Path.Combine(directory, name);
+        foreach (string directory in directories)
+        {
+            if (!File.Exists(Path.Combine(directory, "git.exe"))) continue;
+            string? root = Path.GetDirectoryName(Path.GetFullPath(directory));
+            foreach (string candidate in new[] { "bin", Path.Combine("usr", "bin") })
+                if (root is not null && File.Exists(Path.Combine(root, candidate, name))) return Path.Combine(root, candidate, name);
         }
         return null;
     }

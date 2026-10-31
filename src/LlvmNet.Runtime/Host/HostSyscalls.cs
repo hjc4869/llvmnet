@@ -166,9 +166,45 @@ public static unsafe partial class HostSyscalls
         NotSupportedException => EINVAL,
         Win32Exception { NativeErrorCode: 2 } => ENOENT,
         Win32Exception { NativeErrorCode: 13 } => EACCES,
-        // On Linux the runtime reports the kernel's errno for other I/O failures; other hosts number errors differently.
+        // On Linux the runtime reports the kernel's errno for other I/O failures; macOS numbers the errors it shares with
+        // Linux the same way up to ERANGE, and Windows reports a Win32 error code in the low half of the HRESULT.
         IOException io when OperatingSystem.IsLinux() && (io.HResult & 0xffff) is > 0 and < 4096 => io.HResult & 0xffff,
-        IOException io when io.HResult == unchecked((int)0x80070070) => ENOSPC,
+        IOException io when OperatingSystem.IsMacOS() && (io.HResult & 0xffff) is > 0 and < 4096 => FromDarwin(io.HResult & 0xffff),
+        IOException io when OperatingSystem.IsWindows() && (io.HResult & 0xffff0000) == unchecked((int)0x80070000) => FromWin32(io.HResult & 0xffff),
+        _ => EIO
+    };
+
+    private static int FromDarwin(int error) => error switch
+    {
+        <= ERANGE => error,
+        35 => EAGAIN,
+        45 => EOPNOTSUPP,
+        60 => ETIMEDOUT,
+        62 => ELOOP,
+        63 => ENAMETOOLONG,
+        66 => ENOTEMPTY,
+        78 => ENOSYS,
+        _ => EIO
+    };
+
+    private static int FromWin32(int error) => error switch
+    {
+        2 or 3 => ENOENT,                             // ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND
+        4 => EMFILE,                                  // ERROR_TOO_MANY_OPEN_FILES
+        5 or 1920 => EACCES,                          // ERROR_ACCESS_DENIED, ERROR_CANT_ACCESS_FILE
+        6 => EBADF,                                   // ERROR_INVALID_HANDLE
+        8 => ENOMEM,                                  // ERROR_NOT_ENOUGH_MEMORY
+        17 => EXDEV,                                  // ERROR_NOT_SAME_DEVICE
+        19 => EROFS,                                  // ERROR_WRITE_PROTECT
+        32 or 33 => EBUSY,                            // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
+        39 or 112 => ENOSPC,                          // ERROR_HANDLE_DISK_FULL, ERROR_DISK_FULL
+        80 or 183 => EEXIST,                          // ERROR_FILE_EXISTS, ERROR_ALREADY_EXISTS
+        87 or 123 => EINVAL,                          // ERROR_INVALID_PARAMETER, ERROR_INVALID_NAME
+        109 or 232 => EPIPE,                          // ERROR_BROKEN_PIPE, ERROR_NO_DATA
+        145 => ENOTEMPTY,                             // ERROR_DIR_NOT_EMPTY
+        206 => ENAMETOOLONG,                          // ERROR_FILENAME_EXCED_RANGE
+        267 => ENOTDIR,                               // ERROR_DIRECTORY
+        1314 => EPERM,                                // ERROR_PRIVILEGE_NOT_HELD (symbolic links without the privilege)
         _ => EIO
     };
 
@@ -181,10 +217,14 @@ public static unsafe partial class HostSyscalls
         if (path.Length == 0) throw new FileNotFoundException(path);
         if (path.Length >= 4096) throw new PathTooLongException();
         // Repeated slashes act as one, and a trailing slash names a directory: it is dropped, and the path must then be a
-        // directory if it exists (mkdir("dir/") creates "dir"; stat("file/") is ENOTDIR).
-        while (path.Contains("//", StringComparison.Ordinal)) path = path.Replace("//", "/", StringComparison.Ordinal);
+        // directory if it exists (mkdir("dir/") creates "dir"; stat("file/") is ENOTDIR). A Windows UNC path keeps its "//".
+        int keep = OperatingSystem.IsWindows() && path.StartsWith("//", StringComparison.Ordinal) ? 2 : 0;
+        while (path.IndexOf("//", keep, StringComparison.Ordinal) is int doubled and >= 0) path = path.Remove(doubled, 1);
         bool directoryOnly = path.Length > 1 && path.EndsWith('/');
         if (directoryOnly) path = path[..^1];
+        // The paths the host layer serves itself (/dev, /etc/passwd, /proc/self/exe, zoneinfo) keep their Linux names.
+        if (HostPaths.IsVirtual(path)) return path;
+        path = HostPaths.ToHost(path);
         if (!Path.IsPathRooted(path))
         {
             string start = Directory.GetCurrentDirectory();
@@ -197,7 +237,7 @@ public static unsafe partial class HostSyscalls
             path = Path.Combine(start, path);
         }
         // Path.GetFullPath removes ".." textually; the kernel resolves the components before it first.
-        string resolved = path.Split('/').Contains("..") ? ResolveParents(path, 0) : Path.GetFullPath(path);
+        string resolved = HostPaths.Split(path).Components.Contains("..") ? ResolveParents(path, 0) : Path.GetFullPath(path);
         if (directoryOnly && !Directory.Exists(resolved) && File.Exists(resolved)) throw new HostException(ENOTDIR);
         return resolved;
     }
@@ -210,8 +250,8 @@ public static unsafe partial class HostSyscalls
     private static string ResolveParents(string path, int depth)
     {
         if (depth > 40) throw new HostException(ELOOP);
-        string[] components = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        string current = "/";
+        (string root, string[] components) = HostPaths.Split(path);
+        string current = root;
         for (int index = 0; index < components.Length; index++)
         {
             string component = components[index];
@@ -219,13 +259,16 @@ public static unsafe partial class HostSyscalls
             if (component == ".") continue;
             if (component == "..")
             {
-                current = Path.GetDirectoryName(current) ?? "/";
+                current = Path.GetDirectoryName(current) ?? root;
                 continue;
             }
             string next = Path.Combine(current, component);
             if (last) return next;
-            if (SymbolicLinkAt(next)?.LinkTarget is string target)
+            if (SymbolicLinkAt(next)?.LinkTarget is string linkTarget)
+            {
+                string target = HostPaths.ToHost(linkTarget);
                 next = ResolveParents(Path.IsPathRooted(target) ? target : Path.Combine(current, target), depth + 1);
+            }
             if (!Directory.Exists(next))
             {
                 long error = File.Exists(next) ? -ENOTDIR : Missing(next);

@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Security.Cryptography;
 
 namespace LlvmNet.Runtime;
 
@@ -31,6 +30,7 @@ public static unsafe class ProcessRuntime
     /// </summary>
     public static int InitializeStartup(string[] arguments)
     {
+        HostSyscalls.InitializeHost();
         string[] values = [Environment.GetCommandLineArgs().FirstOrDefault() ?? Environment.ProcessPath ?? "program", .. arguments];
         string[] environment = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().Select(item => $"{item.Key}={item.Value}").ToArray();
         int slots = values.Length + 1 + environment.Length + 1 + 2 * 8;
@@ -44,7 +44,7 @@ public static unsafe class ProcessRuntime
         slot++;
         nint random = (nint)NativeMemory.Alloc(16);
         argumentAllocations.Add(random);
-        RandomNumberGenerator.Fill(new Span<byte>((void*)random, 16));
+        HostRandom.Fill(new Span<byte>((void*)random, 16));
         foreach ((nint key, nint value) in new (nint, nint)[] { (6, 4096), (25, random), (11, 0), (12, 0), (13, 0), (14, 0), (23, 0) })
         {
             *slot++ = key;
