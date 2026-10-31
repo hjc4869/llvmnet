@@ -326,7 +326,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             ?? Methods.Where(pair => Llvm.Name(pair.Key) == "_QQmain").Select(pair => pair.Value).OfType<MethodBuilder>().SingleOrDefault();
         if (main is null && !options.Library)
             throw new NotSupportedException("No main function found.");
-        MethodBuilder? entry = options.Library ? null : EmitEntry(main!);
+        MethodBuilder? entry = options.Library ? null : EmitStartup(cilModule, EmitEntry(main!));
         foreach (TypeBuilder holder in fieldHolders)
             holder.CreateType();
         MetadataBuilder metadata = assembly.GenerateMetadata(out BlobBuilder ilStream, out BlobBuilder fieldData);
@@ -345,7 +345,9 @@ internal sealed class CilCompiler(CompilerOptions options)
         File.WriteAllBytes(output, executable);
         File.WriteAllText(Path.ChangeExtension(output, ".runtimeconfig.json"), JsonSerializer.Serialize(new
         {
-            runtimeOptions = new { tfm = "net10.0", framework = new { name = "Microsoft.NETCore.App", version = "10.0.0" } }
+            // The framework band is pinned: patch and minor updates of .NET 10 roll forward, another major version does not
+            // (DOTNET_ROLL_FORWARD=LatestMajor overrides this for a host that only has a later runtime).
+            runtimeOptions = new { tfm = "net10.0", rollForward = "Minor", framework = new { name = "Microsoft.NETCore.App", version = "10.0.0" } }
         }));
         string runtimePath = typeof(Memory).Assembly.Location;
         string runtimeOutput = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(output))!, Path.GetFileName(runtimePath));
@@ -462,6 +464,36 @@ internal sealed class CilCompiler(CompilerOptions options)
         il.Emit(OpCodes.Ldloc, result);
         il.Emit(OpCodes.Ret);
         return entry;
+    }
+
+    /// <summary>
+    /// The image's entry point. It asks the runtime whether this host can run the image before Program's type initializer
+    /// runs, so an unsupported host (32-bit, Mono, an older runtime) prints one line and exits with status 1 instead of
+    /// failing inside a type initializer (XP-06).
+    /// </summary>
+    private MethodBuilder EmitStartup(ModuleBuilder cilModule, MethodBuilder entry)
+    {
+        TypeBuilder startup = cilModule.DefineType("__Startup", TypeAttributes.NotPublic | TypeAttributes.Abstract | TypeAttributes.Sealed);
+        MethodBuilder main = startup.DefineMethod("Main", MethodAttributes.Public | MethodAttributes.Static, typeof(int), [typeof(string[])]);
+        ILGenerator il = main.GetILGenerator();
+        LocalBuilder problem = il.DeclareLocal(typeof(string));
+        Label supported = il.DefineLabel();
+        il.Emit(OpCodes.Ldstr, options.AbiTag);
+        il.Emit(OpCodes.Ldstr, BuildInfo.Version);
+        il.Emit(OpCodes.Call, typeof(AbiContract).GetMethod(nameof(AbiContract.Diagnose), [typeof(string), typeof(string)])!);
+        il.Emit(OpCodes.Stloc, problem);
+        il.Emit(OpCodes.Ldloc, problem);
+        il.Emit(OpCodes.Brfalse, supported);
+        il.Emit(OpCodes.Ldloc, problem);
+        il.Emit(OpCodes.Call, typeof(AbiContract).GetMethod(nameof(AbiContract.Report))!);
+        il.Emit(OpCodes.Ldc_I4_1);
+        il.Emit(OpCodes.Ret);
+        il.MarkLabel(supported);
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, entry);
+        il.Emit(OpCodes.Ret);
+        startup.CreateType();
+        return main;
     }
 
     /// <summary>A C++ exception no handler catches calls std::terminate with that exception current, as in native C++;
