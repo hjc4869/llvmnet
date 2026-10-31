@@ -404,10 +404,33 @@ public static unsafe partial class HostSyscalls
     {
         var limits = new ulong[RLIMIT_COUNT, 2];
         for (int resource = 0; resource < RLIMIT_COUNT; resource++) limits[resource, 0] = limits[resource, 1] = RLIM_INFINITY;
-        limits[RLIMIT_STACK, 0] = 8UL << 20;
+        (limits[RLIMIT_STACK, 0], limits[RLIMIT_STACK, 1]) = StackLimits();
         limits[RLIMIT_NOFILE, 0] = 1024;
         limits[RLIMIT_NOFILE, 1] = 1UL << 20;
         return limits;
+    }
+
+    /// <summary>
+    /// RLIMIT_STACK as the operating system set it for this process, which is the main thread's stack on Linux and what
+    /// LLVM's OpenMP runtime sizes its workers by; 8 MB, Linux's usual default, where the host cannot tell.
+    /// </summary>
+    private static (ulong Soft, ulong Hard) StackLimits()
+    {
+        if (OperatingSystem.IsLinux())
+            try
+            {
+                // "Max stack size            8388608              unlimited            bytes"
+                foreach (string line in File.ReadLines("/proc/self/limits"))
+                    if (line.StartsWith("Max stack size", StringComparison.Ordinal))
+                    {
+                        string[] fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        return (Parse(fields[3]), Parse(fields[4]));
+                    }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        return (8UL << 20, RLIM_INFINITY);
+        static ulong Parse(string field) => field == "unlimited" ? RLIM_INFINITY : ulong.Parse(field, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     internal static ulong SoftLimit(int resource)

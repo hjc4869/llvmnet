@@ -10,7 +10,7 @@ This directory holds the llvmnet port of musl 1.2.5. `scripts/build-portable-lib
 - `crt/llvmnet-start.c` becomes `crt1.o`. Its `__llvmnet_libc_main` initializes musl, runs the program's constructors, calls `main` and `exit`; `__llvmnet_register_finalizer` registers destructors with `atexit`.
 - `include/features.h` lets `_GNU_SOURCE` imply `_LARGEFILE64_SOURCE`, as glibc does, so the LFS64 names (`stat64`, `off64_t`) are available to Linux software.
 - `include/linux/futex.h` defines the futex constants libc++ uses.
-- `src/thread/llvmnet/clone.c` implements `__clone` with `__llvmnet_clone`, which runs the thread on a managed thread and ignores the stack argument.
+- `src/thread/llvmnet/clone.c` implements `__clone` with `__llvmnet_clone`, which runs the thread on a managed thread. The managed stack is at least 8 MB (glibc's default on Linux, where musl's own would be 128 KB) and at least the size of the stack mapping `pthread_create` passes, so `pthread_attr_setstacksize`, and OpenMP's `OMP_STACKSIZE` and stack-limit default, take effect.
 - `src/thread/llvmnet/pthread_cancel.c` implements cancellation points in C: the host interrupts a cancelled thread's blocking call, and the cancellation point checks the request before and after it.
 - `src/exit/llvmnet/exit.c` and `src/thread/llvmnet/__cxa_thread_atexit_impl.c` add a registry of C++ `thread_local` destructors, which run at thread exit and at the start of `exit()`.
 - `src/process/llvmnet/posix_spawn.c` starts host processes through `__llvmnet_spawn`, so `posix_spawn`, `system` and `popen` work; `fork` and `exec` are not available.

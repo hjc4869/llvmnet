@@ -24,6 +24,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - OpenMP in portable mode: LLVM's OpenMP runtime compiled into the sysroot with `ports/openmp`, so `-fopenmp` works for C, C++ and Fortran, including Flang's `DO CONCURRENT` host lowering; the default team size is the processor count .NET reports (FT-08).
 - Aggregates through variadic calls follow the System V classification, in registers or the overflow area (BE-19).
 - The `long double` rounding and transcendental intrinsics (`llvm.log.f80` and the others) become calls to the C library's `long double` functions (BE-37).
+- Portable threads get the stack size `pthread_attr_setstacksize` asks for (at least 8 MB), and `getrlimit(RLIMIT_STACK)` reports the process's limit on Linux, so OpenMP worker stacks follow `OMP_STACKSIZE` and the stack limit as with native libomp.
 
 ### Changed
 

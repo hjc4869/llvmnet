@@ -158,13 +158,34 @@ public static unsafe partial class HostSyscalls
 
     private sealed class ThreadExit : Exception;
 
+    /// <summary>The managed stack every thread gets at least: glibc's default on Linux x86-64, which musl's 128 KB would undercut.</summary>
+    private const long DefaultStackSize = 8L << 20;
+    /// <summary>The largest stack honored per thread; a request beyond it is a program sizing its threads for a 64-bit address space.</summary>
+    private const long MaximumStackSize = 1L << 30;
+
+    /// <summary>
+    /// The stack size a thread asked for: the length of the mapping musl allocated for its stack (guard, stack and
+    /// TLS), when the stack pointer lies in one; the thread gets at least the default, so musl's own small default and
+    /// requests below it do not shrink the managed stack, while pthread_attr_setstacksize and OMP_STACKSIZE grow it.
+    /// </summary>
+    private static int StackSizeFor(nint stack)
+    {
+        long requested = 0;
+        if (stack != 0)
+            lock (mappingGate)
+                foreach (Mapping mapping in Overlapping(stack - 1, 1))
+                    requested = mapping.Length;
+        return (int)Math.Clamp(requested, DefaultStackSize, MaximumStackSize);
+    }
+
     /// <summary>
     /// musl's __clone for pthread_create: runs <paramref name="function"/>(<paramref name="argument"/>) on a new
-    /// managed thread with CLONE_SETTLS, CLONE_PARENT_SETTID and CLONE_CHILD_CLEARTID semantics. SYS_exit on that
-    /// thread unwinds to here, then the child-tid word is cleared and its futex woken, as the kernel does.
+    /// managed thread with CLONE_SETTLS, CLONE_PARENT_SETTID and CLONE_CHILD_CLEARTID semantics, with a stack sized
+    /// by <see cref="StackSizeFor"/>. SYS_exit on that thread unwinds to here, then the child-tid word is cleared and
+    /// its futex woken, as the kernel does.
     /// </summary>
     [CExport("__llvmnet_clone")]
-    public static int Clone(nint function, nint argument, int flags, nint parentTid, nint tls, nint childTid)
+    public static int Clone(nint function, nint argument, int flags, nint parentTid, nint tls, nint childTid, nint stack)
     {
         int tid = Interlocked.Increment(ref nextThreadId) + 100;
         if ((flags & CLONE_PARENT_SETTID) != 0) Volatile.Write(ref *(int*)parentTid, tid);
@@ -187,7 +208,7 @@ public static unsafe partial class HostSyscalls
                 threads.TryRemove(tid, out _);
                 Interlocked.Decrement(ref clonedThreads);
             }
-        }, 8 << 20)
+        }, StackSizeFor(stack))
         { IsBackground = true, Name = $"musl thread {tid}" };
         // Registered before it runs, so pthread_cancel right after pthread_create finds it.
         threads[tid] = thread;

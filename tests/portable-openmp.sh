@@ -24,6 +24,11 @@ printf 'PASS: the default team size is the processor count .NET reports\n'
 "$llvmnet" --runtime=portable -fopenmp -O1 "$root/tests/c/openmp-many.c" -o "$test_output/many.dll"
 [[ "$(timeout 120 dotnet "$test_output/many.dll")" == "1280 10" ]]
 printf 'PASS: a region with 21 captured variables runs through the argument-array thunk\n'
+# Worker stacks follow RLIMIT_STACK (16 MB here) unless OMP_STACKSIZE says otherwise, as with native libomp.
+"$llvmnet" --runtime=portable -fopenmp -O1 "$root/tests/c/openmp-stack.c" -o "$test_output/stack.dll"
+[[ "$(ulimit -S -s 16384 && env -u OMP_STACKSIZE timeout 120 dotnet "$test_output/stack.dll" 12)" == "12 MB on an OpenMP worker: 1" ]]
+[[ "$(ulimit -S -s 16384 && OMP_STACKSIZE=96M timeout 120 dotnet "$test_output/stack.dll" 80)" == "80 MB on an OpenMP worker: 1" ]]
+printf 'PASS: OpenMP worker stacks follow the stack limit and OMP_STACKSIZE\n'
 # Flang lowers DO CONCURRENT to OpenMP; the C worker reports which thread ran each iteration.
 "$llvmnet" --runtime=portable -O1 -c "$root/tests/c/concurrent-worker.c" -o "$test_output/worker.o"
 "$llvmnet" --runtime=portable -O1 -fopenmp -fdo-concurrent-to-openmp=host "$root/tests/fortran/concurrent.f90" "$test_output/worker.o" \

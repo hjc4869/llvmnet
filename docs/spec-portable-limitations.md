@@ -7,7 +7,6 @@ In portable mode (`--runtime=portable`, ABI `dotnet64-v2`), SPEC CPU 2017 and CP
 | [glibc behavior that musl does not share](#glibc-behavior) | 507.cactuBSSN_r, 607.cactuBSSN_s, 737.gmsh_r, 748.flightdm_r |
 | [`fork`](#fork) | 500.perlbench_r, 600.perlbench_s, 827.cppcheck_s |
 | [Prototypes that contradict the definition](#prototypes-that-contradict-the-definition) | 722.palm_r, 822.palm_s, 621.wrf_s |
-| [Under investigation](#under-investigation) | 627.cam4_s |
 
 All other CPU 2017 and CPU 2026 entries pass in portable mode, some with the [portable settings](#portable-settings-in-the-spec-configuration) below. For portable parity with system mode ([ADR-14](plan/decisions.md#adr-14-linux-identity-of-the-portable-target)), the `fork` and portable ABI entries are listed exclusions; the others are open failures.
 
@@ -48,9 +47,9 @@ Native code tolerates a call whose prototype disagrees with the callee when the 
 - **722.palm_r, 822.palm_s** declare `open` with a fixed four-argument prototype, while the C library defines it as variadic.
 - **621.wrf_s** calls `omp_get_thread_num` in `module_fr_fire_util` with the `use omp_lib` and the declaration commented out, so implicit typing makes the result `REAL`: `float ()` against the runtime's `i32 ()`. Natively the caller reads an unrelated register. 521.wrf_r does not compile the line, which sits under an OpenMP sentinel.
 
-## Under investigation
+## Stack sizes
 
-- **627.cam4_s** overflows the main thread's stack in `dyn_run`, whose automatic arrays are sized from the model's grid, under JIT and NativeAOT even with a 2 GB stack limit, although a 600 MB stack allocation in a probe program works under both. 527.cam4_r, the same code without OpenMP, passes; the system-mode build is being rerun to tell whether the overflow depends on the mode.
+627.cam4_s needs more than 8 MB of stack on the main thread and on the OpenMP workers (SPEC's guidance is an unlimited stack limit, which `scripts/spec-harness.sh` sets). The main thread's stack follows the limit under JIT and NativeAOT; the workers' follows `RLIMIT_STACK` or `OMP_STACKSIZE`, as with native libomp, since the host layer sizes a thread's managed stack by what `pthread_create` asks for ([dev/host-abi.md](dev/host-abi.md)).
 
 ## Portable settings in the SPEC configuration
 
