@@ -1621,6 +1621,25 @@ internal sealed class FunctionEmitter : ValueEmitter
             Normalize(Llvm.LLVMTypeOf(instruction));
             return;
         }
+        if (operation is "fshl" or "fshr" && width is 32 or 64)
+        {
+            // A rotate (both halves the same value) is BitOperations.RotateLeft/RotateRight, a JIT intrinsic (rol/ror);
+            // other funnel shifts call the helper of their width. The width-generic Funnel divides by the width,
+            // which only disappears where the call is inlined, and NativeAOT did not inline it (PF-06).
+            nint high = Llvm.LLVMGetOperand(instruction, 0), low = Llvm.LLVMGetOperand(instruction, 1);
+            Type word = width == 32 ? typeof(uint) : typeof(ulong);
+            Load(high);
+            if (high != low) Load(low);
+            Load(Llvm.LLVMGetOperand(instruction, 2));
+            if (high == low)
+            {
+                if (width == 64) Il.Emit(OpCodes.Conv_I4);
+                Il.Emit(OpCodes.Call, typeof(System.Numerics.BitOperations).GetMethod(operation == "fshl" ? "RotateLeft" : "RotateRight", [word, typeof(int)])!);
+            }
+            else
+                Il.Emit(OpCodes.Call, typeof(Numeric).GetMethod((operation == "fshl" ? "FunnelLeft" : "FunnelRight") + width)!);
+            return;
+        }
         if (operation is "fshl" or "fshr")
         {
             for (uint index = 0; index < 3; index++)

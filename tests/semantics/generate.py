@@ -158,6 +158,11 @@ def integer_module(m):
                 for a in ints(w)[::3]:
                     for c in [0, 1, w - 1, w, w + 3, (1 << w) - 1]:
                         m.call(f, [w, w, w], [a, ints(w)[-2], c & ((1 << w) - 1)], w, f"{name} i{w} {a:#x} {c:#x}")
+                # A rotate: both halves are the same value, which the backend lowers separately.
+                f = m.probe(f"{name}_rotate_i{w}", [w, w], w, [f"%out = call i{w} @llvm.{name}.i{w}(i{w} %a, i{w} %a, i{w} %b)"])
+                for a in ints(w)[::3]:
+                    for c in [0, 1, w - 1, w, w + 3, (1 << w) - 1]:
+                        m.call(f, [w, w], [a, c & ((1 << w) - 1)], w, f"{name} rotate i{w} {a:#x} {c:#x}")
             for name in ["scmp", "ucmp"]:
                 f = m.probe(f"{name}_i{w}", [w, w], 8, [f"%out = call i8 @llvm.{name}.i8.i{w}(i{w} %a, i{w} %b)"])
                 m.declare(f"declare i8 @llvm.{name}.i8.i{w}(i{w}, i{w})")

@@ -295,3 +295,66 @@ Gates: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 91 pass
 The first full run after PF-04 (`python3 scripts/benchmark.py --engines native,jit --repeats 3 --output artifacts/bench/pf06-default`) failed the regression threshold on lpbench under the JIT: 3.22 s against the baseline's 1.28 s, 2.57 times host-normalized, confirmed by the second measurement. The nightly check did what it is for. Bisecting with A/B runs: lpbench built by the PF-03 toolchain took 1.21 s; the PF-03 program with the current runtime 1.19 s and the current program with the PF-03 runtime 3.08 s, so the emitted IL was the cause; its hot function's IL was unchanged in size, and setting the `localsinit` flag back on every method of the slow `lp.dll` with a binary patch restored 1.20 s. The program was also fast with `DOTNET_TieredCompilation=0` (1.28 s) or `DOTNET_TC_QuickJitForLoops=0` (1.16 s) and slower with `DOTNET_TC_OnStackReplacement=0` (4.53 s): `dgefa` is called once and spends the run in one loop nest, which the JIT replaces on the stack with optimized code, and that on-stack-replacement code runs 2.6 times slower when the method lacks `localsinit`.
 
 Methods now drop the flag only when they use `localloc` (allocas, `byval` copies, the variadic call area): those are the methods whose zeroing PF-04 removed, and the JIT never replaces them on the stack. Measured after the change (`--output artifacts/bench/initfix`, against the PF-01 baseline, host-normalized): lpbench 0.92 (JIT) and 0.88 (NativeAOT), ffmpeg H.264 one thread 0.74 and 0.68, printf 0.74 and 0.71, varargs 0.75 and 0.57, olden-em3d 0.65, alloca 0.96 and 0.85, fannkuch 1.00; PF-04's gains are kept. ptrdist-yacr2 then crossed the threshold (1.26 under the JIT) without a cause: its JIT times are bimodal, 0.50 to 0.52 s or about 0.68 s depending on when tier-1 compilation finishes, and twelve alternating runs of the baseline build and the current one gave medians of 0.663 s and 0.673 s. Gates: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 92 passed; unit tests 116 passed.
+
+## PF-07: over-limit methods
+
+The JIT compiles a method with MinOpts, without register allocation or optimization, when it exceeds fixed limits (about 60 KB of IL, 2,000 basic blocks, 2,000 locals); `--diagnose-limits` (BE-25) counts such functions in a program. Which of them run hot was measured with `DOTNET_JitDisasmSummary=1` on every JIT benchmark of the set (`... then to MinOpts` entries):
+
+| Program | Functions compiled with MinOpts |
+| --- | --- |
+| ffmpeg, H.264 decode | `ff_h264_decode_mb_cabac` (167,448 bytes of IL), `ff_h264_filter_mb` (79,946), `ff_h264_queue_decode_slice` (71,582), `hl_decode_mb_complex` (61,535), `ff_er_frame_end` (57,780) |
+| ffmpeg, HEVC decode | none |
+| tramp3d-v4 | two constructors and `main` (run once) |
+| mafft | `constants` (table set-up, run once) |
+| the other 51 suite programs and microbenchmarks | none |
+
+The H.264 functions are the per-macroblock CABAC decoding, deblocking and reconstruction, so they carry much of the decode. The limits are constants of the release JIT: `DOTNET_JITMinOptsCodeSize`, `...BbCount`, `...LvNumCount`, `...LvRefCount` and `...InstrCount` set to their maximum left all five in MinOpts. NativeAOT compiles every method optimized (ahead-of-time compilation never falls back to MinOpts), so the gap between the engines bounds the penalty: H.264 runs 1.51 times as long under the JIT as NativeAOT (2.95 s against 1.95 s, PF-04's run), HEVC, without MinOpts functions, 1.19 times (3.17 s against 2.66 s). Were H.264's gap HEVC's, its JIT time would be about 2.32 s, so MinOpts costs about a fifth of it. SPEC 502.gcc_r and 500.perlbench_r, the item's targets, which BE-25 found with 40 and 23 such functions, were not run. Outlining cold regions so that hot functions stay under the limits is BE-26 (L), not started; the item stays open.
+
+## PF-06: JIT code quality
+
+**Funnel shifts and rotates.** PF-01 showed salsa20 at 1.7 times native under the JIT and 8.4 times as NativeAOT. Its rotates, `(a << b) | (a >> (32 - b))`, become `llvm.fshl.i32` with both halves the same value, which the backend lowered for every width to one helper, `Numeric.Funnel(left, right, count, width, direction)`; its `count % width` is a division unless the width is a constant, which it only becomes where the helper is inlined. The tiered JIT inlined it; NativeAOT, without profile data, did not, and paid a call and a division per rotate. 32- and 64-bit funnel shifts are now emitted as `BitOperations.RotateLeft`/`RotateRight` when both halves are the same value (JIT intrinsics, one `rol` or `ror`) and otherwise as calls to the small helpers of their width (`FunnelLeft32` and the others); other widths keep the general helper. The semantics probes gained rotate cases (45,310 probes, all matching native in both modes and as NativeAOT). A/B, three alternating runs, medians:
+
+| salsa20 | Native | JIT | NativeAOT |
+| --- | ---: | ---: | ---: |
+| before | 1.997 s | 3.306 s | 16.041 s |
+| after | | 2.224 s | 2.090 s |
+
+**Tiering in `runtimeconfig.json`.** `scripts/benchmark.py` gained `--env NAME=VALUE` for the JIT engine's processes. 24 benchmarks (the four ffmpeg decodes, the large C++ programs, the call-, loop- and allocation-heavy kernels and start-up) ran under the JIT with the default tiering and three alternatives, after the `localsinit` fix (`--engines native,jit --repeats 3 --output artifacts/bench/pf06b-<setting>`; JIT medians in seconds, the last rows normalized by each run's native times):
+
+| Benchmark | default (s) | TieredPGO=0 (s) | TieredCompilation=0 (s) | TC_QuickJitForLoops=0 (s) |
+| --- | ---: | ---: | ---: | ---: |
+| bullet | 3.072 | 2.633 | 1.981 | 2.435 |
+| calli | 2.215 | 2.146 | 2.100 | 2.205 |
+| ffmpeg-h264-1t | 3.093 | 2.945 | 2.625 | 2.788 |
+| ffmpeg-h264-4t | 1.445 | 1.248 | 1.093 | 1.212 |
+| ffmpeg-hevc-1t | 3.494 | 3.333 | 3.055 | 3.295 |
+| ffmpeg-hevc-4t | 1.591 | 1.488 | 1.382 | 1.468 |
+| functionobjects | 3.053 | 2.811 | 2.226 | 2.380 |
+| hash | 2.125 | 2.213 | 2.059 | 2.119 |
+| huffbench | 8.453 | 8.362 | 8.508 | 8.819 |
+| jpeg | 0.087 | 0.081 | 0.116 | 0.102 |
+| lame | 0.395 | 0.325 | 0.234 | 0.256 |
+| lists | 3.098 | 3.142 | 3.301 | 3.082 |
+| lpbench | 1.276 | 1.246 | 1.400 | 1.385 |
+| mafft | 16.249 | 16.347 | 18.420 | 16.246 |
+| olden-bh | 1.112 | 1.152 | 1.084 | 1.131 |
+| olden-tsp | 0.879 | 0.852 | 0.741 | 0.834 |
+| printf | 4.274 | 4.570 | 6.722 | 4.182 |
+| ptrdist-anagram | 0.471 | 0.464 | 0.461 | 0.487 |
+| ptrdist-ks | 0.355 | 0.371 | 0.350 | 0.358 |
+| richards | 0.482 | 0.493 | 0.471 | 0.510 |
+| salsa20 | 2.255 | 2.233 | 2.139 | 2.131 |
+| startup | 0.035 | 0.039 | 0.057 | 0.056 |
+| stepanov-abstraction | 2.048 | 1.631 | 1.489 | 1.532 |
+| tramp3d | 0.745 | 0.627 | 0.614 | 0.732 |
+| varargs | 1.191 | 1.179 | 1.002 | 1.168 |
+| geometric mean against default (native-normalized, startup excluded) | 1.000 | 0.934 | 0.916 | 0.928 |
+| peak RSS against default (geometric mean) | 1.000 | 1.001 | 1.016 | 1.000 |
+
+Tiered compilation off is fastest on average but costs 22 ms of start-up (35 to 57 ms) and slows printf by 57% and mafft by 13%; `QuickJitForLoops` off costs the same start-up. Dynamic PGO off (`TieredPGO=0`) gains 6.6% without either cost: translated C has few virtual calls for profile-guided devirtualization, and the instrumented tier-0 code it runs first is slower (Bullet 14%, stepanov abstraction 20%, tramp3d 16%, four-thread H.264 14% faster; printf 7% and hash 4% slower; peak RSS unchanged). The emitted `runtimeconfig.json` now sets `System.Runtime.TieredPGO` to false; `DOTNET_TieredPGO=1` restores it for a run ([user/deployment.md](../user/deployment.md)). NativeAOT has no tiering and is unaffected.
+
+**ReadyToRun** (TC-08) was measured under PF-10: compiling `LlvmNet.Runtime.dll` ReadyToRun saves 3 ms of start-up on linux-x64 and more than doubles the library (157 KB to 370 KB) that every portable image carries, and its code is ignored on other hosts. It is not adopted; compiling the translated program itself ReadyToRun would make the portable image architecture-specific, which NativeAOT already offers.
+
+**Not done.** A systematic `DOTNET_JitDisasm` review of the hot kernels and the removal of avoidable `UInt128` and normalization masks; the item stays open for them.
+
+Gates for PF-06: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 92 passed (`semantics` with the rotate probes: 45,310 probes matching native in all modes and as NativeAOT); unit tests 116 passed.

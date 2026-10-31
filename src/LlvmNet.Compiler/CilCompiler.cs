@@ -337,7 +337,15 @@ internal sealed class CilCompiler(CompilerOptions options)
         {
             // The framework band is pinned: patch and minor updates of .NET 10 roll forward, another major version does not
             // (DOTNET_ROLL_FORWARD=LatestMajor overrides this for a host that only has a later runtime).
-            runtimeOptions = new { tfm = "net10.0", rollForward = "Minor", framework = new { name = "Microsoft.NETCore.App", version = "10.0.0" } }
+            // Dynamic PGO is off: its instrumented tier-0 code costs translated C more than its profile-guided
+            // devirtualization gains (6.6% over 24 benchmarks, PF-06); DOTNET_TieredPGO=1 turns it back on.
+            runtimeOptions = new
+            {
+                tfm = "net10.0",
+                rollForward = "Minor",
+                framework = new { name = "Microsoft.NETCore.App", version = "10.0.0" },
+                configProperties = new Dictionary<string, object> { ["System.Runtime.TieredPGO"] = false },
+            }
         }));
         string runtimePath = typeof(Memory).Assembly.Location;
         string runtimeOutput = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(output))!, Path.GetFileName(runtimePath));
