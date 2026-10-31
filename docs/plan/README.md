@@ -29,6 +29,7 @@ Measurements are in [evidence/2026-11-01-m8-performance.md](../evidence/2026-11-
 - **PF-05.** `calli`, which llvmnet emits for indirect calls, is faster than delegates, interfaces or a `switch` over direct calls; ffmpeg's 9 to 24 million indirect calls per decode cost milliseconds, so nothing changes.
 - **PF-10.** A JIT hello world starts in 36 ms (from 39; any `dotnet program.dll` takes 17), NativeAOT in 2 ms like native. Invariant globalization turned out to break IANA time-zone names on Windows: the JIT keeps ICU, and NativeAOT executables for Windows, which had resolved `Europe/London` to UTC, keep it now too.
 - **PF-11.** NativeAOT uses 7 to 12 MB more memory than native; the JIT adds its runtime and generated code (28 MB, and 60 to 150 MB for large programs). GC settings make no difference to translated programs, whose data lives in native memory.
+- **PF-08.** The NativeAOT baseline (SSE2) has no `pshufb`, so the SIMD128 profile's shuffles run in software and it decodes more slowly than the scalar profile; `--aot-instruction-set x86-64-v3` (opt-in, as decided) makes the two equal. Whether `x86-64-v2`, which already has `pshufb`, should become the default for SIMD128 builds is proposed for the owner.
 - **M8 exit.** PF-01 and PF-02 are done and the benchmark table is published; the exit's nightly table on CI starts with the first GitHub run (FD-19).
 
 ## Progress (2026-10-31, M7)

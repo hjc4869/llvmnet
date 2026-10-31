@@ -49,4 +49,25 @@ public sealed class ToolchainTests
         }
         finally { Directory.Delete(directory, true); }
     }
+
+    /// <summary>`--aot-instruction-set x86-64-v3` (PF-08) becomes ILC's x86-64-v3 level for x64 targets only.</summary>
+    [Fact]
+    public void X86V3AppliesToX64Targets()
+    {
+        string directory = Directory.CreateTempSubdirectory("llvmnet-unit-").FullName;
+        try
+        {
+            string assembly = Path.Combine(directory, "input", "program.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
+            File.Copy(typeof(Toolchain).Assembly.Location, assembly);
+            string project = Path.Combine(directory, "project");
+            Directory.CreateDirectory(project);
+            Toolchain.AotProject(assembly, project, "Speed", "x86-64-v3", false, []);
+            XElement setting = XDocument.Load(Path.Combine(project, "NativeHost.csproj")).Descendants("IlcInstructionSet").Single();
+            Assert.Equal("x86-64-v3", setting.Value);
+            Assert.Equal("$(RuntimeIdentifier.EndsWith('-x64'))", setting.Attribute("Condition")?.Value);
+            Assert.Throws<ArgumentException>(() => Toolchain.NativeAot(assembly, Path.Combine(directory, "out"), directory, "linux-arm64", "Speed", "x86-64-v3", false, false, []));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
 }

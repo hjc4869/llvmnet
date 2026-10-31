@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- PF-08 probe, not part of the solution. Publish as NativeAOT with -p:IlcInstructionSet=<set> and run. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);IL2104;IL3053</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The built runtime library, as translated programs reference it (build the solution first). -->
+    <Reference Include="LlvmNet.Runtime" HintPath="../../../../src/LlvmNet.Runtime/bin/Release/net10.0/LlvmNet.Runtime.dll" />
+  </ItemGroup>
+</Project>

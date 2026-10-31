@@ -27,7 +27,13 @@ if "$root/bin/llvmnet" --nativeaot --aot-instruction-set invalid "$root/tests/c/
     printf 'FAIL: an invalid NativeAOT instruction set was accepted\n' >&2
     exit 1
 fi
-grep -q 'requires baseline or native' "$output/aot-isa.log"
+grep -q 'requires baseline, x86-64-v3 or native' "$output/aot-isa.log"
+if "$root/bin/llvmnet" --nativeaot --aot-instruction-set x86-64-v3 --runtime-id linux-arm64 "$root/tests/c/smoke.c" -o "$output/arm-v3" >"$output/aot-arm-v3.log" 2>&1; then
+    printf 'FAIL: x86-64-v3 was accepted for an ARM64 target
+' >&2
+    exit 1
+fi
+grep -q 'x86-64-v3 is an x64 instruction set; the target is linux-arm64' "$output/aot-arm-v3.log"
 (
     cd "$root"
     bin/llvmnet @tests/driver.rsp

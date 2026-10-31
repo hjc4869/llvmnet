@@ -39,6 +39,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Table-driven driver options (TC-01): every option is handled, passed to the frontend, accepted without effect or rejected with a reason, per runtime mode; `--help` and the tables of `docs/user/driver.md` are generated from the table, and `tests/driver-options.sh` feeds every option Clang's and Flang's `--help` list to the driver. New: `-###` (print the frontend commands), `--driver-mode=`, `-x` per input, `-l:<file>`, `-Wl,--whole-archive`, `-Xlinker`, `-nostdlib++`, `-c` on `.o` inputs, and `-mllvm` in portable mode.
 
 - Benchmark harness `scripts/benchmark.py` (PF-01): 58 benchmarks (`tests/perf/benchmarks.tsv`: microbenchmarks, free `llvm-test-suite` programs, the ffmpeg decode harness at one and four threads) built natively, for the JIT and as NativeAOT from the same sources, outputs checked against native, medians compared with `tests/perf/baseline.tsv`; the nightly CI job fails on a confirmed regression. Method in `docs/dev/benchmarks.md`.
+- `--aot-instruction-set x86-64-v3` (x64 targets) compiles NativeAOT executables for AVX2-class CPUs; with it the SIMD128 ffmpeg profile's shuffles use `pshufb` instead of a software fallback (PF-08). Baseline stays the default.
 
 ### Changed
 

@@ -103,7 +103,7 @@ Every option falls into one of four classes, per runtime mode:
 | `--runtime-id=<rid>` | NativeAOT target runtime identifier (default: this host; linux-arm64 cross-publishes from Linux x64; system mode needs linux-x64) |
 | `--aot-project=<dir>` | Write the NativeAOT project into <dir> for publishing on another host (dotnet publish -r <rid>) instead of publishing here |
 | `--aot-optimize=<preference>` | Balanced (default), Speed or Size |
-| `--aot-instruction-set=<set>` | baseline (default) or native (this host's CPU; the executable may not run elsewhere) |
+| `--aot-instruction-set=<set>` | baseline (default: SSE2 on x64), x86-64-v3 (AVX2, BMI2, FMA: x64 CPUs since about 2015) or native (this host's CPU; the executable may not run elsewhere) |
 | `--aot-debug` | Keep native debug symbols and the map file |
 
 ### Diagnostics and debugging

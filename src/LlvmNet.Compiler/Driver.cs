@@ -131,7 +131,7 @@ internal sealed class Invocation
                     break;
                 case "--aot-instruction-set":
                     AotInstructionSet = value;
-                    if (AotInstructionSet is not ("baseline" or "native")) throw new ArgumentException("--aot-instruction-set requires baseline or native.");
+                    if (AotInstructionSet is not ("baseline" or "x86-64-v3" or "native")) throw new ArgumentException("--aot-instruction-set requires baseline, x86-64-v3 or native.");
                     break;
                 case "--aot-debug": AotDebug = true; break;
                 case "--keep-ir": KeepIr = Path.GetFullPath(value); break;

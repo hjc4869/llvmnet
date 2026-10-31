@@ -261,3 +261,31 @@ NativeAOT stays within 7 to 12 MB of native, the runtime's own share; the JIT ad
 **Large-page arenas for musl `malloc`** were not pursued: the malloc microbenchmark already runs faster than native glibc's under both engines (0.97 s and 0.86 s against 1.20 s), and RSS above native comes from the runtime and generated code, not from the C heap.
 
 Gates: no compiler or runtime change; `tests/run.sh benchmarks` passed with the new process runner.
+
+## PF-08: NativeAOT instruction sets
+
+**The regression explained.** `tests/perf/probes/simd128` times the SIMD128 helpers of `LlvmNet.Runtime.Simd128` that ffmpeg's SIMD128 profile calls most, published as NativeAOT with each instruction set (`dotnet publish tests/perf/probes/simd128 -c Release -r linux-x64 -p:PublishAot=true -p:IlcInstructionSet=<set>`; nanoseconds per iteration, of which about 4 ns is the probe's own delegate call):
+
+| Helper | default | `x86-64` | `x86-64-v2` | `x86-64-v3` | `x86-64-v4` | `native` | JIT |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `Swizzle` (variable shuffle) | 12.64 | 12.83 | 4.48 | 4.31 | 4.48 | 6.23 | 2.72 |
+| `Shuffle` (lanes built at run time) | 21.99 | 21.90 | 4.35 | 4.37 | 4.78 | 4.42 | 5.44 |
+| `ExtendLowInt8` (widening) | 4.83 | | 4.36 | 4.51 | 4.38 | 4.29 | 6.11 |
+| `NarrowInt16` (saturating) | 5.08 | | 5.14 | 5.08 | 5.07 | 5.08 | 7.35 |
+| `AddSaturateInt16` | 8.32 | | 6.80 | 6.45 | 6.36 | 6.36 | 8.89 |
+| `MultiplyInt16`, `BitSelect`, `AddInt32` | 4.1 to 4.7 | | 4.0 to 4.7 | 3.9 to 4.7 | 3.9 to 4.5 | 3.9 to 4.5 | 5.2 to 5.7 |
+
+The default is the NativeAOT compiler's `x86-64` level (SSE2), identical to it in every row. At that level `Vector128.Shuffle` with indices that are not compile-time constants cannot use SSSE3's `pshufb` and falls back to a software loop, although `Ssse3.IsSupported` is true when the program runs: the shuffles take three to five times as long. Widening, narrowing and the rest have SSE2 sequences and do not change. Of the plan's two hypotheses, non-constant shuffle indices is the cause; widening is not.
+
+**Effect on ffmpeg.** The portable SIMD128 and scalar profiles of the decode harness as NativeAOT for each `--aot-instruction-set` (`bin/llvmnet --runtime=portable [--simd128] --nativeaot --aot-instruction-set <set> .../decode.bc`; 240 frames of the HEVC 1080p 10-bit clip, one thread, `scripts/ab-time.py`, medians of five; the first 48 frames' hashes equal native's for every build):
+
+| Build | baseline | `x86-64-v3` | `native` | JIT |
+| --- | ---: | ---: | ---: | ---: |
+| scalar | 2.714 s | 2.628 s | 2.652 s | 3.325 s |
+| SIMD128 | 3.285 s | 2.679 s | 2.602 s | 3.281 s |
+
+Native: 2.324 s. With the baseline instruction set the SIMD128 profile is 21% slower than the scalar one (the 2.2 times of the earlier SIMD128 study measured an older runtime and build); at `x86-64-v3` the two are within 2% and both within 15% of native.
+
+**`x86-64-v3` option.** `--aot-instruction-set x86-64-v3` selects ILC's `x86-64-v3` level (AVX2, BMI1/2, FMA, LZCNT, MOVBE). It is rejected for a target that is not x64 (`--runtime-id linux-arm64`), and in a relocatable project (`--aot-project`) it applies only when the project is published for an x64 runtime identifier (`ToolchainTests.X86V3AppliesToX64Targets`). Baseline stays the default, as the owner decided; [user/simd128.md](../user/simd128.md) documents the trade-off. Because `x86-64-v2` already provides `pshufb`, a v2 default for SIMD128 builds is [proposed for the owner](../plan/decisions.md#proposed-for-the-owner-2026-11-01-m8).
+
+Gates: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 91 passed; `driver` failed because it expected the old error text (`requires baseline or native`), and passes with the new text and a new check that `x86-64-v3` is refused for linux-arm64; unit tests 116 passed; `tests/run.sh driver-reference` regenerated the option table of `docs/user/driver.md`.

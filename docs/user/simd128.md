@@ -28,7 +28,7 @@ bin/llvmnet --runtime=portable --simd128 --nativeaot --aot-instruction-set nativ
 	-o artifacts/ffmpeg-browser-portable-simd128/decode-aot-host
 ```
 
-The default is `--aot-instruction-set baseline`. `native` specializes the code for the build host's CPU and rejects another RID; the result may not run on older CPUs. It does not change the C data ABI. The JIT selects instructions at run time without this option.
+The default is `--aot-instruction-set baseline`, the NativeAOT compiler's `x86-64` level on x64 (SSE2), which runs on every x64 CPU. It cannot assume SSSE3, so the SIMD128 shuffles (`wasm_i8x16_swizzle`, `wasm_i8x16_shuffle` and the helpers built on them) fall back to software and the SIMD128 profile decodes HEVC more slowly than the scalar one (3.29 s against 2.71 s for 240 frames of 1080p, [evidence](../evidence/2026-11-01-m8-performance.md#pf-08-nativeaot-instruction-sets)). `x86-64-v3` (AVX2, BMI2, FMA; x64 CPUs since about 2015) compiles them to `pshufb` and makes the profile as fast as the scalar one; it applies only to x64 targets. `native` specializes the code for the build host's CPU and rejects another RID; the result may not run on older CPUs. Neither changes the C data ABI. The JIT selects instructions at run time without this option.
 
 ## Tests
 
