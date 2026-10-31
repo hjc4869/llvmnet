@@ -5,7 +5,7 @@ What llvmnet supports today and its known limitations. Open work and milestones 
 ## Supported
 
 - C, C++ and Fortran through Clang and Flang 22, in portable and system mode, under the JIT and NativeAOT; a relocatable toolchain package ([toolchain.md](toolchain.md)).
-- Portable mode: musl, libc++/libc++abi and flang-rt compiled into the program, with Linux system-call semantics over .NET ([dev/host-abi.md](dev/host-abi.md)).
+- Portable mode: musl, libc++/libc++abi, LLVM's OpenMP runtime and flang-rt compiled into the program, with Linux system-call semantics over .NET ([dev/host-abi.md](dev/host-abi.md)).
 - System mode: the host's glibc and native libraries through generated bridges, flang-rt, and optionally a libstdc++ bitcode archive and LLVM's OpenMP runtime.
 - The ffmpeg profile in [../config/ffmpeg-browser.sh](../config/ffmpeg-browser.sh): ffmpeg with dav1d, libxml2 and zlib, frame and slice threading, and SIMD128 HEVC kernels ([ffmpeg-threading.md](ffmpeg-threading.md), [simd128.md](simd128.md)). The integration tests compare decoded frame and audio hashes with native builds in both modes. Native assembly, hardware decoding, runtime CPU detection and networking are disabled, and the build produces a decode harness, not the `ffmpeg` command-line program.
 - SPEC CPU 2017 and 2026 through the standard harness ([spec-coverage.md](spec-coverage.md)); the causes of portable-mode failures are in [spec-portable-limitations.md](spec-portable-limitations.md).
@@ -25,7 +25,6 @@ Compiler:
 Portable mode:
 
 - Services .NET cannot provide are unavailable: `fork`, `exec`, sockets, hard links, FIFOs, SysV IPC, memory protection and asynchronous signals. [dev/host-abi.md](dev/host-abi.md) lists every difference from Linux.
-- No OpenMP runtime.
 - Only the C and C.UTF-8 locales.
 - The floating-point environment is fixed: round to nearest, no exception flags.
 - `__linux__` and the other host macros are not defined, so code that selects platform code by them needs a portable path.

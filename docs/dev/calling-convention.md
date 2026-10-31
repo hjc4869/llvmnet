@@ -16,6 +16,8 @@ This page states which caller/callee signature differences llvmnet accepts. It f
 | structs, arrays, vectors | a generated explicit-layout value type per LLVM type (`Vector128<byte>` for 128-bit vectors under `--simd128`) |
 | variadic function | the fixed parameters plus one trailing native `int` pointing at the software `va_list` area |
 
+The `va_list` area mirrors x86-64's: a register save area of six 8-byte general slots and eight 16-byte floating-point slots, then an overflow area, with the `__va_list_tag` the callee's `va_start` copies in front. Clang lowers `va_arg` to the x86-64 rules, so the caller (`src/LlvmNet.Compiler/VarArgEmitter.cs`) places each variadic argument as the System V ABI classifies it: integers and pointers in general slots, `float` and `double` in floating-point slots, `long double` and aggregates passed `byval` in the overflow area, and a small aggregate, which Clang passes as its eightbytes (`{ i64, double }`), in one slot per eightbyte when they all fit, otherwise in the overflow area. `tests/varargs-aggregates.sh` compares the result with native.
+
 ## Direct calls
 
 The callee's definition is known, so llvmnet checks the call site against it at compile time. The same rules apply in both runtime modes; `dotnet64-v2` follows x86-64's calling convention.

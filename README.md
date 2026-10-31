@@ -44,7 +44,7 @@ Objects and archives contain LLVM bitcode. Explicit object files are always link
 
 | Mode | ABI tag | C, C++ and Fortran libraries |
 | --- | --- | --- |
-| `portable` (default) | `dotnet64-v2` | musl 1.2.5, libc++/libc++abi and flang-rt 22.1.8 from `sysroot/dotnet64-v2`, compiled into the program's CIL; system services come from a host layer in `LlvmNet.Runtime` ([docs/dev/host-abi.md](docs/dev/host-abi.md)) |
+| `portable` (default) | `dotnet64-v2` | musl 1.2.5, libc++/libc++abi, LLVM's OpenMP runtime and flang-rt 22.1.8 from `sysroot/dotnet64-v2`, compiled into the program's CIL; system services come from a host layer in `LlvmNet.Runtime` ([docs/dev/host-abi.md](docs/dev/host-abi.md)) |
 | `system` | `system-linux-x64-v1` | the host's glibc and other native libraries through generated native bridges; flang-rt built against glibc from `sysroot/system-linux-x64-v1` |
 
 ```sh

@@ -1,0 +1,9 @@
+# OpenMP runtime port for the dotnet64-v2 ABI
+
+This directory holds the llvmnet port of LLVM's OpenMP runtime (`openmp/runtime`, libomp) 22.1.8. `scripts/build-portable-openmp.sh` copies the pinned upstream source, applies `llvmnet.patch`, generates the files CMake would (`kmp_config.h`, `omp.h`, the message catalog), and compiles the runtime's C++ sources with llvmnet into LLVM bitcode, `libomp.a`, on top of musl and libc++. `scripts/build-sysroot.sh` runs the build and installs the archive and `omp.h` in `sysroot/dotnet64-v2`; the driver links the archive into every portable executable, where lazy archive extraction leaves it out of programs that do not use OpenMP.
+
+- `llvmnet.patch` teaches `kmp_platform.h` the portable target: a Linux userland (`KMP_OS_LINUX`, since musl runs over the Linux system-call semantics the host provides) on a new architecture, `KMP_ARCH_LLVMNET`, which selects the generic C code in `kmp_os.h`, `kmp_runtime.cpp` and `z_Linux_util.cpp`: the C `__kmp_invoke_microtask`, atomics through compiler builtins, `__sync_synchronize` barriers, and no processor affinity, because managed threads have none.
+- `llvmnet-support.cpp` defines what the assembly file provides elsewhere: the unnamed critical section's lock and its address.
+- The configuration is a static library without OMPT, OMPD, ITT, statistics, hwloc, adaptive (transactional) locks or version symbols. Processor counts come from `sysconf`, which musl answers from the host's `sched_getaffinity`: `Environment.ProcessorCount`, which honors cgroup limits, affinity and `DOTNET_PROCESSOR_COUNT`, so the default team size is that count when `OMP_NUM_THREADS` is unset.
+- Worker threads are musl pthreads over managed threads; libomp's futex-based waits go through the host's futex.
+- Fortran programs use the `omp_lib` modules of the Flang installation, which match because the portable data layout is x86-64's.

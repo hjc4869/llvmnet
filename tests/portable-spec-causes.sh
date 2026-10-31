@@ -40,8 +40,12 @@ expect_failure() {
 for header in sys/ioctl.h sys/param.h complex.h locale.h malloc.h sys/resource.h; do
     resolved "header-${header//\//-}" clang-22 "$root/tests/c/portable-spec-header.c" "-DPROBE_HEADER=<$header>"
 done
-# Not part of a C library: Linux kernel headers, BSD machine headers and OpenMP.
-for header in linux/limits.h machine/endian.h omp.h; do
+# omp.h comes with the sysroot's libomp (FT-08); the host's clang has it only with a native libomp installed.
+"$llvmnet" --runtime=portable -O0 '-DPROBE_HEADER=<omp.h>' "$root/tests/c/portable-spec-header.c" -o header-omp.dll
+dotnet header-omp.dll
+printf 'RESOLVED: header-omp.h\n'
+# Not part of a C library: Linux kernel headers and BSD machine headers.
+for header in linux/limits.h machine/endian.h; do
     expect_failure "header-${header//\//-}" "'$header' file not found" \
         "$llvmnet" --runtime=portable -c "-DPROBE_HEADER=<$header>" "$root/tests/c/portable-spec-header.c" -o header.o
 done
@@ -54,12 +58,14 @@ resolved unsigned-char clang-22 "$root/tests/c/portable-spec-missing.c" -DPROBE=
 # A call through a prototype that contradicts the C library's declaration is rejected, not miscompiled.
 expect_failure c-9 'Incompatible direct call signature for open' \
     "$llvmnet" --runtime=portable -O0 -fno-builtin -DPROBE=9 "$root/tests/c/portable-spec-missing.c" -o probe.dll
-expect_failure openmp 'Unresolved function: __kmpc_fork_call' \
-    "$llvmnet" --runtime=portable -O0 -fopenmp -DPROBE=6 "$root/tests/c/portable-spec-missing.c" -o openmp.dll
+# OpenMP runs on the sysroot's libomp (FT-08); the native side would need a native libomp, so only the exit code is checked.
+"$llvmnet" --runtime=portable -O0 -fopenmp -DPROBE=6 "$root/tests/c/portable-spec-missing.c" -o openmp.dll
+OMP_NUM_THREADS=2 dotnet openmp.dll
+printf 'RESOLVED: openmp\n'
 # iostream, sstream, fstream, complex and std::thread.
 for probe in 1 2 3 4 5; do
     resolved "cpp-$probe" clang++-22 "$root/tests/cpp/portable-spec-missing.cpp" -std=c++17 "-DPROBE=$probe"
 done
 expect_failure native-openmp '--system-library requires --runtime=system' \
     "$llvmnet" --runtime=portable --system-library libomp.so.5 "$root/tests/c/portable-spec-missing.c" -o native.dll
-printf 'PASS: 18 recorded portable SPEC causes are resolved and match native; 6 remaining causes are still rejected\n'
+printf 'PASS: 20 recorded portable SPEC causes are resolved and match native; 4 remaining causes are still rejected\n'

@@ -1,0 +1,105 @@
+llvmnet port of LLVM's OpenMP runtime (openmp/runtime) 22.1.8 for the dotnet64-v2 ABI; applied by
+scripts/build-portable-openmp.sh with patch -p1. The portable target is a Linux userland without an architecture
+macro, so KMP_OS_LINUX is set from __LLVMNET_PORTABLE__ and a new architecture, KMP_ARCH_LLVMNET, selects the
+generic C code: the C __kmp_invoke_microtask, builtin atomics, __sync_synchronize barriers, no processor
+affinity (there is none on managed threads) and no assembly.
+
+diff -ruN a/src/kmp_os.h b/src/kmp_os.h
+--- a/src/kmp_os.h	2026-10-31 15:58:31.796989767 +1100
++++ b/src/kmp_os.h	2026-10-31 15:58:31.796989767 +1100
+@@ -77,7 +77,7 @@
+ 
+ #if (KMP_OS_LINUX || KMP_OS_WINDOWS || KMP_OS_FREEBSD || KMP_OS_NETBSD ||      \
+      KMP_OS_DRAGONFLY || KMP_OS_AIX) &&                                        \
+-    !KMP_OS_WASI && !KMP_OS_EMSCRIPTEN
++    !KMP_OS_WASI && !KMP_OS_EMSCRIPTEN && !KMP_ARCH_LLVMNET
+ #define KMP_AFFINITY_SUPPORTED 1
+ #if KMP_OS_WINDOWS && KMP_ARCH_X86_64
+ #define KMP_GROUP_AFFINITY 1
+@@ -183,7 +183,7 @@
+ #define KMP_SIZE_T_SPEC KMP_UINT32_SPEC
+ #elif KMP_ARCH_X86_64 || KMP_ARCH_PPC64 || KMP_ARCH_AARCH64 ||                 \
+     KMP_ARCH_MIPS64 || KMP_ARCH_RISCV64 || KMP_ARCH_LOONGARCH64 ||             \
+-    KMP_ARCH_VE || KMP_ARCH_S390X || KMP_ARCH_SPARC64
++    KMP_ARCH_VE || KMP_ARCH_S390X || KMP_ARCH_SPARC64 || KMP_ARCH_LLVMNET
+ #define KMP_SIZE_T_SPEC KMP_UINT64_SPEC
+ #else
+ #error "Can't determine size_t printf format specifier."
+@@ -218,7 +218,8 @@
+ #define KMP_INT_MIN ((kmp_int32)0x80000000)
+ 
+ // stdarg handling
+-#if (KMP_ARCH_ARM || KMP_ARCH_X86_64 || KMP_ARCH_AARCH64 || KMP_ARCH_WASM) &&  \
++#if (KMP_ARCH_ARM || KMP_ARCH_X86_64 || KMP_ARCH_AARCH64 || KMP_ARCH_WASM ||   \
++     KMP_ARCH_LLVMNET) &&                                                       \
+     (KMP_OS_FREEBSD || KMP_OS_NETBSD || KMP_OS_OPENBSD || KMP_OS_DRAGONFLY ||  \
+      KMP_OS_LINUX || KMP_OS_WASI)
+ typedef va_list *kmp_va_list;
+@@ -1053,7 +1054,7 @@
+ #if KMP_ARCH_PPC64 || KMP_ARCH_ARM || KMP_ARCH_AARCH64 || KMP_ARCH_MIPS ||     \
+     KMP_ARCH_MIPS64 || KMP_ARCH_RISCV64 || KMP_ARCH_LOONGARCH64 ||             \
+     KMP_ARCH_VE || KMP_ARCH_S390X || KMP_ARCH_PPC || KMP_ARCH_AARCH64_32 ||    \
+-    KMP_ARCH_SPARC
++    KMP_ARCH_SPARC || KMP_ARCH_LLVMNET
+ #if KMP_OS_WINDOWS
+ #undef KMP_MB
+ #define KMP_MB() std::atomic_thread_fence(std::memory_order_seq_cst)
+diff -ruN a/src/kmp_platform.h b/src/kmp_platform.h
+--- a/src/kmp_platform.h	2026-10-31 15:58:31.796989767 +1100
++++ b/src/kmp_platform.h	2026-10-31 15:58:31.796989767 +1100
+@@ -100,6 +100,13 @@
+ #define KMP_OS_AIX 1
+ #endif
+ 
++// llvmnet's portable target (dotnet64-v2) is a Linux userland: musl over Linux system-call semantics that the .NET
++// host provides, on any operating system. It defines neither __linux__ nor an architecture macro.
++#if defined(__LLVMNET_PORTABLE__)
++#undef KMP_OS_LINUX
++#define KMP_OS_LINUX 1
++#endif
++
+ #if (1 != KMP_OS_LINUX + KMP_OS_DRAGONFLY + KMP_OS_FREEBSD + KMP_OS_NETBSD +   \
+               KMP_OS_OPENBSD + KMP_OS_DARWIN + KMP_OS_WINDOWS + KMP_OS_HAIKU + \
+               KMP_OS_HURD + KMP_OS_SOLARIS + KMP_OS_WASI + KMP_OS_AIX)
+@@ -131,6 +138,7 @@
+ #define KMP_ARCH_VE 0
+ #define KMP_ARCH_S390X 0
+ #define KMP_ARCH_SPARC 0
++#define KMP_ARCH_LLVMNET 0
+ 
+ #if KMP_OS_WINDOWS
+ #if defined(_M_AMD64) || defined(__x86_64)
+@@ -149,7 +157,11 @@
+ #endif
+ 
+ #if KMP_OS_UNIX
+-#if defined __x86_64
++#if defined __LLVMNET_PORTABLE__
++// CIL: no assembly, no CPU identification, 64-bit pointers, x86-64 data layout.
++#undef KMP_ARCH_LLVMNET
++#define KMP_ARCH_LLVMNET 1
++#elif defined __x86_64
+ #undef KMP_ARCH_X86_64
+ #define KMP_ARCH_X86_64 1
+ #elif defined __i386
+@@ -291,7 +303,7 @@
+               KMP_ARCH_AARCH64 + KMP_ARCH_MIPS + KMP_ARCH_MIPS64 +             \
+               KMP_ARCH_RISCV64 + KMP_ARCH_LOONGARCH64 + KMP_ARCH_VE +          \
+               KMP_ARCH_S390X + KMP_ARCH_WASM + KMP_ARCH_PPC +                  \
+-              KMP_ARCH_AARCH64_32 + KMP_ARCH_SPARC)
++              KMP_ARCH_AARCH64_32 + KMP_ARCH_SPARC + KMP_ARCH_LLVMNET)
+ #error Unknown or unsupported architecture
+ #endif
+ 
+diff -ruN a/src/kmp_runtime.cpp b/src/kmp_runtime.cpp
+--- a/src/kmp_runtime.cpp	2026-10-31 15:58:31.796989767 +1100
++++ b/src/kmp_runtime.cpp	2026-10-31 15:58:31.796989767 +1100
+@@ -8924,7 +8924,7 @@
+ 
+ #if KMP_ARCH_X86_64 || KMP_ARCH_PPC64 || KMP_ARCH_AARCH64 ||                   \
+     KMP_ARCH_MIPS64 || KMP_ARCH_RISCV64 || KMP_ARCH_LOONGARCH64 ||             \
+-    KMP_ARCH_VE || KMP_ARCH_S390X || KMP_ARCH_WASM
++    KMP_ARCH_VE || KMP_ARCH_S390X || KMP_ARCH_WASM || KMP_ARCH_LLVMNET
+ 
+ #if KMP_OS_LINUX || KMP_OS_DRAGONFLY || KMP_OS_FREEBSD || KMP_OS_NETBSD ||     \
+     KMP_OS_OPENBSD || KMP_OS_WINDOWS || KMP_OS_DARWIN || KMP_OS_HAIKU ||       \

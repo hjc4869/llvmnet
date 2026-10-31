@@ -9,7 +9,7 @@
 - `bin/llvmnet-ar`, `bin/llvmnet-ranlib`, `bin/llvmnet-nm`: LLVM's archive and symbol tools for bitcode objects.
 - `lib/llvmnet/`: the compiler, its LLVM bridge and the runtime assembly.
 - `libexec/llvm/`: bundled LLVM, Clang and Flang executables, libraries, Clang resource headers and Flang intrinsic modules (with `--bundle-llvm`).
-- `sysroot/dotnet64-v2/`: the portable sysroot (musl, libc++, libc++abi and flang-rt headers and bitcode archives, and compiler-rt's complex arithmetic builtins); `sysroot/system-linux-x64-v1/`: flang-rt built against glibc for system mode; `sysroot/simd128/`: the SIMD128 header. `scripts/build-sysroot.sh` builds the first two.
+- `sysroot/dotnet64-v2/`: the portable sysroot (musl, libc++, libc++abi, the OpenMP runtime and flang-rt headers and bitcode archives, and compiler-rt's complex arithmetic builtins); `sysroot/system-linux-x64-v1/`: flang-rt built against glibc for system mode; `sysroot/simd128/`: the SIMD128 header. `scripts/build-sysroot.sh` builds the first two.
 - `share/llvmnet/`: documentation, the SPEC configuration (`share/llvmnet/spec/`), license and third-party notices, and the Debian copyright files of bundled LLVM packages.
 
 ```sh
@@ -61,7 +61,7 @@ dotnet portable.dll
 llvmnet-clang --runtime=portable --nativeaot source.c -o native-program
 ```
 
-Tag: `dotnet64-v2`, the default mode. Sources compile with `-nostdinc` against the sysroot's headers: musl 1.2.5 for C and libc++ 22.1.8 for C++. Executables link musl, libc++, libc++abi, flang-rt 22.1.8 and the compiler-rt builtins from the sysroot as bitcode, compiled into the program's CIL. `-nostdlib`, `-nodefaultlibs` and `-nostartfiles` leave them out; `-lc`, `-lm`, `-lpthread`, `-ldl`, `-lrt`, `-lc++` and the Fortran runtime names are accepted and need no archive. `--portable-sysroot <dir>` selects another sysroot.
+Tag: `dotnet64-v2`, the default mode. Sources compile with `-nostdinc` against the sysroot's headers: musl 1.2.5 for C and libc++ 22.1.8 for C++. Executables link musl, libc++, libc++abi, LLVM's OpenMP runtime (libomp) and flang-rt 22.1.8 and the compiler-rt builtins from the sysroot as bitcode, compiled into the program's CIL; `-fopenmp` needs no further option, and the default team size is the processor count .NET reports (`DOTNET_PROCESSOR_COUNT` overrides it) unless `OMP_NUM_THREADS` is set. `-nostdlib`, `-nodefaultlibs` and `-nostartfiles` leave them out; `-lc`, `-lm`, `-lpthread`, `-ldl`, `-lrt`, `-lc++` and the Fortran runtime names are accepted and need no archive. `--portable-sysroot <dir>` selects another sysroot.
 
 The LLVM target is a fixed `x86_64-unknown-none` layout that defines the data ABI; it does not generate x86 instructions. Host OS and CPU macros (`__linux__`, `__unix__`, `__x86_64__`, `__SSE__` and similar) are not defined; programs see `__LLVMNET__`, `__LLVMNET_PORTABLE__` and `__LLVMNET_ABI_VERSION`. Options that would change the ABI (`-target`, `--sysroot`, `-m*`, `-fshort-wchar`, `-fshort-enums`, `-fpack-struct`) are rejected. `-funsigned-char` is accepted: it changes no layout, so objects built with either signedness link together and with the signed-`char` sysroot, as they do natively, and each side reads a `char` argument or result with its own signedness.
 

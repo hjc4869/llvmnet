@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build the portable sysroot sysroot/dotnet64-v2: musl 1.2.5 with ports/musl, the compiler-rt complex arithmetic
-# builtins, libc++/libc++abi and flang-rt 22.1.8 compiled to LLVM bitcode by llvmnet, with their headers; and the
-# system-mode sysroot sysroot/system-linux-x64-v1, which holds flang-rt built against the host's glibc.
+# builtins, libc++/libc++abi, the OpenMP runtime (libomp, with ports/openmp) and flang-rt 22.1.8 compiled to LLVM
+# bitcode by llvmnet, with their headers; and the system-mode sysroot sysroot/system-linux-x64-v1, which holds
+# flang-rt built against the host's glibc.
 #   scripts/build-sysroot.sh [--force]
 # The sysroots are rebuilt only when an input changes: the pinned musl and LLVM sources, ports/, these build scripts,
 # the compiler sources that define the portable ABI and compile flags, or the Clang version; --force rebuilds them
@@ -19,7 +20,8 @@ inputs="$(
     cd "$root"
     {
         { find ports -type f; printf '%s\n' scripts/build-sysroot.sh scripts/build-portable-libc.sh scripts/build-portable-cxx.sh \
-            scripts/build-flang-rt.sh scripts/build-portable-builtins.sh src/LlvmNet.Compiler/Driver.cs src/LlvmNet.Compiler/PortableAbi.cs \
+            scripts/build-portable-openmp.sh scripts/build-flang-rt.sh scripts/build-portable-builtins.sh \
+            src/LlvmNet.Compiler/Driver.cs src/LlvmNet.Compiler/PortableAbi.cs \
             src/LlvmNet.Compiler/Llvm.cs native/abi.cpp; } | LC_ALL=C sort | xargs sha256sum
         grep -E '^(musl|llvm-project)\s' scripts/sources.lock
         clang-22 --version | head -n 1
@@ -35,7 +37,7 @@ rm -rf "${build:?}"
 mkdir -p "$build"
 start=$(date +%s)
 steps=("libc:build-portable-libc.sh $build" "builtins:build-portable-builtins.sh $build" "cxx:build-portable-cxx.sh $build"
-    "flang-rt:build-flang-rt.sh portable $build"
+    "openmp:build-portable-openmp.sh $build" "flang-rt:build-flang-rt.sh portable $build"
     "flang-rt-system:build-flang-rt.sh system $build/system")
 for step in "${steps[@]}"; do
     name="${step%%:*}"
@@ -46,8 +48,8 @@ for step in "${steps[@]}"; do
         exit 1
     fi
 done
-failed="$(cat "$build/build/failures.tsv" "$build/build-cxx/failures.tsv" "$build/build-flang-rt/failures.tsv" \
-    "$build/system/build-flang-rt/failures.tsv")"
+failed="$(cat "$build/build/failures.tsv" "$build/build-cxx/failures.tsv" "$build/build-openmp/failures.tsv" \
+    "$build/build-flang-rt/failures.tsv" "$build/system/build-flang-rt/failures.tsv")"
 if [[ -n "$failed" ]]; then
     printf 'FAIL: library sources did not compile for the portable sysroot:\n%s\n' "$failed" >&2
     exit 1
@@ -62,6 +64,7 @@ cp "$build/COPYRIGHT" "$stage/share/licenses/musl.COPYRIGHT"
 llvm="$("$root/scripts/fetch-sources.sh" --path llvm-project)"
 cp "$llvm/libcxx/LICENSE.TXT" "$stage/share/licenses/libcxx.LICENSE.TXT"
 cp "$llvm/libcxxabi/LICENSE.TXT" "$stage/share/licenses/libcxxabi.LICENSE.TXT"
+cp "$llvm/openmp/LICENSE.TXT" "$stage/share/licenses/openmp.LICENSE.TXT"
 cp "$llvm/flang-rt/LICENSE.TXT" "$stage/share/licenses/flang-rt.LICENSE.TXT" 2>/dev/null ||
     cp "$llvm/flang/LICENSE.TXT" "$stage/share/licenses/flang-rt.LICENSE.TXT"
 printf '%s\n' "$inputs" >"$stage/.llvmnet-inputs"
@@ -82,5 +85,5 @@ rm -rf "${system_sysroot:?}.old"
 mv "$system_stage" "$system_sysroot"
 rm -rf "${system_sysroot:?}.old"
 printf 'Built sysroots %s and %s in %d s (%s)\n' "$sysroot" "$system_sysroot" "$(( $(date +%s) - start ))" \
-    "$(tail -n 1 "$build/libc.log"); $(tail -n 1 "$build/cxx.log"); $(tail -n 1 "$build/flang-rt.log"); $(tail -n 1 "$build/flang-rt-system.log")" >&2
+    "$(tail -n 1 "$build/libc.log"); $(tail -n 1 "$build/cxx.log"); $(tail -n 1 "$build/openmp.log"); $(tail -n 1 "$build/flang-rt.log"); $(tail -n 1 "$build/flang-rt-system.log")" >&2
 printf '%s\n' "$sysroot"

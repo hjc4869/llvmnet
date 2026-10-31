@@ -6,7 +6,7 @@ llvmnet translates linked LLVM bitcode to CIL. The same pipeline serves both run
 
 1. The driver (`src/LlvmNet.Compiler/Driver.cs`) runs clang-22 for C and C++ or flang-22 for Fortran and emits LLVM bitcode. The default is `-O1 -fno-vectorize -fno-slp-vectorize`; explicit frontend options override it. Portable mode adds the sysroot's headers and a fixed target (`PortableAbi.cs`). Every object records its mode's ABI tag in the `llvmnet.abi` module flag.
 2. A small C++ bridge to LLVM (`native/`, built as `libllvmnet-llvm.so`) links the bitcode with LLVM's linker, extracting archive members lazily, and rejects inputs whose ABI tag differs from the link's. It also prepares modules for translation and builds the native call shims of system mode. It runs only inside the compiler.
-3. Portable executables link musl's `crt1.o` and the sysroot archives (flang-rt, libc++, libc++abi, musl, compiler-rt builtins); system executables link flang-rt from `sysroot/system-linux-x64-v1`.
+3. Portable executables link musl's `crt1.o` and the sysroot archives (libomp, flang-rt, libc++, libc++abi, musl, compiler-rt builtins), extracting only the members the program uses; system executables link flang-rt from `sysroot/system-linux-x64-v1`.
 4. `opt-22` runs the lowering passes. Executables internalize everything except the entry points and run global dead-code elimination; libraries keep their public definitions. Both expand vector reductions and masked memory intrinsics and run LLVM's scalarizer, which by default also scalarizes vector loads and stores; `--simd128` keeps those and the SIMD128 helper calls.
 5. The C# backend reads the module through LLVM's C API. LLVM's data layout determines sizes, alignments and structure offsets.
 6. `PersistedAssemblyBuilder` emits static CIL methods into a PE image, which the .NET JIT executes.
@@ -38,7 +38,7 @@ Direct `setjmp` sites resume through a managed exception dispatcher in the ownin
 
 Defined thread-local globals use lazy per-thread storage with initialization and destructor cleanup. External thread-local globals need a bitcode definition.
 
-Variadic calls build a software x86-64 SysV register-save and overflow area, and translated `va_start`, `va_copy` and `va_arg` sequences, including musl's `printf` family, read the same layout. Variadic aggregate classification is incomplete.
+Variadic calls build a software x86-64 SysV register-save and overflow area, and translated `va_start`, `va_copy` and `va_arg` sequences, including musl's `printf` family, read the same layout. Aggregates passed to variadic functions follow the System V classification: one register slot per eightbyte of a small struct when they all fit, otherwise the overflow area, where `byval` arguments and `long double` also go.
 
 C calls without a prototype may use a variadic LLVM signature for a fixed-arity definition. Direct calls then use the definition when the required argument types match, drop unused trailing arguments such as Fortran hidden character lengths, and discard an unused result. Direct calls also follow x86-64's register-slot rules: `i32` and `i64`, `ptr` and `i64`, and `i1` and `i8` are interchangeable in register positions. Other signature mismatches are compile errors. Missing required arguments are compile errors unless `--trap-missing-arguments` turns the call site into an exception. [dev/calling-convention.md](dev/calling-convention.md) gives the full rules.
 
@@ -59,7 +59,7 @@ In portable mode, musl's pthreads run on managed threads, with the thread pointe
 
 C++ `invoke` becomes a CIL try/catch region. Landing pads select matching C++ types and exception-specification filters, and resume or rethrow propagates a managed exception that carries the C++ object. In portable mode, catch matching, `type_info` and `dynamic_cast` come from libc++abi; in system mode the bridge implements them, and the optional libstdc++ archive (see [toolchain.md](toolchain.md#optional-system-c-library)) supplies the library.
 
-Fortran uses Flang 22 CFI descriptors and flang-rt in both modes: compiled against musl and libc++ in the portable sysroot, and against glibc in the system sysroot. System-mode OpenMP links LLVM's native `libomp`; outlined regions remain translated CIL and enter through native-callable thunks, and Flang's host `DO CONCURRENT` lowering uses the same path. Portable mode has no OpenMP runtime.
+Fortran uses Flang 22 CFI descriptors and flang-rt in both modes: compiled against musl and libc++ in the portable sysroot, and against glibc in the system sysroot. System-mode OpenMP links LLVM's native `libomp`; outlined regions remain translated CIL and enter through native-callable thunks, and Flang's host `DO CONCURRENT` lowering uses the same path. Portable mode links LLVM's OpenMP runtime (libomp) from the sysroot, built on musl's pthreads with the port in `ports/openmp`; outlined regions are ordinary translated functions the runtime calls through its C invoker.
 
 ## Linking Boundaries
 

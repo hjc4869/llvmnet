@@ -20,6 +20,9 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - `-nostdlib`, `-nodefaultlibs`, `-nostartfiles`, `-fsyntax-only`; `-x ir -c` accepts `.ll` and `.bc` inputs; `--portable-sysroot` (LC-16).
 - Conformance runs: `tests/libc-conformance.sh` (musl libc-test), `tests/libcxx-conformance.sh` (libc++ lit suite), `tests/fortran-conformance.sh` (FCVS and gfortran), nightly in CI (LC-19, CX-08, FT-06).
 - `abort` prints the C call stack; `LLVMNET_CHECK_DESCRIPTORS=1` reports descriptors open at exit.
+- Time zones on hosts without zoneinfo: the host layer serves TZif images generated from `TimeZoneInfo`; `LLVMNET_ZONEINFO=managed|host` selects the source (LC-09).
+- OpenMP in portable mode: LLVM's OpenMP runtime compiled into the sysroot with `ports/openmp`, so `-fopenmp` works for C, C++ and Fortran, including Flang's `DO CONCURRENT` host lowering; the default team size is the processor count .NET reports (FT-08).
+- Aggregates through variadic calls follow the System V classification, in registers or the overflow area (BE-19).
 
 ### Changed
 
