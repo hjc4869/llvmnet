@@ -436,3 +436,13 @@ The start-up row's ratios are not comparable across the two runs: PF-01 timed by
 **New baseline.** `tests/perf/baseline.tsv` now holds this run's medians and fastest runs, replacing PF-01's. The M8 items made 21 benchmarks more than 20% faster under one engine or both (ratio to native), so the PF-01 baseline would no longer catch a regression that gave back what M8 gained; the proposed policy allows a baseline change in a commit that names the changes that moved it, and these are PF-02 to PF-13 above.
 
 Gates for this change: no compiler or runtime change; `tests/run.sh benchmarks` passed with the new comparison; the last core gate (PF-06, `d2a2711`) passed 92 of 92.
+
+## Conformance suites after M8
+
+PF-02 (futexes), PF-04 (allocas, `localsinit`) and PF-06 change how threads, stacks and generated code behave, so the nightly conformance suites were run locally on the final compiler and runtime (`d2a2711`), each inside a memory-capped scope:
+
+- **musl libc-test** (`tests/run.sh libc-conformance`): functional 60 of 67, regression 59 of 67, math 192 of 195, api 74 of 74; the failure list is identical to the one before M8.
+- **libc++ lit suite** (`LIBCXX_LIT_JOBS=8 tests/run.sh libcxx-conformance`, 1,950 s): containers 1,809 of 1,809, strings 432 of 432, algorithms 276 of 276, utilities 1,373 of 1,374, thread 342 of 345, localization 261 of 261, input.output 574 of 587. Against the last full run (M3 to M5 close-out), utilities went from 4 failures to 1; thread keeps its 3 (`thread_create_failure`, `sleep_for.signals` and the `join.deadlock` timeout, classified then), and input.output its 13 (LC-30).
+- **FCVS and the gfortran tests** (`FORTRAN_CONFORMANCE_JOBS=8 tests/run.sh fortran-conformance`): FCVS 172 of 172, gfortran 2,682 of 2,687, the same failures as before (one diagnostic now names `--system-library` instead of the removed `--native-import`).
+
+Not run: YARPGen fuzzing (see PF-04: its native programs need up to 40 GB), and SPEC CPU, whose kits are on this host but whose portable runs take hours.
