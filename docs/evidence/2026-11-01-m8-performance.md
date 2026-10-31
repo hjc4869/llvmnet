@@ -358,3 +358,81 @@ Tiered compilation off is fastest on average but costs 22 ms of start-up (35 to 
 **Not done.** A systematic `DOTNET_JitDisasm` review of the hot kernels and the removal of avoidable `UInt128` and normalization masks; the item stays open for them.
 
 Gates for PF-06: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 92 passed (`semantics` with the rotate probes: 45,310 probes matching native in all modes and as NativeAOT); unit tests 116 passed.
+
+## Benchmark table after the M8 items, and the new baseline
+
+`python3 scripts/benchmark.py --update-baseline --jobs 12 --output artifacts/bench/m8-final` on commit `d2a2711` (with the threshold change below), inside a 32 GB memory cap, all 58 benchmarks built in 235 s and matched native: no regression against the PF-01 baseline. Before is the PF-01 run (`7ca67bb`), after this one; ratios are medians of five runs over native's, peak RSS from GNU time (PF-11), so the RSS columns are correct here, unlike the PF-01 table's:
+
+| Benchmark | Native (s) | JIT / native before | after | NativeAOT / native before | after | JIT peak RSS (MB) | NativeAOT peak RSS (MB) | Native peak RSS (MB) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| malloc | 1.245 | 0.77 | 0.84 | 0.71 | 0.69 | 52 | 18 | 11 |
+| fwrite | 0.422 | 2.39 | 1.65 | 2.11 | 1.45 | 50 | 6 | 2 |
+| printf | 0.909 | 6.45 | 5.05 | 7.08 | 5.00 | 67 | 22 | 2 |
+| atomics | 0.269 | 1.94 | 1.16 | 1.47 | 1.02 | 50 | 6 | 2 |
+| mutex | 0.945 | 2.34 | 1.20 | 2.10 | 1.03 | 50 | 6 | 2 |
+| calli | 1.481 | 1.50 | 1.45 | 1.37 | 1.29 | 49 | 13 | 17 |
+| varargs | 0.344 | 4.54 | 3.50 | 4.52 | 2.65 | 50 | 6 | 2 |
+| float80 | 0.006 | 267.60 | 274.48 | 231.77 | 239.85 | 67 | 22 | 2 |
+| memcpy | 0.278 | 2.13 | 2.10 | 1.60 | 1.62 | 50 | 7 | 4 |
+| alloca | 0.201 | 1.86 | 1.58 | 1.07 | 0.97 | 49 | 6 | 2 |
+| callback | 0.333 | 1.97 | 1.34 | 2.27 | 0.92 | 49 | 6 | 2 |
+| startup | 0.001 | 22.59 | 26.63 | 1.01 | 1.68 | 37 | 5 | 2 |
+| dhrystone | 0.082 | 1.82 | 1.91 | 1.67 | 1.63 | 38 | 5 | 2 |
+| linpack | 0.895 | 1.10 | 1.21 | 1.03 | 1.03 | 52 | 6 | 2 |
+| richards | 0.357 | 1.48 | 1.34 | 1.66 | 1.21 | 50 | 6 | 2 |
+| oourafft | 1.059 | 1.26 | 1.22 | 1.14 | 1.11 | 57 | 12 | 2 |
+| ffbench | 0.581 | 1.07 | 0.95 | 0.93 | 0.87 | 51 | 6 | 3 |
+| whetstone | 0.449 | 1.73 | 1.48 | 1.14 | 1.10 | 51 | 6 | 2 |
+| salsa20 | 1.981 | 1.69 | 1.14 | 8.39 | 1.06 | 49 | 6 | 2 |
+| perlin | 0.988 | 1.03 | 1.01 | 1.04 | 1.04 | 49 | 6 | 2 |
+| reed-solomon | 1.518 | 1.22 | 1.26 | 1.13 | 1.16 | 39 | 5 | 2 |
+| almabench | 2.358 | 1.05 | 1.03 | 1.24 | 1.15 | 50 | 6 | 2 |
+| fftbench | 1.170 | 1.02 | 0.87 | 0.72 | 0.74 | 124 | 86 | 84 |
+| huffbench | 4.436 | 1.89 | 1.90 | 1.93 | 1.89 | 58 | 25 | 21 |
+| lpbench | 0.977 | 1.36 | 1.38 | 1.35 | 1.10 | 71 | 37 | 32 |
+| fannkuch | 1.384 | 1.10 | 1.07 | 1.03 | 1.04 | 49 | 6 | 2 |
+| recursive | 0.367 | 2.38 | 2.14 | 1.23 | 1.21 | 50 | 6 | 2 |
+| heapsort | 1.616 | 0.89 | 0.87 | 0.83 | 0.86 | 111 | 66 | 63 |
+| hash | 1.247 | 2.27 | 1.71 | 2.34 | 1.39 | 259 | 216 | 216 |
+| lists | 1.589 | 1.95 | 2.02 | 1.97 | 1.91 | 66 | 22 | 2 |
+| random | 0.976 | 1.09 | 1.09 | 1.04 | 1.05 | 50 | 5 | 2 |
+| queens | 1.089 | 1.15 | 1.05 | 0.92 | 0.93 | 50 | 5 | 2 |
+| hash2-cxx | 0.659 | 1.77 | 1.69 | 1.43 | 1.47 | 52 | 8 | 5 |
+| stepanov-v1p2 | 2.467 | 1.05 | 1.03 | 1.00 | 1.00 | 50 | 6 | 4 |
+| stepanov-abstraction | 1.457 | 1.44 | 1.12 | 1.00 | 0.99 | 43 | 6 | 4 |
+| functionobjects | 1.804 | 1.71 | 1.56 | 1.29 | 1.25 | 39 | 6 | 4 |
+| olden-bh | 0.386 | 2.75 | 3.00 | 1.68 | 1.61 | 57 | 13 | 6 |
+| olden-health | 0.080 | 3.60 | 3.48 | 2.09 | 2.17 | 183 | 139 | 68 |
+| olden-treeadd | 0.057 | 4.56 | 3.25 | 1.73 | 1.62 | 310 | 266 | 130 |
+| olden-tsp | 0.362 | 2.70 | 2.30 | 1.86 | 1.74 | 180 | 136 | 66 |
+| olden-em3d | 0.956 | 1.70 | 1.12 | 1.04 | 1.01 | 123 | 78 | 49 |
+| olden-voronoi | 0.079 | 15.13 | 12.62 | 8.21 | 8.00 | 242 | 195 | 104 |
+| ptrdist-ks | 0.203 | 1.59 | 1.80 | 1.27 | 1.42 | 52 | 6 | 2 |
+| ptrdist-yacr2 | 0.166 | 3.04 | 2.33 | 1.40 | 1.29 | 57 | 11 | 5 |
+| ptrdist-ft | 0.293 | 2.10 | 1.58 | 1.52 | 1.25 | 62 | 18 | 12 |
+| ptrdist-anagram | 0.268 | 1.81 | 1.70 | 1.79 | 1.53 | 51 | 6 | 2 |
+| tramp3d | 0.073 | 10.84 | 9.47 | 1.49 | 1.41 | 70 | 18 | 14 |
+| bullet | 1.351 | 2.26 | 1.98 | 1.37 | 1.38 | 114 | 68 | 58 |
+| jpeg | 0.003 | 41.39 | 29.70 | 1.87 | 1.43 | 50 | 6 | 2 |
+| lame | 0.050 | 7.93 | 6.48 | 1.88 | 1.85 | 53 | 7 | 3 |
+| sha | 0.011 | 7.28 | 7.29 | 1.99 | 1.00 | 50 | 6 | 2 |
+| susan | 0.014 | 7.22 | 5.57 | 1.34 | 1.02 | 50 | 6 | 3 |
+| mafft | 8.133 | 2.17 | 2.07 | 2.11 | 2.07 | 223 | 174 | 146 |
+| nbench | 0.519 | 2.15 | 1.97 | 1.46 | 1.39 | 51 | 6 | 2 |
+| ffmpeg-hevc-1t | 2.537 | 1.43 | 1.41 | 1.20 | 1.18 | 155 | 65 | 54 |
+| ffmpeg-hevc-4t | 0.837 | 2.00 | 1.83 | 1.25 | 1.19 | 155 | 98 | 87 |
+| ffmpeg-h264-1t | 1.432 | 3.20 | 2.04 | 2.23 | 1.43 | 155 | 39 | 29 |
+| ffmpeg-h264-4t | 0.405 | 3.82 | 2.98 | 2.13 | 1.38 | 155 | 63 | 50 |
+
+geomean JIT 2.42 -> 2.11; NativeAOT 1.72 -> 1.45 over 57 benchmarks
+micro: JIT 3.43 -> 2.72, NativeAOT 3.01 -> 2.21 (11)
+suite: JIT 2.21 -> 1.99, NativeAOT 1.49 -> 1.32 (42)
+ffmpeg: JIT 2.43 -> 1.99, NativeAOT 1.63 -> 1.29 (4)
+
+The start-up row's ratios are not comparable across the two runs: PF-01 timed by polling every 2 ms, which made native start-up 2 ms, and now native takes 1.3 ms; in seconds, the JIT's start-up went from 52 to 37 ms. What moved and why: callback (PF-13), mutex and atomics (PF-02), fwrite and printf (PF-03), varargs and the H.264 decodes (PF-04), salsa20 (PF-06's rotates; 8.4 to 1.05 times native as NativeAOT), and across the JIT column dynamic PGO off (PF-06). Largest remaining gaps: `long double` in software (Float80 microbenchmark, printf), variadic calls through the software `va_list` record, JIT start-up and compilation for short programs (jpeg, sha, susan, lame, tramp3d), olden-voronoi, and ffmpeg's H.264 under the JIT, whose hot functions exceed the JIT's MinOpts limits (PF-07).
+
+**Thresholds judge each benchmark's fastest run.** ptrdist-yacr2's JIT times are bimodal (PF-04 follow-up), and a regression check on medians flagged it twice without a cause; noise only ever adds time, so `scripts/benchmark.py` now compares each benchmark's fastest run with the baseline's (`tests/benchmarks.sh` checks the logic as before), and the regression policy proposed for the owner says so. The nightly job runs three repeats instead of five to stay near an hour on GitHub's 4-core runner.
+
+**New baseline.** `tests/perf/baseline.tsv` now holds this run's medians and fastest runs, replacing PF-01's. The M8 items made 21 benchmarks more than 20% faster under one engine or both (ratio to native), so the PF-01 baseline would no longer catch a regression that gave back what M8 gained; the proposed policy allows a baseline change in a commit that names the changes that moved it, and these are PF-02 to PF-13 above.
+
+Gates for this change: no compiler or runtime change; `tests/run.sh benchmarks` passed with the new comparison; the last core gate (PF-06, `d2a2711`) passed 92 of 92.

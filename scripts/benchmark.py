@@ -380,34 +380,39 @@ def read_results(path):
 
 
 def read_baseline(path):
+    """{(benchmark, engine): fastest run in seconds}; a baseline without the min_s column falls back to its medians."""
     baseline = {}
     if not path.is_file():
         return baseline
     for line in path.read_text().splitlines():
         if not line.strip() or line.startswith("#") or line.startswith("benchmark\t"):
             continue
-        name, engine, seconds = line.split("\t")[:3]
-        baseline[(name, engine)] = float(seconds)
+        fields = line.split("\t")
+        baseline[(fields[0], fields[1])] = float(fields[3] if len(fields) > 3 else fields[2])
     return baseline
 
 
 def write_baseline(path, rows, metadata):
     lines = [
-        "# Benchmark baseline (PF-01): median seconds per benchmark and engine on the reference host, written by",
-        "# scripts/benchmark.py --update-baseline. Regressions are judged on llvmnet times normalized by this host's",
-        "# speed relative to the reference host (the geometric mean of the native times), see scripts/benchmark.py.",
+        "# Benchmark baseline (PF-01): median and fastest seconds per benchmark and engine on the reference host,",
+        "# written by scripts/benchmark.py --update-baseline. Regressions are judged on the fastest run, normalized by",
+        "# this host's speed relative to the reference host (the geometric mean of the native times); see the script.",
         f"# Host: {metadata['cpu']}, {metadata['cores']} cores; {metadata['dotnet']}; {metadata['clang']}",
         f"# Commit: {metadata['commit']}; written {metadata['date']}",
-        "benchmark\tengine\tmedian_s",
+        "benchmark\tengine\tmedian_s\tmin_s",
     ]
     for row in sorted(rows, key=lambda row: (row["benchmark"], engines_all.index(row["engine"]))):
-        lines.append(f"{row['benchmark']}\t{row['engine']}\t{float(row['median_s']):.4f}")
+        lines.append(f"{row['benchmark']}\t{row['engine']}\t{float(row['median_s']):.4f}\t{float(row['min_s']):.4f}")
     path.write_text("\n".join(lines) + "\n")
 
 
 def compare(rows, baseline, tolerance, geomean_tolerance):
-    """Applies the thresholds; returns (host factor, per-row verdicts, per-engine geomeans, failure messages)."""
-    native = [(float(row["median_s"]), baseline[(row["benchmark"], "native")]) for row in rows
+    """
+    Applies the thresholds to each benchmark's fastest run, since noise only ever adds time and some JIT runs are
+    bimodal (tier-1 compilation finishing before or after a hot loop); returns (host factor, per-row verdicts,
+    per-engine geomeans, failure messages).
+    """
+    native = [(float(row["min_s"]), baseline[(row["benchmark"], "native")]) for row in rows
               if row["engine"] == "native" and (row["benchmark"], "native") in baseline
               and row["group"] not in geomean_excluded]
     factor = geomean([current / reference for current, reference in native]) if native else 1.0
@@ -421,7 +426,7 @@ def compare(rows, baseline, tolerance, geomean_tolerance):
         if key not in baseline:
             verdicts[key] = ("new", None)
             continue
-        quotient = float(row["median_s"]) / factor / baseline[key]
+        quotient = float(row["min_s"]) / factor / baseline[key]
         if row["group"] not in geomean_excluded:
             quotients.setdefault(row["engine"], []).append(quotient)
         if quotient > 1 + tolerance:
@@ -660,9 +665,8 @@ def main():
             for row in rows:
                 if row["benchmark"] == benchmark.name:
                     second = summarize(samples[row["engine"]])
-                    first = float(row["median_s"])
-                    # Keep the faster of the two medians: noise only ever adds time.
-                    if second["median"] < first:
+                    # Keep the faster of the two measurements: noise only ever adds time.
+                    if second["min"] < float(row["min_s"]):
                         row.update(median_s=f"{second['median']:.4f}", min_s=f"{second['min']:.4f}",
                                    max_s=f"{second['max']:.4f}", runs=row["runs"] + second["runs"])
             native = next(float(row["median_s"]) for row in rows if row["benchmark"] == benchmark.name and row["engine"] == "native")

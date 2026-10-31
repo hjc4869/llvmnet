@@ -21,7 +21,8 @@ b	jit	1.5000
 c	native	2.0000
 c	jit	3.0000
 EOF
-# results <a jit> <b jit> <c jit> <host factor>: native times are the baseline's scaled by the host factor.
+# results <a jit> <b jit> <c jit> <host factor>: native times are the baseline's scaled by the host factor; each run's
+# fastest time, which the thresholds judge, equals its median here.
 results() {
     printf 'benchmark\tgroup\tengine\truns\tmedian_s\tmin_s\tmax_s\tuser_s\tsystem_s\tmax_rss_kib\tratio_to_native\n'
     local name native jit
@@ -29,7 +30,7 @@ results() {
         read -r name native jit <<<"$entry"
         native="$(awk -v n="$native" -v f="$4" 'BEGIN { print n * f }')"
         jit="$(awk -v j="$jit" -v f="$4" 'BEGIN { print j * f }')"
-        printf '%s\tsuite\tnative\t5\t%s\t0\t0\t0\t0\t0\t1\n%s\tsuite\tjit\t5\t%s\t0\t0\t0\t0\t0\t0\n' "$name" "$native" "$name" "$jit"
+        printf '%s\tsuite\tnative\t5\t%s\t%s\t0\t0\t0\t0\t1\n%s\tsuite\tjit\t5\t%s\t%s\t0\t0\t0\t0\t0\n' "$name" "$native" "$native" "$name" "$jit" "$jit"
     done
 }
 check() {  # check <expected exit status> <description> <results arguments...>

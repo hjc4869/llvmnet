@@ -1,180 +1,180 @@
-# Benchmark baseline (PF-01): median seconds per benchmark and engine on the reference host, written by
-# scripts/benchmark.py --update-baseline. Regressions are judged on llvmnet times normalized by this host's
-# speed relative to the reference host (the geometric mean of the native times), see scripts/benchmark.py.
+# Benchmark baseline (PF-01): median and fastest seconds per benchmark and engine on the reference host,
+# written by scripts/benchmark.py --update-baseline. Regressions are judged on the fastest run, normalized by
+# this host's speed relative to the reference host (the geometric mean of the native times); see the script.
 # Host: AMD RYZEN AI MAX+ 395 w/ Radeon 8060S, 32 cores; .NET runtime 10.0.14; Debian clang version 22.1.8 (1+b2)
-# Commit: 7ca67bb-dirty; written 2026-10-31 12:34 UTC
-benchmark	engine	median_s
-alloca	native	0.1996
-alloca	jit	0.3714
-alloca	aot	0.2140
-almabench	native	2.3940
-almabench	jit	2.5162
-almabench	aot	2.9684
-atomics	native	0.2610
-atomics	jit	0.5069
-atomics	aot	0.3831
-bullet	native	1.3568
-bullet	jit	3.0644
-bullet	aot	1.8574
-callback	native	0.3338
-callback	jit	0.6576
-callback	aot	0.7595
-calli	native	1.5369
-calli	jit	2.2969
-calli	aot	2.1031
-dhrystone	native	0.0888
-dhrystone	jit	0.1617
-dhrystone	aot	0.1483
-fannkuch	native	1.3992
-fannkuch	jit	1.5384
-fannkuch	aot	1.4433
-ffbench	native	0.5379
-ffbench	jit	0.5773
-ffbench	aot	0.4996
-ffmpeg-h264-1t	native	1.2947
-ffmpeg-h264-1t	jit	4.1450
-ffmpeg-h264-1t	aot	2.8909
-ffmpeg-h264-4t	native	0.4099
-ffmpeg-h264-4t	jit	1.5647
-ffmpeg-h264-4t	aot	0.8718
-ffmpeg-hevc-1t	native	2.2164
-ffmpeg-hevc-1t	jit	3.1580
-ffmpeg-hevc-1t	aot	2.6664
-ffmpeg-hevc-4t	native	0.7865
-ffmpeg-hevc-4t	jit	1.5744
-ffmpeg-hevc-4t	aot	0.9810
-fftbench	native	1.2251
-fftbench	jit	1.2507
-fftbench	aot	0.8875
-float80	native	0.0064
-float80	jit	1.7172
-float80	aot	1.4874
-functionobjects	native	1.8165
-functionobjects	jit	3.1096
-functionobjects	aot	2.3514
-fwrite	native	0.4298
-fwrite	jit	1.0267
-fwrite	aot	0.9065
-hash	native	1.2971
-hash	jit	2.9418
-hash	aot	3.0399
-hash2-cxx	native	0.6818
-hash2-cxx	jit	1.2054
-hash2-cxx	aot	0.9739
-heapsort	native	1.7110
-heapsort	jit	1.5238
-heapsort	aot	1.4172
-huffbench	native	4.6238
-huffbench	jit	8.7545
-huffbench	aot	8.8995
-jpeg	native	0.0023
-jpeg	jit	0.0970
-jpeg	aot	0.0044
-lame	native	0.0517
-lame	jit	0.4098
-lame	aot	0.0969
-linpack	native	0.9231
-linpack	jit	1.0153
-linpack	aot	0.9554
-lists	native	1.6231
-lists	jit	3.1581
-lists	aot	3.1896
-lpbench	native	0.9415
-lpbench	jit	1.2790
-lpbench	aot	1.2716
-mafft	native	8.0016
-mafft	jit	17.3762
-mafft	aot	16.9070
-malloc	native	1.2834
-malloc	jit	0.9906
-malloc	aot	0.9161
-memcpy	native	0.2841
-memcpy	jit	0.6051
-memcpy	aot	0.4548
-mutex	native	0.8806
-mutex	jit	2.0574
-mutex	aot	1.8477
-nbench	native	0.5063
-nbench	jit	1.0884
-nbench	aot	0.7379
-olden-bh	native	0.4014
-olden-bh	jit	1.1026
-olden-bh	aot	0.6727
-olden-em3d	native	0.9360
-olden-em3d	jit	1.5942
-olden-em3d	aot	0.9718
-olden-health	native	0.0826
-olden-health	jit	0.2977
-olden-health	aot	0.1725
-olden-treeadd	native	0.0537
-olden-treeadd	jit	0.2450
-olden-treeadd	aot	0.0930
-olden-tsp	native	0.2821
-olden-tsp	jit	0.7629
-olden-tsp	aot	0.5255
-olden-voronoi	native	0.0910
-olden-voronoi	jit	1.3768
-olden-voronoi	aot	0.7467
-oourafft	native	1.0577
-oourafft	jit	1.3298
-oourafft	aot	1.2080
-perlin	native	1.0189
-perlin	jit	1.0523
-perlin	aot	1.0571
-printf	native	0.8803
-printf	jit	5.6808
-printf	aot	6.2354
-ptrdist-anagram	native	0.2675
-ptrdist-anagram	jit	0.4842
-ptrdist-anagram	aot	0.4790
-ptrdist-ft	native	0.2564
-ptrdist-ft	jit	0.5376
-ptrdist-ft	aot	0.3890
-ptrdist-ks	native	0.2081
-ptrdist-ks	jit	0.3320
-ptrdist-ks	aot	0.2635
-ptrdist-yacr2	native	0.1750
-ptrdist-yacr2	jit	0.5327
-ptrdist-yacr2	aot	0.2455
-queens	native	1.1247
-queens	jit	1.2972
-queens	aot	1.0292
-random	native	0.9862
-random	jit	1.0729
-random	aot	1.0257
-recursive	native	0.3741
-recursive	jit	0.8901
-recursive	aot	0.4608
-reed-solomon	native	1.5187
-reed-solomon	jit	1.8506
-reed-solomon	aot	1.7155
-richards	native	0.3666
-richards	jit	0.5409
-richards	aot	0.6083
-salsa20	native	2.0127
-salsa20	jit	3.3993
-salsa20	aot	16.8816
-sha	native	0.0105
-sha	jit	0.0764
-sha	aot	0.0209
-startup	native	0.0023
-startup	jit	0.0516
-startup	aot	0.0023
-stepanov-abstraction	native	1.4655
-stepanov-abstraction	jit	2.1041
-stepanov-abstraction	aot	1.4693
-stepanov-v1p2	native	2.4815
-stepanov-v1p2	jit	2.5972
-stepanov-v1p2	aot	2.4878
-susan	native	0.0126
-susan	jit	0.0910
-susan	aot	0.0169
-tramp3d	native	0.0725
-tramp3d	jit	0.7856
-tramp3d	aot	0.1081
-varargs	native	0.3478
-varargs	jit	1.5799
-varargs	aot	1.5708
-whetstone	native	0.4510
-whetstone	jit	0.7811
-whetstone	aot	0.5128
+# Commit: d2a2711-dirty; written 2026-10-31 17:55 UTC
+benchmark	engine	median_s	min_s
+alloca	native	0.2012	0.1936
+alloca	jit	0.3173	0.3078
+alloca	aot	0.1957	0.1927
+almabench	native	2.3577	2.3570
+almabench	jit	2.4360	2.4301
+almabench	aot	2.7076	2.6726
+atomics	native	0.2686	0.2520
+atomics	jit	0.3123	0.2979
+atomics	aot	0.2743	0.2517
+bullet	native	1.3507	1.3287
+bullet	jit	2.6701	2.6004
+bullet	aot	1.8633	1.8141
+callback	native	0.3329	0.3293
+callback	jit	0.4476	0.4292
+callback	aot	0.3052	0.3050
+calli	native	1.4806	1.4511
+calli	jit	2.1498	2.1187
+calli	aot	1.9050	1.8927
+dhrystone	native	0.0821	0.0812
+dhrystone	jit	0.1569	0.1540
+dhrystone	aot	0.1336	0.1328
+fannkuch	native	1.3839	1.3751
+fannkuch	jit	1.4779	1.4423
+fannkuch	aot	1.4402	1.3987
+ffbench	native	0.5813	0.5252
+ffbench	jit	0.5523	0.5172
+ffbench	aot	0.5053	0.4863
+ffmpeg-h264-1t	native	1.4324	1.4170
+ffmpeg-h264-1t	jit	2.9195	2.8556
+ffmpeg-h264-1t	aot	2.0494	1.9818
+ffmpeg-h264-4t	native	0.4047	0.3922
+ffmpeg-h264-4t	jit	1.2072	1.1209
+ffmpeg-h264-4t	aot	0.5567	0.5339
+ffmpeg-hevc-1t	native	2.5368	2.4184
+ffmpeg-hevc-1t	jit	3.5665	3.4127
+ffmpeg-hevc-1t	aot	2.9887	2.9302
+ffmpeg-hevc-4t	native	0.8365	0.8271
+ffmpeg-hevc-4t	jit	1.5298	1.5017
+ffmpeg-hevc-4t	aot	0.9910	0.9734
+fftbench	native	1.1697	1.1454
+fftbench	jit	1.0209	0.9929
+fftbench	aot	0.8620	0.8134
+float80	native	0.0059	0.0045
+float80	jit	1.6297	1.6106
+float80	aot	1.4240	1.3494
+functionobjects	native	1.8045	1.7852
+functionobjects	jit	2.8099	2.7672
+functionobjects	aot	2.2584	2.2244
+fwrite	native	0.4217	0.4185
+fwrite	jit	0.6954	0.6714
+fwrite	aot	0.6115	0.6006
+hash	native	1.2468	1.2358
+hash	jit	2.1258	2.0976
+hash	aot	1.7310	1.6448
+hash2-cxx	native	0.6590	0.6492
+hash2-cxx	jit	1.1141	1.1000
+hash2-cxx	aot	0.9685	0.9158
+heapsort	native	1.6161	1.5197
+heapsort	jit	1.4036	1.3888
+heapsort	aot	1.3939	1.3836
+huffbench	native	4.4357	4.4035
+huffbench	jit	8.4053	8.3432
+huffbench	aot	8.3607	8.2231
+jpeg	native	0.0027	0.0022
+jpeg	jit	0.0802	0.0773
+jpeg	aot	0.0039	0.0036
+lame	native	0.0504	0.0497
+lame	jit	0.3269	0.3246
+lame	aot	0.0932	0.0912
+linpack	native	0.8953	0.8922
+linpack	jit	1.0858	1.0733
+linpack	aot	0.9234	0.9156
+lists	native	1.5894	1.5845
+lists	jit	3.2053	3.0763
+lists	aot	3.0301	3.0032
+lpbench	native	0.9768	0.8600
+lpbench	jit	1.3462	1.1590
+lpbench	aot	1.0799	1.0099
+mafft	native	8.1325	8.0616
+mafft	jit	16.8426	16.4571
+mafft	aot	16.8678	16.4239
+malloc	native	1.2448	1.1722
+malloc	jit	1.0434	1.0299
+malloc	aot	0.8635	0.8525
+memcpy	native	0.2783	0.2676
+memcpy	jit	0.5845	0.5762
+memcpy	aot	0.4501	0.4450
+mutex	native	0.9450	0.8381
+mutex	jit	1.1379	1.1150
+mutex	aot	0.9714	0.9278
+nbench	native	0.5186	0.4979
+nbench	jit	1.0200	1.0111
+nbench	aot	0.7230	0.7063
+olden-bh	native	0.3857	0.3799
+olden-bh	jit	1.1557	1.1394
+olden-bh	aot	0.6220	0.6128
+olden-em3d	native	0.9557	0.9170
+olden-em3d	jit	1.0681	1.0342
+olden-em3d	aot	0.9656	0.9477
+olden-health	native	0.0801	0.0771
+olden-health	jit	0.2782	0.2653
+olden-health	aot	0.1741	0.1613
+olden-treeadd	native	0.0570	0.0528
+olden-treeadd	jit	0.1851	0.1778
+olden-treeadd	aot	0.0924	0.0882
+olden-tsp	native	0.3622	0.3004
+olden-tsp	jit	0.8330	0.7691
+olden-tsp	aot	0.6289	0.5589
+olden-voronoi	native	0.0788	0.0772
+olden-voronoi	jit	0.9944	0.9213
+olden-voronoi	aot	0.6302	0.6149
+oourafft	native	1.0593	1.0300
+oourafft	jit	1.2881	1.2766
+oourafft	aot	1.1757	1.1703
+perlin	native	0.9879	0.9504
+perlin	jit	0.9935	0.9824
+perlin	aot	1.0267	0.9800
+printf	native	0.9086	0.8856
+printf	jit	4.5893	4.5162
+printf	aot	4.5383	4.4642
+ptrdist-anagram	native	0.2676	0.2639
+ptrdist-anagram	jit	0.4554	0.4523
+ptrdist-anagram	aot	0.4089	0.3998
+ptrdist-ft	native	0.2931	0.2368
+ptrdist-ft	jit	0.4639	0.4467
+ptrdist-ft	aot	0.3655	0.3432
+ptrdist-ks	native	0.2032	0.1968
+ptrdist-ks	jit	0.3657	0.3631
+ptrdist-ks	aot	0.2875	0.2844
+ptrdist-yacr2	native	0.1655	0.1649
+ptrdist-yacr2	jit	0.3848	0.3813
+ptrdist-yacr2	aot	0.2135	0.2078
+queens	native	1.0890	1.0316
+queens	jit	1.1456	1.1387
+queens	aot	1.0124	1.0034
+random	native	0.9762	0.9752
+random	jit	1.0694	1.0640
+random	aot	1.0207	1.0154
+recursive	native	0.3673	0.3619
+recursive	jit	0.7873	0.7772
+recursive	aot	0.4458	0.4396
+reed-solomon	native	1.5175	1.4937
+reed-solomon	jit	1.9136	1.8967
+reed-solomon	aot	1.7539	1.7292
+richards	native	0.3568	0.3460
+richards	jit	0.4792	0.4666
+richards	aot	0.4312	0.4192
+salsa20	native	1.9813	1.9521
+salsa20	jit	2.2594	2.2422
+salsa20	aot	2.1080	2.0870
+sha	native	0.0108	0.0091
+sha	jit	0.0788	0.0710
+sha	aot	0.0108	0.0096
+startup	native	0.0014	0.0010
+startup	jit	0.0370	0.0343
+startup	aot	0.0023	0.0020
+stepanov-abstraction	native	1.4567	1.4457
+stepanov-abstraction	jit	1.6276	1.6153
+stepanov-abstraction	aot	1.4473	1.4344
+stepanov-v1p2	native	2.4671	2.4557
+stepanov-v1p2	jit	2.5493	2.5362
+stepanov-v1p2	aot	2.4691	2.4642
+susan	native	0.0141	0.0120
+susan	jit	0.0787	0.0744
+susan	aot	0.0144	0.0141
+tramp3d	native	0.0730	0.0708
+tramp3d	jit	0.6911	0.6125
+tramp3d	aot	0.1028	0.1022
+varargs	native	0.3436	0.3397
+varargs	jit	1.2021	1.1745
+varargs	aot	0.9102	0.8896
+whetstone	native	0.4494	0.4416
+whetstone	jit	0.6670	0.6617
+whetstone	aot	0.4964	0.4917
