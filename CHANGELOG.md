@@ -23,6 +23,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Time zones on hosts without zoneinfo: the host layer serves TZif images generated from `TimeZoneInfo`; `LLVMNET_ZONEINFO=managed|host` selects the source (LC-09).
 - OpenMP in portable mode: LLVM's OpenMP runtime compiled into the sysroot with `ports/openmp`, so `-fopenmp` works for C, C++ and Fortran, including Flang's `DO CONCURRENT` host lowering; the default team size is the processor count .NET reports (FT-08).
 - Aggregates through variadic calls follow the System V classification, in registers or the overflow area (BE-19).
+- The `long double` rounding and transcendental intrinsics (`llvm.log.f80` and the others) become calls to the C library's `long double` functions (BE-37).
 
 ### Changed
 

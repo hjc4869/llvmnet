@@ -9,6 +9,7 @@ Usage: support-matrix.py <llvmnet> <work-directory> <output.md>
 """
 import concurrent.futures
 import os
+import re
 import subprocess
 import sys
 
@@ -178,6 +179,11 @@ def compile_probe(item, llvmnet, work):
     if result.returncode != 0:
         lines = [line for line in (result.stderr + result.stdout).splitlines() if "error" in line]
         diagnostic = (lines[0] if lines else result.stderr.strip().splitlines()[-1]).split("error:", 1)[-1].strip()
+        # The long double math intrinsics become calls to the C library (logl, __powixf2), which a probe built as a
+        # library does not link; a program links them from the sysroot.
+        libcall = re.fullmatch(r"Unresolved function: (\w+l|__powixf2)", diagnostic)
+        if libcall and construct.endswith("f80") or libcall and construct.endswith("f80.i32"):
+            code, diagnostic = 0, f"as a call to `{libcall.group(1)}` from the C library"
     return category, construct, code, diagnostic
 
 

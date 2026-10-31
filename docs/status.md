@@ -16,7 +16,7 @@ What llvmnet supports today and its known limitations. Open work and milestones 
 Compiler:
 
 - The driver is not a complete Clang driver; native linker options are rejected.
-- Rejected LLVM constructs include computed goto (`indirectbr`), `callbr`, integers wider than 128 bits, `half`, `bfloat` and `fp128` (so Fortran `REAL(16)` and `__float128`), scalable vectors, several `x86_fp80` intrinsics, ifuncs and inline assembly with instructions; [user/support-matrix.md](user/support-matrix.md) has the full list.
+- Rejected LLVM constructs include computed goto (`indirectbr`), `callbr`, integers wider than 128 bits, `half`, `bfloat` and `fp128` (so Fortran `REAL(16)` and `__float128`), scalable vectors, the `x86_fp80` `minimum`/`maximum`, `canonicalize` and saturating-conversion intrinsics, ifuncs and inline assembly with instructions; [user/support-matrix.md](user/support-matrix.md) has the full list.
 - Vector IR runs as scalar code, except through the opt-in SIMD128 header.
 - `longjmp` cannot cross native frames. External thread-local globals need a bitcode definition.
 - Functions with many aggregate values or `setjmp` sites can exceed CLR method limits, and very large functions may run without JIT optimization; `--diagnose-limits` reports both.

@@ -17,5 +17,6 @@ This directory holds the llvmnet port of musl 1.2.5. `scripts/build-portable-lib
 - `src/signal/llvmnet/restore.c` defines empty `__restore` and `__restore_rt`: the host calls signal handlers as ordinary functions, but `sigaction` needs the symbols.
 - `src/string/llvmnet/memcpy.c`, `memmove.c` and `memset.c` call the compiler builtins, which the backend lowers to the runtime's vectorized copy and fill.
 - `src/fenv/llvmnet/fenv.c` describes the CIL floating-point environment: round to nearest only and no exception flags. Selecting another rounding mode or raising an exception fails.
+- `src/math/llvmnet/roundevenl.c` adds C23's `roundevenl`, which the linker substitutes for `llvm.roundeven.f80`; the other `long double` intrinsics (`llvm.log.f80` and the rest) become calls to musl's generic C functions (`logl`).
 
 Assembly sources under `src/*/x86_64/` are not compiled; musl's generic C implementations, including those of the `long double` math functions, are used.

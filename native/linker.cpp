@@ -1,6 +1,7 @@
 #include <llvm-c/Core.h>
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -14,6 +15,102 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+// CIL has no x86_fp80 instructions: llvmnet computes long double arithmetic in software (Float80) and lowers the
+// simple intrinsics itself, while the rounding and transcendental ones become calls to the C library's long double
+// functions, as LLVM's own legalization does for targets without the operation. Those are musl's generic C in portable
+// mode and glibc's in system mode. The mapping runs before archive extraction, so that the members defining the
+// functions are linked.
+static void lowerExtendedIntrinsics(llvm::Module &module)
+{
+    static const llvm::StringRef operations[] = {"sqrt", "ceil", "trunc", "rint", "nearbyint", "round", "roundeven", "sin", "cos",
+                                                 "tan", "exp", "exp2", "exp10", "log", "log2", "log10", "pow", "ldexp", "frexp", "powi"};
+    std::vector<llvm::Function *> intrinsics;
+    for (llvm::Function &function : module)
+        if (function.isIntrinsic())
+            intrinsics.push_back(&function);
+    for (llvm::Function *function : intrinsics) {
+        llvm::StringRef name = function->getName();
+        if (!name.starts_with("llvm."))
+            continue;
+        auto [operation, suffix] = name.drop_front(5).split('.');
+        bool known = std::find(std::begin(operations), std::end(operations), operation) != std::end(operations);
+        if (!known || suffix != (operation == "ldexp" || operation == "frexp" || operation == "powi" ? "f80.i32" : "f80"))
+            continue;
+        llvm::Type *extended = llvm::Type::getX86_FP80Ty(module.getContext());
+        llvm::Type *integer = llvm::Type::getInt32Ty(module.getContext());
+        if (operation == "frexp") {
+            // frexpl returns the exponent through a pointer; the intrinsic returns { x86_fp80, i32 }.
+            llvm::FunctionCallee frexpl = module.getOrInsertFunction(
+                "frexpl", llvm::FunctionType::get(extended, {extended, llvm::PointerType::getUnqual(module.getContext())}, false));
+            std::vector<llvm::CallInst *> calls;
+            for (llvm::User *user : function->users())
+                if (auto *call = llvm::dyn_cast<llvm::CallInst>(user); call && call->getCalledFunction() == function)
+                    calls.push_back(call);
+            for (llvm::CallInst *call : calls) {
+                llvm::IRBuilder<> builder(call);
+                llvm::BasicBlock &entry = call->getFunction()->getEntryBlock();
+                llvm::IRBuilder<> prologue(&entry, entry.begin());
+                llvm::AllocaInst *exponent = prologue.CreateAlloca(integer);
+                llvm::Value *fraction = builder.CreateCall(frexpl, {call->getArgOperand(0), exponent});
+                llvm::Value *aggregate = llvm::PoisonValue::get(call->getType());
+                aggregate = builder.CreateInsertValue(aggregate, fraction, 0);
+                aggregate = builder.CreateInsertValue(aggregate, builder.CreateLoad(integer, exponent), 1);
+                call->replaceAllUsesWith(aggregate);
+                call->eraseFromParent();
+            }
+            if (function->use_empty())
+                function->eraseFromParent();
+            continue;
+        }
+        // compiler-rt names the integer power __powixf2; the C library names the rest <operation>l.
+        std::string libcall = operation == "powi" ? "__powixf2" : operation.str() + "l";
+        llvm::FunctionCallee callee = module.getOrInsertFunction(libcall, function->getFunctionType());
+        function->replaceAllUsesWith(callee.getCallee());
+        function->eraseFromParent();
+    }
+}
+
+// libomp's generic C __kmp_invoke_microtask, which the portable runtime uses, calls a parallel region's outlined
+// function with up to 15 arguments. Flang passes every variable a region uses as its own argument, so a region may
+// have more: for such a region the fork call gets a thunk that takes the argument array the runtime collected and
+// calls the outlined function with each element, loaded as the parameter's own type (ports/openmp/README.md).
+static void wrapLargeMicrotasks(llvm::Module &module)
+{
+    static const struct { const char *name; unsigned firstArgument; } forks[] = {
+        {"__kmpc_fork_call", 3}, {"__kmpc_fork_call_if", 4}, {"__kmpc_fork_teams", 3}};
+    llvm::Type *pointer = llvm::PointerType::getUnqual(module.getContext());
+    for (const auto &fork : forks) {
+        llvm::Function *entry = module.getFunction(fork.name);
+        if (!entry)
+            continue;
+        std::vector<llvm::CallBase *> calls;
+        for (llvm::User *user : entry->users())
+            if (auto *call = llvm::dyn_cast<llvm::CallBase>(user); call && call->getCalledOperand() == entry)
+                calls.push_back(call);
+        for (llvm::CallBase *call : calls) {
+            auto *count = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(1));
+            auto *microtask = llvm::dyn_cast<llvm::Function>(call->getArgOperand(2)->stripPointerCasts());
+            if (!count || !microtask || count->getZExtValue() <= 15 || microtask->getName().ends_with(".llvmnet_argv") ||
+                microtask->getFunctionType()->getNumParams() != count->getZExtValue() + 2)
+                continue;
+            std::string thunkName = (microtask->getName() + ".llvmnet_argv").str();
+            llvm::Function *thunk = module.getFunction(thunkName);
+            if (!thunk) {
+                thunk = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(module.getContext()), {pointer, pointer, pointer}, false),
+                                               llvm::GlobalValue::InternalLinkage, thunkName, module);
+                llvm::IRBuilder<> builder(llvm::BasicBlock::Create(module.getContext(), "", thunk));
+                std::vector<llvm::Value *> arguments = {thunk->getArg(0), thunk->getArg(1)};
+                for (unsigned index = 0; index < count->getZExtValue(); ++index)
+                    arguments.push_back(builder.CreateLoad(microtask->getFunctionType()->getParamType(index + 2),
+                                                           builder.CreateConstInBoundsGEP1_64(pointer, thunk->getArg(2), index)));
+                builder.CreateCall(microtask, arguments);
+                builder.CreateRetVoid();
+            }
+            call->setArgOperand(2, thunk);
+        }
+    }
+}
 
 extern "C" int llvmnet_link(const char *const *paths, unsigned count,
                             const char *output, const char *abi, char **message)
@@ -74,6 +171,8 @@ extern "C" int llvmnet_link(const char *const *paths, unsigned count,
     bool progress;
     do {
         progress = false;
+        lowerExtendedIntrinsics(*linked);
+        wrapLargeMicrotasks(*linked);
         for (auto &member : members) {
             if (!member)
                 continue;
