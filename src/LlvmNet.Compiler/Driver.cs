@@ -2,8 +2,6 @@ using LlvmNet.Runtime;
 
 namespace LlvmNet;
 
-internal sealed record NativeImport(string Library, string EntryPoint);
-
 internal sealed class CompilerOptions
 {
     internal bool Library { get; set; }
@@ -16,7 +14,6 @@ internal sealed class CompilerOptions
     internal bool CheckIndirectCalls { get; set; }
     internal string AbiTag => Runtime == "system" ? "system-linux-x64-v1" : PortableAbi.Tag;
     internal List<string> SystemLibraries { get; } = [];
-    internal Dictionary<string, NativeImport> NativeImports { get; } = new(StringComparer.Ordinal);
     internal List<string> CilReferences { get; } = [];
 }
 
@@ -51,7 +48,6 @@ internal static class Driver
                 "  -r                       Link to a relocatable bitcode object",
                 "  -shared / --emit-library Emit a CIL library without an entry point",
                 "  --cil-reference <dll>    Resolve ABI-compatible managed CExport methods",
-                "  --native-import <spec>   Explicit scalar P/Invoke: symbol=library!entrypoint",
                 "  --system-library <file>  Additional native library in system ABI mode",
                 "  --runtime <mode>         portable (default) or system",
                 "  --simd128                Enable architecture-neutral SIMD128 helper calls",
@@ -141,13 +137,7 @@ internal static class Driver
                 case "--cil-reference": options.CilReferences.Add(Path.GetFullPath(Next())); break;
                 case "--keep-ir": keepIr = Path.GetFullPath(Next()); break;
                 case "--native-import":
-                    string specification = Next();
-                    int assignment = specification.IndexOf('=');
-                    int separator = specification.LastIndexOf('!');
-                    if (assignment < 1 || separator <= assignment + 1 || separator == specification.Length - 1)
-                        throw new ArgumentException("Native import syntax: symbol=library!entrypoint");
-                    options.NativeImports.Add(specification[..assignment], new NativeImport(specification[(assignment + 1)..separator], specification[(separator + 1)..]));
-                    break;
+                    throw new ArgumentException("--native-import was removed (ADR-04, SA-01): --runtime=system resolves every native function through generated bridges; add the library with --system-library <shared-library>.");
                 case "-L": searchPaths.Add(Next()); break;
                 case "-l": libraries.Add(Next()); break;
                 case "-I":
@@ -181,7 +171,7 @@ internal static class Driver
                         libraries.Add(argument[2..]);
                     else if (argument == "-static") staticLink = true;
                     else if (argument.StartsWith("-Wl,", StringComparison.Ordinal) || argument is "-rdynamic")
-                        throw new NotSupportedException($"Native linker option {argument} is not a CIL linker option; use --emit-library, --cil-reference or --native-import.");
+                        throw new NotSupportedException($"Native linker option {argument} is not a CIL linker option; use --emit-library, --cil-reference or --system-library.");
                     else if (argument.StartsWith('-'))
                         frontend.Add(argument);
                     else
@@ -201,8 +191,6 @@ internal static class Driver
         // A portable program is always one statically linked image; system mode links the native C library dynamically.
         if (staticLink && options.Runtime == "system")
             throw new NotSupportedException("Native linker option -static is not a CIL linker option in system mode; system programs use the host's shared C library.");
-        if (options.Runtime == "portable" && options.NativeImports.Count != 0)
-            throw new ArgumentException("Portable ABI mode cannot contain native imports; use a managed CIL reference or --runtime=system.");
         if (options.Runtime != "system" && options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
         if (PortableAbi.SysrootOverride is not null && options.Runtime != "portable") throw new ArgumentException("--portable-sysroot requires --runtime=portable.");
         if (options.Runtime == "system" && runtimeId is not null && runtimeId != "linux-x64")
@@ -286,7 +274,7 @@ internal static class Driver
                     continue;
                 string? archive = searchPaths.Select(directory => Path.Combine(directory, $"lib{library}.a")).FirstOrDefault(File.Exists);
                 if (archive is null)
-                    throw new FileNotFoundException($"Cannot find LLVM bitcode archive lib{library}.a in the -L directories. Native libraries require --native-import.");
+                    throw new FileNotFoundException($"Cannot find LLVM bitcode archive lib{library}.a in the -L directories. Native libraries need --runtime=system with --system-library.");
                 bitcode.Add(archive);
             }
             // Portable executables link musl's start object and the sysroot archives, in dependency order. Libraries do

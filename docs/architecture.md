@@ -66,6 +66,5 @@ Fortran uses Flang 22 CFI descriptors and flang-rt in both modes: compiled again
 - LLVM bitcode linking is static and uses `-L`/`-l` or explicit object and archive paths.
 - Managed linking uses `--cil-reference` and `CExport` methods.
 - System mode resolves the remaining symbols in native libraries (the C library and `--system-library`) through generated LLVM bridges and unmanaged-callable callbacks.
-- `--native-import symbol=library!entrypoint` (system mode) emits an explicit P/Invoke declaration for a scalar signature.
 
-Portable mode accepts only the first two: native imports and native libraries are rejected.
+Portable mode accepts only the first two: native libraries are rejected.

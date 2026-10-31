@@ -18,7 +18,7 @@ reject() {
     grep -q "$diagnostic" "$output/rejected.err"
 }
 reject 'Managed reference ABI mismatch' --runtime=portable "$root/tests/c/link-main.c" --cil-reference "$output/SystemLibrary.dll" -o "$output/bad.dll"
-reject 'cannot contain native imports' --runtime=portable "$root/tests/c/smoke.c" --native-import 'abs=libc.so.6!abs' -o "$output/bad.dll"
+reject 'native-import was removed' --runtime=system "$root/tests/c/smoke.c" --native-import 'abs=libc.so.6!abs' -o "$output/bad.dll"
 reject 'requires --runtime=system' --runtime=portable "$root/tests/c/smoke.c" --system-library libc.so.6 -o "$output/bad.dll"
 reject 'cannot change the versioned portable ABI' --runtime=portable -fshort-wchar "$root/tests/c/smoke.c" -o "$output/bad.dll"
 reject 'requires an executable link' --nativeaot -c "$root/tests/c/smoke.c" -o "$output/bad.o"
@@ -27,9 +27,6 @@ reject 'managed-host was removed' --runtime=managed-host "$root/tests/c/smoke.c"
 CPATH="$root/tests/host-headers" C_INCLUDE_PATH="$root/tests/host-headers" \
     "$root/bin/llvmnet" --runtime=portable "$root/tests/c/portable.c" -o "$output/isolated.dll"
 dotnet "$output/isolated.dll"
-"$root/bin/llvmnet" --runtime=system -fno-builtin "$root/tests/c/native-import.c" \
-    --native-import 'abs=libc.so.6!abs' -o "$output/explicit-system-import"
-"$output/explicit-system-import"
 # System mode never links the portable sysroot: no musl definitions, and libc calls stay native imports.
 "$root/bin/llvmnet" --runtime=system "$root/tests/c/runtime.c" --emit-llvm -o "$output/system-linked.bc"
 if llvm-nm-22 --defined-only "$output/system-linked.bc" | grep -E ' (__init_libc|__stdio_write|__libc_start_main)$' >/dev/null; then

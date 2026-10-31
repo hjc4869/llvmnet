@@ -17,6 +17,12 @@ Related: [roadmap.md](../roadmap.md) (the earlier priority ordering), [status.md
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-10-31, M7)
+
+Measurements are in [evidence/2026-10-31-m7-toolchain.md](../evidence/2026-10-31-m7-toolchain.md).
+
+- **SA-01.** `--native-import` is removed; `--system-library` is the one native path in system mode, and the option fails with that guidance.
+
 ## Progress (2026-10-31, M6)
 
 Measurements are in [evidence/2026-10-31-m6-cross-platform.md](../evidence/2026-10-31-m6-cross-platform.md), taken on a Windows 11 x64 machine, an Apple M6 Mac and an ARM64 container.
@@ -130,7 +136,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M4 | 0.5 | done; libc++ localization 100%, input.output 97.8% (LC-30 services), SPEC C++ parity holds | 0 | 2026-10-31 |
 | M5 | 0.5 | done; flang-rt and portable OpenMP delivered (FT-08), 22 of 25 OpenMP speed entries pass, the rest excluded | 0 | 2026-10-31 |
 | M6 | 0.6 | exit items done on all three hosts; two weeks of green CI runs need GitHub (FD-19) | 0 | 2026-10-31 |
-| M7 | 0.7 | not started | 11 | 2026-10-30 |
+| M7 | 0.7 | in progress; SA-01 done | 10 | 2026-10-31 |
 | M8 | 0.7 | not started | 2 | 2026-10-30 |
 | M9 | 1.0-rc | not started | 6 | 2026-10-30 |
 

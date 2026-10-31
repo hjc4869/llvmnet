@@ -60,13 +60,12 @@ Portable mode uses a fixed little-endian 64-bit ABI with its own headers, indepe
 bin/llvmnet --emit-library library.c -o Example.dll
 bin/llvmnet main.c --cil-reference Example.dll -o managed-client.dll
 
-bin/llvmnet --runtime=system -fno-builtin tests/c/native-import.c \
-  --native-import 'abs=libc.so.6!abs' -o native-client.dll
+bin/llvmnet --runtime=system client.c --system-library /path/libexternal.so -o native-client.dll
 ```
 
 `--cil-reference` resolves public static methods marked with `LlvmNet.Runtime.CExportAttribute`, which llvmnet emits on translated functions. Scalar and pointer signatures must match; aggregate signatures across assemblies are not yet a stable ABI.
 
-In system mode, calls to native libraries go through LLVM-generated bridges that support C structures, varargs, native data and scalar callbacks; `--system-library` adds a native library. `--native-import` maps one symbol to an explicit P/Invoke declaration with a non-variadic scalar signature. Portable mode rejects both options. Native C++ library interchange is not supported.
+In system mode, calls to native libraries go through LLVM-generated bridges that support C structures, varargs, native data and scalar callbacks; `--system-library` adds a native library. Portable mode rejects it. Native C++ library interchange is not supported. (`--native-import`, the earlier scalar P/Invoke path, was removed; `--system-library` covers its uses.)
 
 ## Deploy
 

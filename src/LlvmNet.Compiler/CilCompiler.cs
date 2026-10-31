@@ -90,7 +90,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             string name = Llvm.Name(value);
             bool function = Llvm.LLVMIsAFunction(value) != 0;
             result = function
-                ? !options.NativeImports.ContainsKey(name) && !(runtimeExports.TryGetValue(name, out MethodInfo? export) && (options.Runtime != "portable" || MuslVisible(name, export))) &&
+                ? !(runtimeExports.TryGetValue(name, out MethodInfo? export) && (options.Runtime != "portable" || MuslVisible(name, export))) &&
                     (Host is null || HostInterop.Adapter(name) is null)
                 : !Cxx.HasGlobal(name);
             if (result && Host is not null && !(function && !Host.IsSystem(value)))
@@ -192,21 +192,6 @@ internal sealed class CilCompiler(CompilerOptions options)
         if (IsSetJump(function))
             throw new NotSupportedException($"{name} requires a direct call in a translated function.");
         nint signature = Llvm.LLVMGlobalGetValueType(function);
-        if (options.NativeImports.TryGetValue(name, out NativeImport? import))
-        {
-            Type returnType = Types.Map(Llvm.LLVMGetReturnType(signature));
-            Type[] parameters = Types.Parameters(signature);
-            bool aggregateAbi = Enumerable.Range(0, checked((int)Llvm.LLVMCountParams(function)))
-                .Any(index => Llvm.ParameterAttribute(function, (uint)index, "byval") != 0 || Llvm.ParameterAttribute(function, (uint)index, "sret") != 0);
-            if (aggregateAbi || Llvm.LLVMIsFunctionVarArg(signature) != 0 || parameters.Any(parameter => !NativeScalar(parameter)) || !NativeScalar(returnType))
-                throw new NotSupportedException($"Native import {name} requires a non-variadic scalar C ABI signature; aggregates and C++ ABI are not supported.");
-            MethodBuilder native = Program.DefinePInvokeMethod($"__native_{name}", import.Library, import.EntryPoint,
-                MethodAttributes.Private | MethodAttributes.Static | MethodAttributes.PinvokeImpl, CallingConventions.Standard,
-                returnType, parameters, CallingConvention.Cdecl, CharSet.Ansi);
-            native.SetImplementationFlags(MethodImplAttributes.PreserveSig);
-            Methods[function] = native;
-            return native;
-        }
         if (Host is not null && Host.IsSystem(function))
             return Host.Resolve(function);
         if (Host is not null && HostInterop.Adapter(name) is MethodInfo adapter)

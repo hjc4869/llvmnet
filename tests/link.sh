@@ -21,18 +21,9 @@ if "$llvmnet" --runtime=portable "$output/main-system.o" -o "$output/mixed.dll" 
     exit 1
 fi
 grep -q 'ABI mismatch' "$output/mixed.log"
-# Explicit scalar P/Invoke imports exist in system mode only.
-compiler=("$llvmnet" --runtime=system)
-"${compiler[@]}" -fno-builtin "$root/tests/c/native-import.c" --native-import 'abs=libc.so.6!abs' -o "$output/native-import.dll"
-dotnet "$output/native-import.dll"
-if "${compiler[@]}" "$root/tests/c/native-aggregate.c" --native-import 'foreign_aggregate=libc.so.6!abs' -o "$output/invalid-abi.dll" 2>"$output/invalid-abi.log"; then
-    printf 'FAIL: native aggregate ABI accepted by scalar-only P/Invoke linker\n' >&2
-    exit 1
-fi
-grep -q 'requires a non-variadic scalar C ABI signature' "$output/invalid-abi.log"
 if "$llvmnet" --runtime=managed-host "$root/tests/c/smoke.c" -o "$output/legacy.dll" 2>"$output/legacy.log"; then
     printf 'FAIL: the removed managed-host mode was accepted\n' >&2
     exit 1
 fi
 grep -q 'managed-host was removed' "$output/legacy.log"
-printf 'PASS: bitcode archives, CIL references and ABI mismatch rejection in both modes; explicit P/Invoke in system mode\n'
+printf 'PASS: bitcode archives, CIL references and ABI mismatch rejection in both modes\n'

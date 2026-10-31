@@ -115,7 +115,7 @@ The LLVM target is a fixed `x86_64-unknown-none` layout that defines the data AB
 
 The same image runs on every supported host ([Supported hosts](#supported-hosts)). Programs see Linux semantics and structure layouts on every host. Paths, file-system capabilities, time-zone data and available resources still depend on the host, and services .NET cannot provide (`fork`, `exec`, sockets, hard links and others) fail with the errors [dev/host-abi.md](dev/host-abi.md) lists; [its last section](dev/host-abi.md#hosts-other-than-linux) describes what Windows and macOS do differently.
 
-Native libraries cannot be linked: `--native-import` and `--system-library` are rejected, and a function the sysroot does not provide is a link error. Recompile dependencies in portable mode or call them through a managed interface. Portable libraries (`-shared`) do not link the C library, because musl's process state (thread pointer, heap, stdio) belongs to the program image; a library that calls the C library must be linked into the program as bitcode. Use scalar and pointer `CExport` signatures across assemblies; aggregate signatures are not yet a stable API.
+Native libraries cannot be linked: `--system-library` is rejected, and a function the sysroot does not provide is a link error. Recompile dependencies in portable mode or call them through a managed interface. Portable libraries (`-shared`) do not link the C library, because musl's process state (thread pointer, heap, stdio) belongs to the program image; a library that calls the C library must be linked into the program as bitcode. Use scalar and pointer `CExport` signatures across assemblies; aggregate signatures are not yet a stable API.
 
 ### System ABI
 
@@ -162,7 +162,7 @@ The stage defaults to `artifacts/system-openmp` with package version `1:22.1.8-1
 
 ## Managed and Native Libraries
 
-`-L` and `-l` always name bitcode archives. `--cil-reference` names an assembly with public `CExport` methods and matching ABI metadata. `--system-library` adds a native shared library for system-mode symbol resolution. `--native-import symbol=library!entrypoint` maps one symbol to an explicit P/Invoke declaration with a scalar signature, in system mode only.
+`-L` and `-l` always name bitcode archives. `--cil-reference` names an assembly with public `CExport` methods and matching ABI metadata. `--system-library` adds a native shared library for system-mode symbol resolution; every native function, scalar or not, goes through the generated bridges. The earlier `--native-import symbol=library!entrypoint` option (an explicit scalar P/Invoke declaration) was removed in favor of this one path (ADR-04, SA-01) and now fails with that guidance.
 
 ## Standard SPEC Configuration
 
