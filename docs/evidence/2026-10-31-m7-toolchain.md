@@ -40,3 +40,23 @@ clang-22 "-O1" "-fno-vectorize" "-fno-slp-vectorize" "--target=x86_64-unknown-no
 ```
 
 New with the table: `-###` prints the frontend commands and stops; `--driver-mode=g++|flang|gcc` selects the frontend; `-x` applies per input, so `-x c++ a.c -x c b.c` compiles each as named; `-l:<file>`; `-Wl,--whole-archive` and `-Xlinker`; `-nostdlib++`; `-c` on `.o` inputs; and `-mllvm` is accepted in portable mode. Gates: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 85 passed, 0 failed in 525 s (the two new tests included); `dotnet test tests/LlvmNet.UnitTests -c Release` 108 passed (the table's rows are checked for help text, reasons and unique names, and 21 rejections and parses are checked directly); format and shellcheck clean.
+
+## TC-02: link inputs
+
+`tests/link-inputs.sh` (core tag, both modes) exercises every link input the item names, with fixtures under `tests/c/link/`:
+
+- `-c` on a `.ll`, a `.bc` and a `.o` input produces an object for the mode (IR is compiled and tagged, an object keeps its tag); an object of the other mode is rejected by `-c` with the same `ABI mismatch` as by a link.
+- `-l:example.a` finds the archive by its exact name; a missing `-lmissing` names the `-L` directories searched.
+- `libneeds.a` needs `provided()` from `libprovides.a`, which is named before it: the link succeeds, because archives are rescanned until no member resolves a symbol, regardless of order (GNU ld would need `--start-group`).
+- An archive whose only member nothing references stays out; with `-Wl,--whole-archive` (or `-Xlinker --whole-archive`) its constructor runs.
+- A duplicate definition names both files, for objects and archive members:
+
+```
+llvmnet: error: duplicate definition of 'calculate' in dup.o; it is already defined in library.o
+llvmnet: error: duplicate definition of 'calculate' in libdup.a(dup.o); it is already defined in library.o
+```
+
+- `-r main.o -l:example.a` writes a relocatable object holding the needed member and nothing from the runtime libraries (before this change a portable `-r` also linked `crt1.o` and the sysroot archives); `-r -Wl,--whole-archive -lctor` writes every member; `-r -lctor` alone fails asking for a link root.
+- `-nostdlib` with a freestanding `main` exits 42 (the entry point calls `main` directly), `-nodefaultlibs` with the sysroot's `libc.a` and builtins named explicitly makes an ordinary program again, without them the link fails with `Unresolved function`, and `-nostartfiles` alone runs a `main` that only returns.
+
+The rules are written down in [user/driver.md](../user/driver.md#link-inputs). The test passes in both modes (18 s).

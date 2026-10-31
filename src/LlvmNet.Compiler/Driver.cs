@@ -31,7 +31,8 @@ internal sealed class Invocation
     internal List<string> Frontend { get; } = [];
     internal List<LinkInput> Inputs { get; } = [];
     internal List<string> SearchPaths { get; } = [];
-    internal List<string> Libraries { get; } = [];
+    /// <summary>-l libraries with the whole-archive state in effect where each was named.</summary>
+    internal List<(string Name, bool WholeArchive)> Libraries { get; } = [];
     internal string? Output { get; private set; }
     internal string? KeepIr { get; private set; }
     internal bool CompileOnly { get; private set; }
@@ -105,7 +106,11 @@ internal sealed class Invocation
                 case "-x": language = value == "none" ? null : value; break;
                 case "-###": DryRun = true; break;
                 case "-L": SearchPaths.Add(value); break;
-                case "-l": Libraries.Add(value); break;
+                case "-l":
+                    wholeArchive = ApplyLinker(linker, wholeArchive);
+                    linker.Clear();
+                    Libraries.Add((value, wholeArchive));
+                    break;
                 case "-nostdlib": StartFiles = false; DefaultLibraries = false; break;
                 case "-nostartfiles": StartFiles = false; break;
                 case "-nodefaultlibs": DefaultLibraries = false; break;
@@ -259,7 +264,7 @@ internal static class Driver
             if (driver == "clang++") preprocessing.Insert(0, "--driver-mode=g++");
             return Toolchain.Run(fortranInput ? flang : clang, preprocessing, verbose, options.Runtime == "portable");
         }
-        if (inputs.Count == 0)
+        if (inputs.Count == 0 && invocation.Libraries.Count == 0)
             throw new ArgumentException("No input files.");
         if (invocation.CompileOnly && inputs.Count != 1 && invocation.Output is not null)
             throw new ArgumentException("Cannot use one -o with multiple inputs and -c.");
@@ -323,7 +328,7 @@ internal static class Driver
             }
             if (invocation.CompileOnly || invocation.DryRun)
                 return 0;
-            foreach (string library in invocation.Libraries)
+            foreach ((string library, bool wholeArchive) in invocation.Libraries)
             {
                 // Parts of the C library in both modes; in portable mode the sysroot also supplies the C++ and Fortran runtimes.
                 if (library is "c" or "m" or "pthread" or "dl" or "rt" or "util" or "crypt" or "resolv" ||
@@ -334,11 +339,12 @@ internal static class Driver
                 string? archive = invocation.SearchPaths.Select(directory => Path.Combine(directory, file)).FirstOrDefault(File.Exists);
                 if (archive is null)
                     throw new FileNotFoundException($"Cannot find LLVM bitcode archive {file} in the -L directories ({string.Join(", ", invocation.SearchPaths.DefaultIfEmpty("none given"))}). Native libraries need --runtime=system with --system-library.");
-                bitcode.Add((archive, false));
+                bitcode.Add((archive, wholeArchive));
             }
             // Portable executables link musl's start object and the sysroot archives, in dependency order. Libraries do
-            // not: musl keeps per-process state (thread pointer, heap, stdio) that one image per process must own.
-            if (options.Runtime == "portable" && !options.Library)
+            // not: musl keeps per-process state (thread pointer, heap, stdio) that one image per process must own. Nor
+            // does a relocatable link (-r), which combines the inputs for a later link.
+            if (options.Runtime == "portable" && !options.Library && !invocation.Relocatable)
             {
                 PortableAbi.RequireSysroot();
                 if (invocation.StartFiles) bitcode.Add((PortableAbi.Library("crt1.o"), false));
@@ -349,7 +355,7 @@ internal static class Driver
             }
             // System executables take the Fortran runtime from flang-rt built against glibc; the C library is native.
             string systemFortran = Path.Combine(Toolchain.Root, "sysroot", "system-linux-x64-v1", "lib", "libflang_rt.runtime.a");
-            if (options.Runtime == "system" && !options.Library && invocation.DefaultLibraries && File.Exists(systemFortran))
+            if (options.Runtime == "system" && !options.Library && !invocation.Relocatable && invocation.DefaultLibraries && File.Exists(systemFortran))
                 bitcode.Add((systemFortran, false));
             string linked = Path.Combine(temporary, "linked.bc");
             if (bitcode.All(input => Path.GetExtension(input.Path) == ".a" && !input.WholeArchive))
