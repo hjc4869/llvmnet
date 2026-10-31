@@ -23,6 +23,9 @@ internal sealed class VarArgEmitter(CilCompiler compiler, ILGenerator il, Functi
         return attribute == 0 ? 0 : Llvm.LLVMGetTypeAttributeValue(attribute);
     }
 
+    /// <summary>Whether the method holds a variadic call area (a localloc block).</summary>
+    internal bool Allocated => storage is not null;
+
     internal void Allocate(nint function)
     {
         int size = 0;

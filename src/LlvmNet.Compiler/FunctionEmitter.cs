@@ -21,6 +21,7 @@ internal sealed class FunctionEmitter : ValueEmitter
     private Label jumpDispatch;
     private Label jumpExit;
     private LocalBuilder? stackMemory;
+    private bool usesLocalloc;
     private LocalBuilder? stackReturn;
     private Label stackExit;
 
@@ -33,10 +34,6 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     internal void Emit()
     {
-        // Locals and localloc memory are not zeroed on entry (C# SkipLocalsInit): an alloca's contents are undefined in
-        // LLVM, and zeroing every stack buffer cost more than a quarter of ffmpeg's decoding time (PF-04). Locals whose
-        // first value matters are initialized explicitly.
-        method.InitLocals = false;
         varargs.Allocate(function);
         for (uint index = 0; index < Llvm.LLVMCountParams(function); index++)
             arguments[Llvm.LLVMGetParam(function, index)] = (int)index;
@@ -51,6 +48,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Ldc_I8, checked(Types.Size(type) + alignment - 1));
             Il.Emit(OpCodes.Conv_U);
             Il.Emit(OpCodes.Localloc);
+            usesLocalloc = true;
             Offset(alignment - 1);
             Il.Emit(OpCodes.Ldc_I8, -(long)alignment);
             Il.Emit(OpCodes.Conv_I);
@@ -182,6 +180,12 @@ internal sealed class FunctionEmitter : ValueEmitter
             if ((jumpReturn ?? stackReturn) is LocalBuilder result) Il.Emit(OpCodes.Ldloc, result);
             Il.Emit(OpCodes.Ret);
         }
+        // A method with localloc (allocas, byval copies, the variadic call area) does not zero its locals and stack
+        // buffers on entry (C# SkipLocalsInit): an alloca's contents are undefined in LLVM, and zeroing large stack
+        // buffers on every call cost H.264 decoding 30% (PF-04). The JIT cannot replace such a method on the stack
+        // anyway. Other methods keep the flag: without it, the JIT's on-stack replacement code for a long-running loop
+        // ran 2.6 times slower (lpbench). Locals whose first value matters are initialized explicitly.
+        method.InitLocals = !(usesLocalloc || varargs.Allocated);
     }
 
     internal override void Load(nint value)
@@ -282,7 +286,10 @@ internal sealed class FunctionEmitter : ValueEmitter
                 if (stackMemory is not null)
                     Il.Emit(OpCodes.Call, typeof(StackMemory).GetMethod(nameof(StackMemory.Allocate))!);
                 else
+                {
                     Il.Emit(OpCodes.Localloc);
+                    usesLocalloc = true;
+                }
                 Offset(alignment - 1);
                 Il.Emit(OpCodes.Ldc_I8, -(long)alignment);
                 Il.Emit(OpCodes.Conv_I);

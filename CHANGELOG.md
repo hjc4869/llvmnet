@@ -81,6 +81,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - `std::filesystem::copy_file` failed for every file in portable mode: the host now implements `sendfile` and `copy_file_range`.
 - Timed futex waits and `nanosleep` could end up to a millisecond early, so `condition_variable::wait_for` reported no timeout and callers waiting for one never returned.
 - NativeAOT executables for Windows resolved IANA time-zone names (`TZ=Europe/London`) to UTC, because the generated project disabled ICU for every target; it now does so only for Linux and macOS (PF-10).
+- After PF-04, long-running loops in functions called once (lpbench's `dgefa`) ran up to 2.6 times slower under the JIT, because its on-stack replacement code is worse without `localsinit`; only functions that use `localloc` drop the flag now.
 - Portable robust priority-inheritance mutexes whose owner died, and `pthread_cancel` during a futex wake, could leave waiters blocked after the PF-02 futex change; fixed before release (`functional/pthread_robust`, `functional/pthread_cancel-points` and `regression/pthread_cancel-sem_wait` pass again).
 - On Linux and macOS, `lseek` on a portable program's standard input redirected from a file failed with `ESPIPE` and `fstat` reported a FIFO, so `rewind(stdin)` silently did nothing (mafft's `pairlocalalign` read no sequences). A standard stream redirected from or to a regular file now seeks and stats as that file, and reads still move the offset the shell shares.
 
