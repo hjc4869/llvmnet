@@ -24,6 +24,7 @@ Measurements are in [evidence/2026-10-31-m7-toolchain.md](../evidence/2026-10-31
 - **SA-01.** `--native-import` is removed; `--system-library` is the one native path in system mode, and the option fails with that guidance.
 - **TC-01.** The driver's options are one table with four treatments per runtime mode (handled, passed to the frontend, accepted without effect, rejected with a reason), from which `--help` and the tables of `docs/user/driver.md` are generated; every option Clang's and Flang's `--help` list works or fails with a clear error in both modes (`tests/driver-options.sh`).
 - **TC-02 to TC-05.** Link inputs (`-c` on IR and objects, `-l:`, whole archives, order-independent archive resolution, duplicate definitions naming both files, `-r` of archives, the `-nostdlib` family), the `-O1` default with every level tested against native and JIT-validated at `-O0` and `-O3`, `-g`, `-fno-exceptions`, `-fno-rtti`, `-fvisibility` (a library now exports only what a native one would), per-alias language defaults, and a diagnostics pipeline that passes the frontends' output through byte for byte and gives llvmnet's own errors Clang's form and colors.
+- **TC-13.** The bundled toolchain drops Clang's sanitizer and profiling runtimes (609 MB to 533 MB installed; 100 MB compressed, 33 MB thin).
 - **TC-12.** NativeAOT provisioning: an offline NuGet feed (`scripts/nativeaot-feed.sh`, `LLVMNET_NUGET_FEED`) and a prerequisite check that names the missing SDK, compiler, zlib, cross sysroot or feed package in one line before `dotnet publish` runs.
 
 ## Progress (2026-10-31, M6)
@@ -139,7 +140,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M4 | 0.5 | done; libc++ localization 100%, input.output 97.8% (LC-30 services), SPEC C++ parity holds | 0 | 2026-10-31 |
 | M5 | 0.5 | done; flang-rt and portable OpenMP delivered (FT-08), 22 of 25 OpenMP speed entries pass, the rest excluded | 0 | 2026-10-31 |
 | M6 | 0.6 | exit items done on all three hosts; two weeks of green CI runs need GitHub (FD-19) | 0 | 2026-10-31 |
-| M7 | 0.7 | in progress; SA-01, TC-01, TC-02, TC-03, TC-04, TC-05, TC-12 done | 4 | 2026-10-31 |
+| M7 | 0.7 | in progress; SA-01, TC-01 to TC-05, TC-12, TC-13 done | 3 | 2026-10-31 |
 | M8 | 0.7 | not started | 2 | 2026-10-30 |
 | M9 | 1.0-rc | not started | 6 | 2026-10-30 |
 

@@ -55,11 +55,13 @@ if [[ "$bundle_llvm" -eq 1 ]]; then
     ln -sfn flang-22 "$llvm_prefix/bin/flang"
     ln -sfn clang-22 "$llvm_prefix/bin/clang"
     ln -sfn clang++-22 "$llvm_prefix/bin/clang++"
+    # Of the resource directory only the builtin headers are needed: its lib/ holds the sanitizer and profiling
+    # runtimes, which llvmnet cannot link (TC-13).
     resource="$(clang-22 -print-resource-dir)"
-    mkdir -p "$llvm_prefix/lib/clang"
-    cp -a "$resource" "$llvm_prefix/lib/clang/$(basename "$resource")"
+    mkdir -p "$llvm_prefix/lib/clang/$(basename "$resource")"
+    cp -a "$resource/include" "$llvm_prefix/lib/clang/$(basename "$resource")/include"
     mkdir -p "$llvm_prefix/include/flang"
-    cp /usr/lib/llvm-22/include/flang/*.mod "$llvm_prefix/include/flang/"
+    cp "$(dirname "$(dirname "$(realpath "$(command -v flang-22)")")")"/include/flang/*.mod "$llvm_prefix/include/flang/"
     for binary in "${original_binaries[@]}" "$root/src/LlvmNet.Compiler/bin/Release/net10.0/libllvmnet-llvm.so"; do
         while read -r library; do
             [[ -f "$library" ]] || continue
@@ -72,6 +74,8 @@ if [[ "$bundle_llvm" -eq 1 ]]; then
     llvm_library="$(realpath "$(llvm-config-22 --libdir)/libLLVM-22.so")"
     cp -L "$llvm_library" "$llvm_prefix/lib/$(basename "$llvm_library")"
     ln -sfn "$(basename "$llvm_library")" "$llvm_prefix/lib/libLLVM-22.so"
+    # Strip what the distribution did not (TC-13); a library keeps its dynamic symbol table.
+    find "$llvm_prefix/bin" "$llvm_prefix/lib" -maxdepth 1 -type f \( -name '*.so*' -o -perm -u+x \) -exec strip --strip-unneeded {} + 2>/dev/null || true
     # Keep the Debian copyright file of every package whose files were bundled above.
     while read -r package; do
         if [[ -f "/usr/share/doc/$package/copyright" ]]; then
@@ -83,4 +87,7 @@ if [[ "$bundle_llvm" -eq 1 ]]; then
         [[ -n "$source_file" ]] && dpkg -S "$(realpath "$source_file")" 2>/dev/null | cut -d: -f1
     done | sort -u)
 fi
-printf 'Toolchain installed in %s (bundled compiler runtime=%s, bundled LLVM=%s). NativeAOT publishing requires the .NET 10 SDK.\n' "$prefix" "$self_contained" "$bundle_llvm"
+# The compiler's own native bridge and the publish output are stripped of what a run does not need.
+strip --strip-unneeded "$prefix/lib/llvmnet/libllvmnet-llvm.so" 2>/dev/null || true
+rm -f "$prefix/lib/llvmnet/libllvmnet-llvm.stamp"
+printf 'Toolchain installed in %s (bundled compiler runtime=%s, bundled LLVM=%s, %s). NativeAOT publishing requires the .NET 10 SDK.\n' "$prefix" "$self_contained" "$bundle_llvm" "$(du -sh "$prefix" | cut -f1)"

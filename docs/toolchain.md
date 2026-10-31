@@ -8,7 +8,7 @@
 - `bin/llvmnet`: selects the frontend from each input's extension.
 - `bin/llvmnet-ar`, `bin/llvmnet-ranlib`, `bin/llvmnet-nm`: LLVM's archive and symbol tools for bitcode objects.
 - `lib/llvmnet/`: the compiler, its LLVM bridge and the runtime assembly.
-- `libexec/llvm/`: bundled LLVM, Clang and Flang executables, libraries, Clang resource headers and Flang intrinsic modules (with `--bundle-llvm`).
+- `libexec/llvm/`: with `--bundle-llvm`, Clang, Flang, `opt`, the archive tools, `libLLVM` and the libraries they load, Clang's builtin headers (only the `include/` part of the resource directory: its sanitizer and profiling runtimes cannot be linked by llvmnet) and Flang's intrinsic modules, stripped of what a run does not need (TC-13).
 - `sysroot/dotnet64-v2/`: the portable sysroot (musl, libc++, libc++abi, the OpenMP runtime and flang-rt headers and bitcode archives, and compiler-rt's complex arithmetic builtins); `sysroot/system-linux-x64-v1/`: flang-rt built against glibc for system mode; `sysroot/simd128/`: the SIMD128 header. `scripts/build-sysroot.sh` builds the first two.
 - `share/llvmnet/`: documentation, the SPEC configuration (`share/llvmnet/spec/`), license and third-party notices, and the Debian copyright files of bundled LLVM packages.
 

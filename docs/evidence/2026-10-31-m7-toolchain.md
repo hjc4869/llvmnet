@@ -97,3 +97,20 @@ The check also probes the native linker with a one-line program (`-lz` included,
 ## Gate for TC-02 to TC-05 and TC-12
 
 The five items were tested together in one run of the working tree holding all of them: `tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8` 90 passed, 0 failed in 596 s (the five new tests included; `link-inputs` 18 s, `optimization-levels` 191 s, `language-options` 53 s, `diagnostics` 3 s, `aot-offline` 14 s); `dotnet test tests/LlvmNet.UnitTests -c Release` 108 passed; `dotnet format whitespace llvmnet.slnx --verify-no-changes` and `shellcheck -S error` clean. The items were then committed one by one.
+
+## TC-13: bundle size
+
+The bundled toolchain (`scripts/package-toolchain.sh <prefix> --self-contained --bundle-llvm`) already held only the tools the item names (`clang-22`, `clang++-22`, `flang-22`, `opt-22`, `llvm-ar-22`, `llvm-nm-22`, `llvm-ranlib-22`), the libraries they load (`libLLVM.so.22.1`, `libclang-cpp.so.22.1`, `libMLIR.so.22.1`), Clang's resource directory and Flang's `.mod` files; Debian's binaries are already stripped. The one large surplus was the resource directory: its `lib/` holds 77 MB of sanitizer and profiling runtimes, which llvmnet rejects at the driver (`-fsanitize=`, `-fprofile-instr-generate` are not accepted, TC-01). The script now copies only its `include/`, strips the copied binaries and the LLVM bridge (`--strip-unneeded`) and prints the installed size. Measured with `du -sm` on the package the deployment test built before the change (`artifacts/tests/deployment/toolchain`) and on the one `scripts/release-artifacts.sh` built after it:
+
+| Part | Before (MB) | After (MB) |
+| --- | ---: | ---: |
+| `lib/llvmnet` (the compiler with its own .NET runtime) | 80 | 80 |
+| `libexec/llvm/bin` | 49 | 49 |
+| `libexec/llvm/lib` without the resource directory | 307 | 307 |
+| `libexec/llvm/lib/clang/22` (the resource directory) | 93 | 16 |
+| `sysroot` (the two sysroots and the SIMD128 header) | 81 | 81 |
+| `bin`, `share`, `libexec/llvm/include` | 3 | 3 |
+| Whole bundled installation | 609 | 533 |
+| Thin installation (no LLVM) | | 161 |
+
+Compressed with `xz -6` for the release archives: the bundled package is 100,432,388 bytes (96 MiB) and the thin one 33,406,532 bytes (32 MiB). What remains is the LLVM libraries themselves: `libLLVM` (144 MB), `libMLIR` (104 MB, Flang's dependency) and `libclang-cpp` (61 MB), which cannot be trimmed without rebuilding LLVM with fewer components, and the compiler's .NET runtime (80 MB), which `--self-contained` includes so that the package needs no `dotnet` to compile.
