@@ -884,6 +884,37 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
     }
 
+    /// <summary>
+    /// The operand an empty inline-assembly template returns: its constraints name one direct output, and an input with
+    /// the matching constraint (the output's number) of the same type. Also whether it clobbers memory. Null for any other
+    /// form, including an untied output, whose value would be undefined.
+    /// </summary>
+    private static (nint Input, bool Memory)? TiedBarrierInput(nint instruction, nint target)
+    {
+        nint text = Llvm.LLVMGetInlineAsmConstraintString(target, out nuint length);
+        string[] constraints = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(text, checked((int)length))!.Split(',');
+        int output = -1, operand = 0;
+        nint input = 0;
+        bool memory = false;
+        for (int index = 0; index < constraints.Length; index++)
+        {
+            string constraint = constraints[index];
+            if (constraint.StartsWith('~')) { memory |= constraint == "~{memory}"; continue; }
+            if (constraint.StartsWith('='))
+            {
+                if (constraint.Contains('*')) { operand++; continue; }
+                if (output >= 0) return null;
+                output = index;
+                continue;
+            }
+            if (output >= 0 && constraint == output.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                input = Llvm.LLVMGetOperand(instruction, (uint)operand);
+            operand++;
+        }
+        if (input == 0 || Llvm.LLVMTypeOf(input) != Llvm.LLVMTypeOf(instruction)) return null;
+        return (input, memory);
+    }
+
     private void StoreResult(nint value)
     {
         if (locals.TryGetValue(value, out LocalBuilder? local))
@@ -935,6 +966,14 @@ internal sealed class FunctionEmitter : ValueEmitter
                 string content = line.Trim(' ', '\t', '\r');
                 return content.Length == 0 || content.StartsWith('#');
             });
+            if (commentOnly && TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0 && TiedBarrierInput(instruction, target) is (nint input, bool memory))
+            {
+                // asm("" : "+r"(x)) and asm("" : "=r"(y) : "0"(x)): an empty template whose one register output is tied
+                // to an input yields that input; code uses it to hide a value from the optimizer.
+                if (memory) Il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.MemoryBarrier))!);
+                Load(input);
+                return;
+            }
             if (!commentOnly || TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0)
                 throw new NotSupportedException("Inline assembly with instructions or outputs is not supported; use a pure C configuration.");
             Il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.MemoryBarrier))!);
@@ -1553,6 +1592,38 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Call, typeof(MathIntrinsics).GetMethod(away ? single ? nameof(MathIntrinsics.LroundF) : nameof(MathIntrinsics.Lround) : single ? nameof(MathIntrinsics.LrintF) : nameof(MathIntrinsics.Lrint))!);
             if (width <= 32)
                 Il.Emit(OpCodes.Conv_I4);
+            return;
+        }
+        if (name.StartsWith("llvm.vector.reduce.fmax.", StringComparison.Ordinal) || name.StartsWith("llvm.vector.reduce.fmin.", StringComparison.Ordinal) ||
+            name.StartsWith("llvm.vector.reduce.fmaximum.", StringComparison.Ordinal) || name.StartsWith("llvm.vector.reduce.fminimum.", StringComparison.Ordinal))
+        {
+            // expand-reductions expands the floating-point minimum and maximum reductions only with nnan; the others fold
+            // here lane by lane with the scalar operation's semantics (LLVM leaves the order unspecified): fmax and fmin
+            // as maxnum and minnum, fmaximum and fminimum as maximum and minimum.
+            nint vector = Llvm.LLVMGetOperand(instruction, 0);
+            nint vectorType = Llvm.LLVMTypeOf(vector);
+            nint element = Llvm.LLVMGetElementType(vectorType);
+            Type scalar = Types.Map(element);
+            if (scalar != typeof(float) && scalar != typeof(double))
+                throw new NotSupportedException($"Unsupported intrinsic: {name}");
+            string reduction = name["llvm.vector.reduce.".Length..name.IndexOf('.', "llvm.vector.reduce.".Length)];
+            MethodInfo combine = scalar.GetMethod(reduction switch { "fmax" => "MaxNumber", "fmin" => "MinNumber", "fmaximum" => "Max", _ => "Min" }, [scalar, scalar])!;
+            LocalBuilder copy = Il.DeclareLocal(Types.Map(vectorType));
+            Load(vector);
+            Il.Emit(OpCodes.Stloc, copy);
+            uint lanes = Llvm.LLVMGetVectorSize(vectorType);
+            for (uint lane = 0; lane < lanes; lane++)
+            {
+                Il.Emit(OpCodes.Ldloca, copy);
+                Il.Emit(OpCodes.Conv_U);
+                if (lane > 0)
+                {
+                    Il.Emit(OpCodes.Ldc_I4, checked((int)(lane * Types.Size(element))));
+                    Il.Emit(OpCodes.Add);
+                }
+                Il.Emit(scalar == typeof(float) ? OpCodes.Ldind_R4 : OpCodes.Ldind_R8);
+                if (lane > 0) Il.Emit(OpCodes.Call, combine);
+            }
             return;
         }
         if (name.StartsWith("llvm.is.fpclass.", StringComparison.Ordinal))

@@ -398,10 +398,11 @@ internal sealed class CilCompiler(CompilerOptions options)
         // Flang with -fdefault-integer-8 defines i64 main(i64, ...); the entry point converts argc and the exit status
         // at the boundary, as native start code does through registers.
         bool wide = main.ReturnType == typeof(long);
-        bool wideCount = parameters.Length >= 2 && parameters[0] == typeof(long);
+        bool wideCount = parameters.Length >= 1 && parameters[0] == typeof(long);
+        // K&R-style main(argc) gets the count alone, as native start code leaves argv unread in its register.
         if (!fortran && (main.ReturnType != typeof(int) && !wide || !(parameters.Length == 0 ||
-            parameters.Length is 2 or 3 && parameters[0] == (wideCount ? typeof(long) : typeof(int)) && parameters.Skip(1).All(parameter => parameter == typeof(nint)))))
-            throw new NotSupportedException("The entry point must be int main(void), int main(int, char **[, char **]), or a Fortran main.");
+            parameters.Length is 1 or 2 or 3 && parameters[0] == (wideCount ? typeof(long) : typeof(int)) && parameters.Skip(1).All(parameter => parameter == typeof(nint)))))
+            throw new NotSupportedException("The entry point must be int main(void), int main(int[, char **[, char **]]), or a Fortran main.");
         MethodBuilder entry = Program.DefineMethod("__Entry", MethodAttributes.Public | MethodAttributes.Static, typeof(int), [typeof(string[])]);
         ILGenerator il = entry.GetILGenerator();
         if (libcMain != 0)
@@ -440,12 +441,13 @@ internal sealed class CilCompiler(CompilerOptions options)
         LocalBuilder count = il.DeclareLocal(typeof(int));
         il.Emit(OpCodes.Stloc, count);
         Label done = il.BeginExceptionBlock();
-        if (parameters.Length >= 2)
+        if (parameters.Length >= 1)
         {
             il.Emit(OpCodes.Ldloc, count);
             if (wideCount) il.Emit(OpCodes.Conv_I8);
-            il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetProperty(nameof(ProcessRuntime.Arguments))!.GetMethod!);
         }
+        if (parameters.Length >= 2)
+            il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetProperty(nameof(ProcessRuntime.Arguments))!.GetMethod!);
         if (parameters.Length == 3)
             il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetProperty(nameof(ProcessRuntime.EnvironmentVector))!.GetMethod!);
         il.Emit(OpCodes.Call, main);

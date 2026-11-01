@@ -63,6 +63,7 @@ instructions = {
     "freeze": "  %v = load i32, ptr %p\n  %f = freeze i32 %v\n  store i32 %f, ptr %p\n  ret void",
     "va_arg instruction": None,
     "inline asm (empty barrier)": "  call void asm sideeffect \"\", \"~{memory}\"()\n  ret void",
+    "inline asm (empty, tied output)": "  %v = call i32 asm sideeffect \"\", \"=r,0,~{memory}\"(i32 7)\n  store i32 %v, ptr %p\n  ret void",
     "inline asm (instructions)": "  call void asm sideeffect \"nop\", \"\"()\n  ret void",
     "callbr (asm goto)": "  callbr void asm \"\", \"!i\"() to label %a [label %b]\na:\n  ret void\nb:\n  ret void",
 }
@@ -99,6 +100,7 @@ intrinsics = [
     ("Control", "llvm.va_start / va_copy / va_end", "define i32 @probe(i32 %n, ...) {\n  %l = alloca [24 x i8]\n  %c = alloca [24 x i8]\n  call void @llvm.va_start.p0(ptr %l)\n  call void @llvm.va_copy.p0(ptr %c, ptr %l)\n  call void @llvm.va_end.p0(ptr %c)\n  call void @llvm.va_end.p0(ptr %l)\n  ret i32 %n\n}\n"
      "declare void @llvm.va_start.p0(ptr)\ndeclare void @llvm.va_copy.p0(ptr, ptr)\ndeclare void @llvm.va_end.p0(ptr)\n"),
     ("Control", "llvm.returnaddress / frameaddress", "define ptr @probe() {\n  %r = call ptr @llvm.returnaddress(i32 0)\n  ret ptr %r\n}\ndeclare ptr @llvm.returnaddress(i32)\n"),
+    ("Control", "llvm.eh.sjlj.setjmp / longjmp (__builtin_setjmp)", body("  call void @llvm.eh.sjlj.longjmp(ptr %p)\n  unreachable") + "declare void @llvm.eh.sjlj.longjmp(ptr)\n"),
     ("Control", "llvm.readcyclecounter", "define i64 @probe() {\n  %r = call i64 @llvm.readcyclecounter()\n  ret i64 %r\n}\ndeclare i64 @llvm.readcyclecounter()\n"),
     ("Control", "llvm.get.rounding", "define i32 @probe() {\n  %r = call i32 @llvm.get.rounding()\n  ret i32 %r\n}\ndeclare i32 @llvm.get.rounding()\n"),
     ("Control", "llvm.set.rounding", body("  call void @llvm.set.rounding(i32 0)\n  ret void") + "declare void @llvm.set.rounding(i32)\n"),

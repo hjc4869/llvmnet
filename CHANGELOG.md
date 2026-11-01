@@ -43,6 +43,9 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - The CMake toolchain file states the compiler identity CMake cannot read from bitcode objects and launchers (Clang of the bundled LLVM version, 8-byte little-endian pointers, `gnu17`/`gnu++17` defaults), so `CMAKE_SIZEOF_VOID_P`, compile features and `C_STANDARD` work; it is installed as `share/llvmnet/cmake/llvmnet.cmake`, as the user documentation said, with the Meson cross file as `share/llvmnet/meson/llvmnet.ini`, and finds the package's own drivers and archive tools. The checkout's `bin/` has the `llvmnet-clang`, `llvmnet-clang++` and `llvmnet-flang` aliases the package has (TC-07, found by WG-01).
 - A link input whose extension names no source language is linked by its content, as Clang hands such a file to the linker: an LLVM bitcode object or archive under any name, such as CMake's `.obj` (found by WG-01).
 - In portable mode the frontend queries answer for the portable target (`-dumpmachine` prints `x86_64-unknown-none`), `-print-libgcc-file-name` is answered, and `--target=x86_64-unknown-none` names the portable target without changing anything, so build systems that pass back what `-dumpmachine` reported configure (found by WG-01).
+- Empty `asm` statements whose one register output is tied to an input (`asm("" : "+r"(x))`, a common optimization barrier) yield that input in both modes; 12 gcc-c-torture tests use them (found by WG-02).
+- `llvm.vector.reduce.fmax`, `fmin`, `fmaximum` and `fminimum` without `nnan`, which a loop vectorized by `#pragma clang loop vectorize(enable)` produces, are folded lane by lane (BE-43).
+- A K&R-style `main(argc)` gets the argument count, as natively (found by WG-02).
 
 ### Changed
 

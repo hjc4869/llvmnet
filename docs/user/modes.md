@@ -58,7 +58,7 @@ JIT output includes the generated bridge as `lib<name>.llvmnet-host.so`. NativeA
 
 Threads are native pthreads; an adapter wraps thread start and TLS destructors so callbacks run inside .NET's thread lifetime, including under NativeAOT. Cancellation, `pthread_exit`, recovery from hardware-fault signals, external native TLS globals and TLS destructors on threads created by native libraries are incomplete. C++ exceptions use the managed bridge, and C++ library code must be linked as bitcode (for example the optional libstdc++ archive below); native libstdc++ is not called. Fortran programs link flang-rt from `sysroot/system-linux-x64-v1`.
 
-Inline assembly is rejected except for empty or comment-only `asm` statements without outputs, which become a memory barrier in both modes. System mode also accepts the x86 `int3` trap, which raises `SIGTRAP`, and the CPUID and XGETBV forms used by LLVM's and Eigen's host detection, which run in generated native thunks.
+Inline assembly is rejected except for empty or comment-only `asm` statements without outputs, which become a memory barrier in both modes, and empty ones whose one register output is tied to an input (`asm("" : "+r"(x))`, `asm("" : "=r"(y) : "0"(x))`), which yield that input. System mode also accepts the x86 `int3` trap, which raises `SIGTRAP`, and the CPUID and XGETBV forms used by LLVM's and Eigen's host detection, which run in generated native thunks.
 
 By default, a void call to a translated function with fewer arguments than its definition is a compile error. `--trap-missing-arguments` (both modes) instead compiles the call site to throw `InvalidProgramException` and reports each such call while compiling.
 

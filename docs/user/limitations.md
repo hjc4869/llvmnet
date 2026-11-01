@@ -6,7 +6,7 @@ What llvmnet does not do, in one place. The two tables are generated from code: 
 
 Programs are compiled through Clang and Flang 22 and translated from LLVM IR to CIL; what the frontends reject is theirs to report. The backend rejects the constructs below with a compile error naming the function and the instruction ([driver.md](driver.md#exit-status)); everything else in the support matrix is translated.
 
-28 of the 212 probed constructs are rejected (184 translated).
+28 of the 214 probed constructs are rejected (186 translated).
 
 | Construct | Diagnostic |
 | --- | --- |
@@ -23,6 +23,7 @@ Programs are compiled through Clang and Flang 22 and translated from LLVM IR to 
 | Instructions: `va_arg instruction` | Unsupported LLVM opcode 49 |
 | Instructions: `catchswitch / catchpad (Windows EH)` | Unsupported LLVM type: token |
 | Intrinsics: control: `llvm.returnaddress / frameaddress` | Unsupported intrinsic: llvm.returnaddress |
+| Intrinsics: control: `llvm.eh.sjlj.setjmp / longjmp (__builtin_setjmp)` | Unsupported intrinsic: llvm.eh.sjlj.longjmp |
 | Intrinsics: control: `llvm.set.rounding` | Unsupported intrinsic: llvm.set.rounding |
 | Intrinsics: integer: `llvm.sshl.sat.i128` | Wide integer intrinsic not implemented: llvm.sshl.sat.i128 |
 | Intrinsics: integer: `llvm.ushl.sat.i128` | Wide integer intrinsic not implemented: llvm.ushl.sat.i128 |
@@ -33,7 +34,6 @@ Programs are compiled through Clang and Flang 22 and translated from LLVM IR to 
 | Intrinsics: floating (x86_fp80): `llvm.minimumnum.f80` | Unsupported extended floating intrinsic: llvm.minimumnum.f80 |
 | Intrinsics: floating (x86_fp80): `llvm.maximumnum.f80` | Unsupported extended floating intrinsic: llvm.maximumnum.f80 |
 | Intrinsics: floating (x86_fp80): `llvm.fptosi.sat.i32.f80` | Saturated conversion type: llvm.fptosi.sat.i32.f80 |
-| Intrinsics: vector reductions: `llvm.vector.reduce.fmax.v4f64` | Unsupported intrinsic: llvm.vector.reduce.fmax.v4f64 |
 | Intrinsics: vector: `llvm.vector.reverse` | Unsupported intrinsic: llvm.vector.reverse.v4i32 |
 | Intrinsics: vector: `llvm.get.active.lane.mask` | Unsupported intrinsic: llvm.get.active.lane.mask.v4i1.i64 |
 | Linkage: `ifunc` | GNU indirect function (ifunc) i is not supported; build without ifunc resolvers. |
