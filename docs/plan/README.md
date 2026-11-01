@@ -17,6 +17,34 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-11-02, library survey)
+
+Measurements are in [evidence/2026-11-02-library-survey.md](../evidence/2026-11-02-library-survey.md).
+
+The survey built 18 open-source libraries in portable mode through their own build systems:
+- the third-party libraries of LightPlayer-Packages;
+- AvaloniaStatic's native dependencies, including Skia with the SkiaSharp C API and ANGLE.
+
+Every library ran its own suite under the JIT, compared with a native Clang build, and every comparable output was byte-identical. The only exception is musl's `libm`, which rounds last bits differently in 6 Skia images. NativeAOT runs scalar C at 1.1 to 3 times native time, typically 1.4 to 2.2. ANGLE draws on the host GPU in system mode.
+
+- **WG-07 and TC-07 (progress).**
+  - zlib, libpng, libjpeg-turbo and expat pass their suites locally, through local scripts that are not yet in CI.
+  - Configure probes give wrong answers in all three build systems, so features drop out silently. The CMake toolchain file's `Generic` platform hides `UNIX` and makes `SHARED` targets an error.
+- **New items.**
+  - TC-19: `main` in an archive member, and archives under any name.
+  - TC-20: link time grows super-linearly, for example 371 s for Skia's DM.
+  - TC-21: `argv[0]` of launcher programs.
+  - TC-22: x86 macros still predefined in portable mode.
+  - TC-23: trap-mode sanitizers.
+  - BE-44: `musttail` is translated as an ordinary call.
+  - BE-45: `invoke @setjmp`.
+  - BE-46: gaps in `--diagnose-limits`.
+  - PF-15: `select` becomes branches, making the Paeth filter 3.4 to 5.7 times slower.
+  - PF-16: the portable `mmap` emulation, which makes libxml2's DOM parse 2.4 times slower than system mode with twice the memory.
+  - SA-10 to SA-12: system-mode fork and exec, C++20 libstdc++, `__SSE2__`.
+  - LC-32: musl differences.
+- **Proposed for the owner.** The item priorities, the configure-probe and toolchain-file choices, the host-macro settings, system mode's SSE macros, and what WG-07 runs ([decisions.md](decisions.md#proposed-for-the-owner-2026-11-02-library-survey)).
+
 ## Progress (2026-11-01, M9)
 
 Measurements are in [evidence/2026-11-01-m9-workload-gates.md](../evidence/2026-11-01-m9-workload-gates.md), and [dev/gates.md](../dev/gates.md) says which suites run when, with their thresholds. Every suite counts a test only when the native build passes it.

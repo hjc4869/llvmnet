@@ -85,6 +85,14 @@ The backend is the part of llvmnet that must be kept. This workstream makes it p
 - [x] **BE-43** (S, P2) `llvm.vector.reduce.fmax`, `fmin`, `fmaximum` and `fminimum` without `nnan`: `expand-reductions` expands them only with `nnan`, so a loop that `#pragma clang loop vectorize(enable)` vectorizes over an `fmax` reduction did not compile ("Unsupported intrinsic"); found by llvm-test-suite's `Vectorizer/fmax-reduction` (WG-01). — **Done** (2026-11-01): the backend folds the lanes with the scalar operation (maxnum and minnum, maximum and minimum); `tests/ir/vector-minmax-reductions.ll` checks the NaN cases against native in both modes, and the support matrix lists the reduction as translated.
 - [ ] **BE-32** (L, P2) General fixed-vector lowering to `Vector128`/`Vector256` ([ADR-10](decisions.md#adr-10-simd-strategy)). Post-1.0.
 
+### Found by the library survey (2026-11-02)
+
+Measurements and reproducers: [library survey](../evidence/2026-11-02-library-survey.md).
+
+- [ ] **BE-44** (M, P0) `musttail` calls are translated as ordinary calls, without a diagnostic, so a chain of tail calls that runs in constant stack natively overflows (the JIT reports a stack overflow, NativeAOT dies with SIGSEGV). Skia's SkSL raster pipeline relies on it, and its DM test runner aborts after 2,017 of 2,197 tests. Guarantee the tail call (a CIL `tail.` prefix where the JIT and NativeAOT honor it, or a trampoline) or reject `musttail` with a compile error listed in the support matrix. Done when the reproducer runs in constant stack under the JIT and NativeAOT, or fails to compile with the diagnostic.
+- [ ] **BE-45** (M, P1) `setjmp` called through `invoke`: inside a C++ `try`, Clang emits `invoke @setjmp` because musl's `setjmp` is not `nothrow`, and llvmnet rejects it ("setjmp requires a direct call"); LibRaw's `unpack_thumb` does this. Done when the reproducer compiles and behaves as native under the JIT and NativeAOT.
+- [ ] **BE-46** (S, P1) `--diagnose-limits` models IL size, blocks, locals and LLVM instructions but not RyuJIT's other MinOpts triggers, so `hb_ot_tags_from_script_and_language` (52.9 KB of IL, 1,406 locals) is reported under every threshold while the JIT compiles it as MinOpts (4 times slower than native). Done when the diagnostic names the functions the JIT's own summary (`DOTNET_JitStdOutFile` with `JitDisasmSummary`) reports as MinOpts on the survey's libraries.
+
 ## Exit criteria for M1
 
 BE-04, BE-05, BE-07, BE-08, BE-11, BE-12, BE-15, BE-16, BE-18, BE-25 and BE-31 are done; the fuzzing job (FD-16) has run for two weeks without an open miscompile; the support matrix (BE-02) is published.
