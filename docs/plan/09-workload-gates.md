@@ -18,7 +18,7 @@ Prefix `WG`. Owner: unassigned. Milestone: [M9](README.md#m9-workload-gates-and-
 - [ ] **WG-06** (L, P0) SPEC CPU 2017 and 2026 on the private runner: system and portable, `test` then `train` then `ref`, one copy, JIT and NativeAOT; a completed matrix record per toolchain build; portable at parity with system; deviations documented per benchmark; a reportability review of flags and system description. The owner decided (2026-10-31) that estimated scores, marked as not compliant, may be published after that review.
 - [ ] **WG-07** (M, P1) Ecosystem smoke ([TC-07](06-driver-and-toolchain.md)): zlib, bzip2, xz, sqlite, lua, zstd, libpng, libjpeg-turbo (no-asm), expat and pcre2 built with their own build systems and running their own test suites in portable mode.
 - [ ] **WG-08** (M, P1) Stability: a 24-hour soak of threaded decoding with RSS and descriptor-count monitoring, plus `ulimit` behaviors (stack, open files).
-- [ ] **WG-09** (S, P1) `docs/dev/gates.md`: which suites run on PR, nightly and release, with thresholds, mapped to the runner tags in FD-12.
+- [x] **WG-09** (S, P1) `docs/dev/gates.md`: which suites run on PR, nightly and release, with thresholds, mapped to the runner tags in FD-12. — **Done** (2026-11-01): [dev/gates.md](../dev/gates.md) lists the pull-request gate, the four nightly jobs (integration, conformance, FATE, `xp`), the release workflow and the private SPEC runner, with each suite's threshold, its variable in `.github/workflows/ci.yml` and the current rate. The thresholds follow a policy [proposed for the owner](decisions.md#proposed-for-the-owner-2026-11-01-m9): each suite's lowest group rate rounded down to a whole percent.
 
 ## Exit criteria for M9
 

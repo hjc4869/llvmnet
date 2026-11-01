@@ -50,6 +50,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - `tests/c-testsuite.sh` runs c-testsuite's single-exec programs, pinned by hash in `scripts/sources.lock`, against native builds (WG-02).
 - `tests/flang-rt-unittests.sh` runs flang-rt's own gtest unit tests natively and in portable mode, one process per test; `LIBCXX_NATIVEAOT=1 tests/libcxx-conformance.sh` runs a libc++ subset as NativeAOT executables; the conformance suites run in their own nightly job, each against a threshold (WG-03).
 - `tests/ffmpeg-fate.sh` (tag `fate`) runs ffmpeg's FATE suite against native and portable builds of the real `ffmpeg` and `ffprobe`, with the samples verified against `tests/ffmpeg/fate-suite.sha256`, in its own nightly job (WG-04).
+- `docs/dev/gates.md` lists the suites that run on pull requests, nightly and on release, and their thresholds (WG-09).
 - `docs/user/abi.md` states the frozen `dotnet64-v2` contract, and `tests/abi-freeze.sh` (core) fails when its header set or data layout changes or an object compiled at the freeze stops linking or behaving the same (RL-02).
 - `SECURITY.md` says what llvmnet does not protect against and how to report a vulnerability; `docs/user/support.md` gives the supported hosts, the .NET and LLVM bands, compatibility between versions, and the support and deprecation policy (RL-08).
 
