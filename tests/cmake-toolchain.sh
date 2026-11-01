@@ -6,7 +6,8 @@
 # cannot read llvmnet's bitcode objects or launchers. Probes link and run programs (TC-07), so their results must equal
 # those of a native clang-22 configure of the same project. UNIX is set; LLVMNET_RUNTIME selects the mode, also in a
 # directory that resets CMAKE_C_FLAGS; a SHARED target is an archive under its Linux names that contains its static
-# dependencies, so a SHARED and a STATIC target with one output name do not collide. The C programs run in both modes,
+# dependencies, so a SHARED and a STATIC target with one output name do not collide, and a program links either. The C
+# programs run in both modes,
 # the C++ program in portable mode (system-mode C++ needs the optional libstdc++ archive, docs/user/modes.md).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
@@ -60,6 +61,8 @@ target_link_libraries(twice PRIVATE sum)
 target_link_libraries(twice_static PRIVATE sum)
 add_executable(static_probe twice-main.c)
 target_link_libraries(static_probe PRIVATE twice_static)
+add_executable(shared_probe twice-main.c)
+target_link_libraries(shared_probe PRIVATE twice)
 if(PROBE_CXX)
     add_executable(cxx_probe main.cpp)
     target_compile_features(cxx_probe PRIVATE cxx_std_20)
@@ -98,6 +101,7 @@ for runtime in portable system; do
     test -f "$build/CMakeFiles/sum.dir/sum.c.o"
     test "$("$build/c_probe")" == "C 201112 42"
     test "$("$build/static_probe")" == "twice 42"
+    test "$("$build/shared_probe")" == "twice 42"
     test "$("$build/flags/mode")" == "$runtime"
     # The SHARED library: an archive under its Linux names, beside the STATIC one, with the member of its PRIVATE dependency.
     test -L "$build/libtwice.so" && test -L "$build/libtwice.so.1" && test -f "$build/libtwice.so.1.2.3" && test -f "$build/libtwice.a"

@@ -7,7 +7,9 @@ Build host: Linux x86-64 (Debian 13), .NET SDK 10.0.403, LLVM/Clang 22.1.8, CMak
 - **The CMake platform `LlvmNet`** (`cmake/Platform/LlvmNet.cmake`) replaces `Generic`. `UNIX` is set without the host's search paths, and `SHARED` and `MODULE` targets become bitcode archives under their Linux names that hold the members of their static dependencies (`cmake/llvmnet-rules.cmake`). C++20 module scanning is off.
 - **`-DLLVMNET_RUNTIME=portable|system`** puts the mode into the compiler command (`CMAKE_C_COMPILER` is a list), so it reaches probes and directories that reset `CMAKE_C_FLAGS`.
 
-Scratch scripts for the comparisons below ran this commit's `bin/` and `cmake/` against the survey's sources (`artifacts/oss`, read-only) and wrote only to a scratch directory.
+**Dependency on TC-19.** A program links a `SHARED` target's archive by its path (`libz.so.1.3.2`), which needs the linker to recognize archives by their content. TC-19 does that in commit `d4895c9` (branch `claude/infallible-yonath-0f316d`, TC-19 and TC-20), which the owner approved merging into this branch (merge `e655c72`). This branch must therefore reach master after, or together with, that commit.
+
+Scratch scripts for the comparisons below ran this branch's `bin/` and `cmake/`, after the merge, against the survey's sources (`artifacts/oss`, read-only), and wrote only to a scratch directory.
 
 ## The survey's reproducers
 
@@ -28,18 +30,20 @@ Native is `clang-22` with the same options. Probe results are the `HAVE_*`, `SIZ
 
 | Library | Build system and options | Result | Configure time (native) |
 | --- | --- | --- | --- |
-| zlib 1.3.2 | CMake, upstream defaults (`ZLIB_BUILD_SHARED=ON`), tests on | configures; all 9 probe entries equal native | 21.2 s (0.6 s) |
-| libxml2 2.15.3 | CMake, the survey's options without `-DIconv_IS_BUILT_IN=TRUE` | configures, iconv found built in; one difference, `getentropy`: libxml2 looks for it in `<sys/random.h>`, where musl does not declare it (musl declares it in `<unistd.h>`), so a native musl build gets the same answer | 23.7 s (0.8 s) |
-| libjpeg-turbo 3.1.3 | CMake, defaults (shared and static) with `WITH_SIMD=OFF` | configures; probe entries equal native, except that the project skips its `RIGHT_SHIFT_IS_UNSIGNED` run test when cross-compiling and sets the same answer, 0 | 27.8 s (1.1 s) |
-| LibRaw 0.22.2 | autotools, the survey's `jpeg` variant without the cache seed `ac_cv_lib_jpeg_jpeg_mem_src=yes` | detects JPEG (`-DUSE_JPEG -DUSE_JPEG8`, as native). Other differences: autoconf's C23 test fails because musl lacks `nullptr_t` (LC-32), so C11 is used; libtool prints `rm: cannot remove 'conftest.llvmnet': Is a directory`, with the same results | 25.3 s (2.7 s) |
-| ffmpeg 9.0.2 | the FATE harness's options, configure unpatched | every `check_func` result equals native: `mkstemp`, `mmap`, `isatty` and the other functions the unpatched probe used to miss are found. The `config.h` differences are portable-mode facts: no x86 intrinsics or inline assembly (`HAVE_MM_EMPTY`, `HAVE_EBP_AVAILABLE`), no Linux kernel headers (`asm/types.h`, `linux/perf_event.h`, `sys/soundcard.h`, V4L2), and musl's `ioctl(int, int, ...)` (`HAVE_IOCTL_POSIX`) | 2 min 35 s (9.3 s) |
+| zlib 1.3.2 | CMake, upstream defaults (`ZLIB_BUILD_SHARED=ON`), tests on | configures; all 9 probe entries equal native | 3.9 s (0.5 s) |
+| libxml2 2.15.3 | CMake, the survey's options without `-DIconv_IS_BUILT_IN=TRUE` | configures, iconv found built in; one difference, `getentropy`: libxml2 looks for it in `<sys/random.h>`, where musl does not declare it (musl declares it in `<unistd.h>`), so a native musl build gets the same answer | 3.8 s (0.5 s) |
+| libjpeg-turbo 3.1.3 | CMake, defaults (shared and static) with `WITH_SIMD=OFF` | configures; probe entries equal native, except that the project skips its `RIGHT_SHIFT_IS_UNSIGNED` run test when cross-compiling and sets the same answer, 0 | 5.1 s (0.7 s) |
+| LibRaw 0.22.2 | autotools, the survey's `jpeg` variant without the cache seed `ac_cv_lib_jpeg_jpeg_mem_src=yes` | detects JPEG (`-DUSE_JPEG -DUSE_JPEG8`, as native). Other differences: autoconf's C23 test fails because musl lacks `nullptr_t` (LC-32), so C11 is used; libtool prints `rm: cannot remove 'conftest.llvmnet': Is a directory`, with the same results | 9.3 s (2.4 s) |
+| ffmpeg 9.0.2 | the FATE harness's options, configure unpatched | every `check_func` result equals native: `mkstemp`, `mmap`, `isatty` and the other functions the unpatched probe used to miss are found. The `config.h` differences are portable-mode facts: no x86 intrinsics or inline assembly (`HAVE_MM_EMPTY`, `HAVE_EBP_AVAILABLE`), no Linux kernel headers (`asm/types.h`, `linux/perf_event.h`, `sys/soundcard.h`, V4L2), and musl's `ioctl(int, int, ...)` (`HAVE_IOCTL_POSIX`) | 56 s (9.4 s) |
 | a Meson project | `has_function` for 6 functions, with and without a prefix; `has_header_symbol`, `sizeof`, `links`, `run`, `find_library('m')` | all 17 results equal native | |
+
+A probe that links costs about 0.25 s with TC-20's linear link. Before the merge it cost about 1.5 s, and the same configures took 21.2 s (zlib), 23.7 s (libxml2), 27.8 s (libjpeg-turbo), 25.3 s (LibRaw) and 2 min 35 s (ffmpeg), with the same results.
 
 llvm-test-suite 22.1.8 configured with the old and the new toolchain file in portable mode: identical compile and link flags. Two probe results changed. `re_comp` is no longer found, because musl does not have it, so `Prolangs-C/archie-client` and `Prolangs-C/plot2fig` are no longer built in portable mode. Both were classified `exclusion-prototype` failures, so the portable count goes from 2,049 to 2,047 tests, and the rate without exclusions is unchanged. `FindOpenMP` now reads the OpenMP version (5.1, `202011`).
 
 ## Shared libraries built and run
 
-A program links a `SHARED` target's archive by its path (`libz.so.1.3.2`), which needs the linker to recognize archives by content. TC-19 does that in commit `d4895c9` (branch `claude/infallible-yonath-0f316d`, not merged here). With that commit's three source files applied to a scratch copy of this tree:
+On this branch, with `d4895c9` merged:
 
 | Library | Configuration | Build | Tests |
 | --- | --- | --- | --- |
@@ -47,15 +51,15 @@ A program links a `SHARED` target's archive by its path (`libz.so.1.3.2`), which
 | libxml2 | defaults (`BUILD_SHARED_LIBS=ON`), zlib from the survey's portable prefix | complete; `libxml2.so.16.1.3` holds zlib's members, which libxml2 links `PRIVATE` | 22 of 22 |
 | libjpeg-turbo | defaults (`ENABLE_SHARED=ON ENABLE_STATIC=ON`), `WITH_SIMD=OFF` | complete; `libjpeg.so.62.4.0` and `libturbojpeg.so.0.4.0` beside `libjpeg.a` and `libturbojpeg.a`, without the survey's duplicate-rule error | 662 of 662 (the survey's static-only build: 331) |
 
-Without TC-19, these configurations configure and build their libraries, and the links of programs against the shared archives fail (`libz.so.1.3.2:1:2: error: expected integer`).
+Without `d4895c9` these configurations still configure and build their libraries, but the links of programs against the shared archives fail (`libz.so.1.3.2:1:2: error: expected integer`). Before the merge, the same results came from a scratch copy of the tree with that commit's three source files applied.
 
 ## Tests
 
 - `tests/configure-probes.sh` (core) links the probes of autoconf (`AC_CHECK_FUNC`/`AC_CHECK_LIB`, also Meson's `has_function`), ffmpeg (`check_func`) and CMake (`CheckFunctionExists.c`) for C library functions, a variadic function, `setjmp` and `longjmp`, system-mode adapters, a function in a bitcode archive and two functions that exist nowhere. Each of the 26 probes must link with llvmnet exactly when it links with `clang-22`, in both modes. It also checks that four of them trap when run, that `-w` silences the warning, and that a contradicting call through a prototype with parameters is still rejected.
-- `tests/cmake-toolchain.sh` (toolchain) configures a project with 13 probe results natively and in both modes and requires equal results. It checks `UNIX`, a directory that resets `CMAKE_C_FLAGS` (the program reports the mode `LLVMNET_RUNTIME` selected), and a `SHARED` and a `STATIC` library with one output name: the shared one an archive under `libtwice.so.1.2.3` with its links and the member of its `PRIVATE` dependency, the static one linked into a program that runs.
+- `tests/cmake-toolchain.sh` (toolchain) configures a project with 13 probe results natively and in both modes and requires equal results. It checks `UNIX`, a directory that resets `CMAKE_C_FLAGS` (the program reports the mode `LLVMNET_RUNTIME` selected), and a `SHARED` and a `STATIC` library with one output name. The shared one must be an archive under `libtwice.so.1.2.3`, with its links and the member of its `PRIVATE` dependency, and a program linked against each library must run.
 - `tests/ir.sh`: the rejected fixture `used-void-return.ll` calls through a prototype with a parameter, since its old zero-argument call is now the probe shape.
 
-The gate, `tests/run.sh --tag core --tag toolchain --exclude-tag slow` in a 24 GB scope, passed 95 of 95 tests in 742 s, `configure-probes` in 64 s and `cmake-toolchain` in 87 s.
+The gate, `tests/run.sh --tag core --tag toolchain --exclude-tag slow` in a 24 GB scope, passed 95 of 95 tests on this branch with `d4895c9` merged, in 287 s (`configure-probes` 11 s, `cmake-toolchain` 16 s). Before the merge it passed 95 of 95 in 742 s.
 
 ## What this does not show
 
