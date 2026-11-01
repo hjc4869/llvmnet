@@ -42,6 +42,20 @@ for optimization in 0 3; do
     diff -u "$output/futures-native.txt" "$target-aot.txt"
     printf 'PASS: upstream C++ futures O%s promises, waits, errors and thread-exit results in JIT/NativeAOT\n' "$optimization"
 done
+for standard in c++20 c++23; do
+    clang++-22 -std="$standard" -pthread -O2 "$root/tests/cpp/cxx20.cpp" -o "$output/$standard-native"
+    timeout 30 "$output/$standard-native" > "$output/$standard-native.txt"
+    for optimization in 0 2; do
+        target="$output/$standard-O$optimization"
+        "$root/bin/llvmnet" --runtime=system -std="$standard" -O"$optimization" "$root/tests/cpp/cxx20.cpp" "$archive" -o "$target.dll"
+        timeout 30 dotnet "$target.dll" > "$target.txt"
+        diff -u "$output/$standard-native.txt" "$target.txt"
+    done
+done
+"$root/bin/llvmnet" --runtime=system --nativeaot -std=c++20 -O2 "$root/tests/cpp/cxx20.cpp" "$archive" -o "$output/c++20-aot"
+timeout 30 "$output/c++20-aot" > "$output/c++20-aot.txt"
+diff -u "$output/c++20-native.txt" "$output/c++20-aot.txt"
+printf 'PASS: upstream C++20 stringstream::str(), format, atomic waits, osyncstream and time zones, and C++23 println, in JIT/NativeAOT\n'
 clang++-22 -std=c++14 -O3 "$root/tests/cpp/random-device.cpp" -o "$output/random-device-native"
 timeout 30 "$output/random-device-native" > "$output/random-device-native.txt"
 for optimization in 0 3; do

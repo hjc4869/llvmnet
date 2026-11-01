@@ -53,6 +53,8 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - `docs/dev/gates.md` lists the suites that run on pull requests, nightly and on release, and their thresholds (WG-09).
 - `docs/user/abi.md` states the frozen `dotnet64-v2` contract, and `tests/abi-freeze.sh` (core) fails when its header set or data layout changes or an object compiled at the freeze stops linking or behaving the same (RL-02).
 - `SECURITY.md` says what llvmnet does not protect against and how to report a vulnerability; `docs/user/support.md` gives the supported hosts, the .NET and LLVM bands, compatibility between versions, and the support and deprecation policy (RL-08).
+
+- The optional system C++ archive (`scripts/build-system-cxx.sh`) includes libstdc++'s `src/c++20` members and the C++17 floating-point `to_chars`/`from_chars`, so C++20's `stringstream::str()`, `std::format`, time zones, atomic waits and `osyncstream` link in system mode (SA-11).
 - The x86 spin-wait hint (`_mm_pause`, which libstdc++'s atomic waits use) and the SSE fences translate; compiling a unit with any other x86 target intrinsic warns, naming it and its function, and the link error names it as an x86 intrinsic with the way out (SA-12).
 
 ### Changed

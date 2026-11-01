@@ -70,7 +70,7 @@ By default, a void call to a translated function with fewer arguments than its d
 
 ## Optional System C++ Library
 
-[../../scripts/build-system-cxx.sh](../../scripts/build-system-cxx.sh) compiles selected, unmodified libstdc++ 16 sources to system-mode bitcode against the matching host headers. The archive provides streams, locales, containers, threads, futures, `random_device`, regular expressions, demangling and `std::filesystem`. Obtain the libstdc++ source of the host's GCC 16 release separately, for example the `libstdc++-v3`, `libiberty` and `include` directories of Debian's `gcc-16-source` package.
+[../../scripts/build-system-cxx.sh](../../scripts/build-system-cxx.sh) compiles selected, unmodified libstdc++ 16 sources to system-mode bitcode against the matching host headers. The archive provides streams, locales, containers, threads, futures, `random_device`, regular expressions, demangling and `std::filesystem`, and from C++20 the members libstdc++ builds in `src/c++20`: the C++20 overloads its headers declare as extern templates (`stringstream::str() const &`, the formatters), `std::format` with floating-point values, time zones from the embedded database or `/usr/share/zoneinfo`, atomic waits, semaphores and latches, and synchronized output streams. C++23's `std::print` needs nothing more on Linux; `std::stacktrace` and the other members of `libstdc++exp` are not included. Obtain the libstdc++ source of the host's GCC 16 release separately, for example the `libstdc++-v3`, `libiberty` and `include` directories of Debian's `gcc-16-source` package.
 
 ```sh
 bash scripts/build-system-cxx.sh artifacts/vendor/gcc-16.2.0/libstdc++-v3
