@@ -30,6 +30,7 @@ Further limits of the translation:
 - A function with very many aggregate values or `setjmp` sites can exceed the CLR's limits on locals, and a very large function runs without JIT optimization; `--diagnose-limits` reports both (BE-25, BE-26).
 - Emitted assemblies carry no debug information yet, so stack traces show LLVM symbol names without source lines; `-g` gives compiler diagnostics a `file:line:col` location (BE-28).
 - Native code cannot call a translated variadic or aggregate callback (system mode, SA-02).
+- A conservative garbage collector that finds its roots by scanning the C stack and the registers `setjmp` saved (Boehm GC, SIOD and similar interpreters) does not see pointers that translated code keeps in CIL locals and evaluation-stack slots, so it can free live objects; such a collector needs its roots registered explicitly (found by llvm-test-suite's SIOD, WG-01).
 """
 
 PORTABLE = """## Portable mode

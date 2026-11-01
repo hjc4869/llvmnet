@@ -1,0 +1,68 @@
+# Classification for tests/llvm-test-suite.sh (WG-01, WG-02). Tab-separated rows of two kinds:
+#   platform <directory> <reason>
+#       Portable code sees neither __linux__ nor __unix__ (ADR-14). The programs below choose their platform code by
+#       those macros, so they build with -D__linux__ -D__unix__ -Dlinux -Dunix, as the SPEC benchmarks in the same
+#       position do (docs/dev/spec.md, "Linux platform detection").
+#   fail <mode glob> <test glob> <class> <reason>
+#       A known failure. The first matching row classifies it. Classes ending in "not-applicable" and starting with
+#       "exclusion" are left out of the adjusted pass rate:
+#         x86-not-applicable     the test exercises the x86 instruction set or x86 macros, which the portable target
+#                                does not have by design (its data model is x86-64's, its code is CIL)
+#         undefined-not-applicable  the test reads memory it never initialized, so its result depends on what the
+#                                allocator hands out; it passes natively because a fresh heap is zero-filled
+#         exclusion-fork         fork, which stays ENOSYS (owner decision 2026-10-31)
+#         exclusion-glibc        glibc or libstdc++ behavior that musl and libc++ do not share (owner decision
+#                                2026-10-31, as for SPEC)
+#         exclusion-prototype    a call through a prototype that contradicts the definition, which llvmnet rejects
+#                                (owner decision 2026-10-31, as for SPEC)
+#       Every other class counts as a failure in both rates:
+#         limitation             a documented limitation of llvmnet (docs/user/limitations.md)
+#         backend-item           an open plan item, named in the reason
+# A failure no row matches is "unclassified" and fails the test.
+platform	MultiSource/Applications/siod	reads BSD's d_namlen from struct dirent without linux
+fail	portable	SingleSource/UnitTests/Vector/SSE/*	x86-not-applicable	SSE intrinsics
+fail	portable	SingleSource/UnitTests/X86/*	x86-not-applicable	x86 inline assembly
+fail	portable	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-990413-2	x86-not-applicable	x87 control-word inline assembly; the suite lists it as x86-only
+fail	portable	SingleSource/Regression/C/gcc-c-torture/execute/ieee/GCC-C-execute-ieee-copysign[12]	x86-not-applicable	compares the six padding bytes of a long double unless __x86_64__ is defined
+fail	system	MultiSource/Benchmarks/VersaBench/beamformer/beamformer	undefined-not-applicable	BeamFirSetup leaves buffer[0] uninitialized; in system mode glibc's heap is shared with the .NET runtime and reuses freed memory
+fail	system	SingleSource/UnitTests/Vector/SSE/*	limitation	x86 target intrinsics (llvm.x86.*) are not translated
+fail	system	MultiSource/Applications/minisat/minisat	limitation	inline assembly with instructions (x86 only; the portable build takes the generic path)
+fail	system	SingleSource/Regression/C++/EH/Regression-C++-exception_spec_test	limitation	the optional system libstdc++ archive leaves out std::set_unexpected
+fail	*	SingleSource/UnitTests/X86/*	limitation	inline assembly with instructions
+fail	*	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-990413-2	limitation	inline assembly with instructions
+fail	*	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-20040302-1	limitation	computed goto (indirectbr)
+fail	*	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-20071210-1	limitation	computed goto (indirectbr)
+fail	*	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-20071220-[12]	limitation	computed goto (indirectbr)
+fail	*	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-920302-1	limitation	computed goto (indirectbr)
+fail	*	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-920501-[45]	limitation	computed goto (indirectbr)
+fail	*	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-comp-goto-1	limitation	computed goto (indirectbr)
+fail	*	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-pr70460	limitation	computed goto (indirectbr)
+fail	*	SingleSource/Regression/C/Regression-C-2004-03-15-IndirectGoto	limitation	computed goto (indirectbr)
+fail	*	SingleSource/Benchmarks/Misc/evalloop	limitation	computed goto (indirectbr)
+fail	*	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-built-in-setjmp	limitation	__builtin_setjmp and __builtin_longjmp (llvm.eh.sjlj)
+fail	*	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-pr84521	limitation	__builtin_setjmp and __builtin_longjmp (llvm.eh.sjlj)
+fail	*	SingleSource/Regression/C/gcc-c-torture/execute/GCC-C-execute-pr17377	limitation	__builtin_return_address
+fail	*	MultiSource/UnitTests/Float/rounding/rounding	limitation	rounding modes other than to nearest (CIL has one)
+fail	*	SingleSource/Regression/C/Regression-C-float16-smoke	backend-item	BE-38: half-precision arithmetic
+fail	*	SingleSource/UnitTests/Float/classify	backend-item	BE-42: unsupported x87 encodings (pseudo-NaN, pseudo-infinity, unnormals) are read by value, not as NaN
+fail	*	MultiSource/Applications/siod/siod	limitation	a conservative garbage collector that scans the C stack and setjmp's registers for roots, which cannot see CIL locals
+fail	*	MultiSource/Benchmarks/PAQ8p/paq8p	exclusion-fork	fork
+fail	portable	MultiSource/Benchmarks/Prolangs-C++/city/city	exclusion-glibc	glibc's random() sequence (srandom(5))
+fail	portable	MultiSource/Applications/obsequi/Obsequi	exclusion-glibc	glibc's random() sequence (srandom(1)) seeds its hash keys
+fail	portable	MultiSource/Benchmarks/Ptrdist/ft/ft	exclusion-glibc	glibc's rand() sequence
+fail	portable	MultiSource/Benchmarks/MiBench/consumer-typeset/consumer-typeset	exclusion-glibc	catclose() on a failed catopen(), which glibc ignores and musl dereferences
+fail	portable	MultiSource/Applications/ClamAV/clamscan	exclusion-glibc	musl writes stdout's first line before it detects that stdout is not a terminal, so it precedes earlier stderr output
+fail	portable	MultiSource/Benchmarks/DOE-ProxyApps-C++/CLAMR/CLAMR	exclusion-glibc	<sys/queue.h>, which musl does not have (and a BSD fmemopen and no <sys/time.h> without __linux__)
+fail	portable	MultiSource/Benchmarks/MiBench/office-ispell/office-ispell	exclusion-glibc	chooses <termios.h> by __GLIBC__ and falls back to BSD's <sgtty.h>
+fail	portable	SingleSource/Regression/C++/EH/Regression-C++-exception_spec_test	exclusion-glibc	std::set_unexpected, removed in C++17, which libstdc++ still provides and libc++ does not
+fail	*	MultiSource/Applications/SPASS/SPASS	exclusion-prototype	symbol_Equal
+fail	*	MultiSource/Applications/lemon/lemon	exclusion-prototype	Configtable_clear
+fail	*	MultiSource/Benchmarks/MallocBench/gs/gs	exclusion-prototype	strupr
+fail	*	MultiSource/Benchmarks/Prolangs-C/archie-client/archie	exclusion-prototype	time
+fail	*	MultiSource/Benchmarks/Prolangs-C/assembler/assembler	exclusion-prototype	CHAR_TO_DIGIT
+fail	*	MultiSource/Benchmarks/Prolangs-C/loader/loader	exclusion-prototype	eoln
+fail	*	MultiSource/Benchmarks/Prolangs-C/plot2fig/plot2fig	exclusion-prototype	re_comp
+fail	*	MultiSource/Benchmarks/Prolangs-C/simulator/simulator	exclusion-prototype	INT
+fail	*	MultiSource/Benchmarks/Prolangs-C/unix-smail/unix-smail	exclusion-prototype	write
+fail	*	MultiSource/Benchmarks/mediabench/g721/g721encode/encode	exclusion-prototype	alaw2linear
+fail	*	MultiSource/Benchmarks/sim/sim	exclusion-prototype	fatalf

@@ -46,6 +46,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Empty `asm` statements whose one register output is tied to an input (`asm("" : "+r"(x))`, a common optimization barrier) yield that input in both modes; 12 gcc-c-torture tests use them (found by WG-02).
 - `llvm.vector.reduce.fmax`, `fmin`, `fmaximum` and `fminimum` without `nnan`, which a loop vectorized by `#pragma clang loop vectorize(enable)` produces, are folded lane by lane (BE-43).
 - A K&R-style `main(argc)` gets the argument count, as natively (found by WG-02).
+- `tests/llvm-test-suite.sh` builds llvm-test-suite's SingleSource and MultiSource, gcc-c-torture included, through the suite's own CMake and lit in portable, system and portable NativeAOT modes against native builds; `tests/conformance/llvm-test-suite.tsv` classifies every known failure, and an unclassified one fails the run (WG-01, WG-02).
 
 ### Changed
 
