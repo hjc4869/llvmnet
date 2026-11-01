@@ -1,0 +1,98 @@
+type char                   size  1 align  1
+type short                  size  2 align  2
+type int                    size  4 align  4
+type long                   size  8 align  8
+type long long              size  8 align  8
+type __int128               size 16 align 16
+type float                  size  4 align  4
+type double                 size  8 align  8
+type long double            size 16 align 16
+type void *                 size  8 align  8
+type size_t                 size  8 align  8
+type ptrdiff_t              size  8 align  8
+type wchar_t                size  4 align  4
+type wint_t                 size  4 align  4
+type int_fast16_t           size  8 align  8
+type int_fast32_t           size  8 align  8
+type uint_fast32_t          size  8 align  8
+type intmax_t               size  8 align  8
+type max_align_t            size 32 align 16
+type off_t                  size  8 align  8
+type time_t                 size  8 align  8
+type clock_t                size  8 align  8
+type fpos_t                 size 16 align  8
+type mbstate_t              size  8 align  4
+type va_list                size 24 align  8
+type jmp_buf                size 200 align  8
+type sigjmp_buf             size 200 align  8
+type sigset_t               size 128 align  8
+type struct stat            size 144 align  8
+type struct timespec        size 16 align  8
+type struct timeval         size 16 align  8
+type struct tm              size 56 align  8
+type struct dirent          size 280 align  8
+type pthread_t              size  8 align  8
+type pthread_attr_t         size 56 align  8
+type pthread_mutex_t        size 40 align  8
+type pthread_mutexattr_t    size  4 align  4
+type pthread_cond_t         size 48 align  8
+type pthread_rwlock_t       size 56 align  8
+type pthread_key_t          size  4 align  4
+type pthread_once_t         size  4 align  4
+type struct sigaction       size 152 align  8
+field struct stat.st_dev offset 0 size 8
+field struct stat.st_ino offset 8 size 8
+field struct stat.st_mode offset 24 size 4
+field struct stat.st_size offset 48 size 8
+field struct stat.st_mtim offset 88 size 16
+field struct timespec.tv_nsec offset 8 size 8
+field struct tm.tm_gmtoff offset 40 size 8
+field struct tm.tm_zone offset 48 size 8
+field struct dirent.d_name offset 19 size 256
+field struct sigaction.sa_mask offset 8 size 128
+value sizeof(((va_list *)0)[0][0]) 24
+value CHAR_MIN         -128
+value WCHAR_MIN        -2147483648
+value LDBL_MANT_DIG    64
+value LDBL_MAX_EXP     16384
+value LDBL_MIN_EXP     -16381
+value FLT_EVAL_METHOD  0
+value BUFSIZ           1024
+value PATH_MAX         4096
+value NAME_MAX         255
+value FILENAME_MAX     4096
+value EOF              -1
+value RAND_MAX         2147483647
+value CLOCKS_PER_SEC   1000000
+value NSIG             65
+value SIGABRT          6
+value SIGSEGV          11
+value SIGUSR1          10
+value SIGCHLD          17
+value EPERM            1
+value ENOENT           2
+value EINTR            4
+value EIO              5
+value EBADF            9
+value ECHILD           10
+value EAGAIN           11
+value ENOMEM           12
+value EACCES           13
+value EEXIST           17
+value ENOTDIR          20
+value EISDIR           21
+value EINVAL           22
+value EMFILE           24
+value ENOSPC           28
+value ESPIPE           29
+value EPIPE            32
+value EDOM             33
+value ERANGE           34
+value ENAMETOOLONG     36
+value ENOSYS           38
+value ENOTEMPTY        39
+value ELOOP            40
+value EOVERFLOW        75
+value EOPNOTSUPP       95
+value ETIMEDOUT        110
+value EILSEQ           84

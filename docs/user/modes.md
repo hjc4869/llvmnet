@@ -38,6 +38,8 @@ The LLVM target is a fixed `x86_64-unknown-none` layout that defines the data AB
 | errno and error text | Linux numbering; musl's messages |
 | System services | Linux x86-64 system-call semantics implemented over .NET ([dev/host-abi.md](../dev/host-abi.md)) |
 
+[abi.md](abi.md) is the frozen contract in full, and `tests/abi-freeze.sh` keeps it from changing.
+
 The same image runs on every supported host ([Supported hosts](deployment.md#supported-hosts)). Programs see Linux semantics and structure layouts on every host. Paths, file-system capabilities, time-zone data and available resources still depend on the host, and services .NET cannot provide (`fork`, `exec`, sockets, hard links and others) fail with the errors [dev/host-abi.md](../dev/host-abi.md) lists; [its last section](../dev/host-abi.md#hosts-other-than-linux) describes what Windows and macOS do differently.
 
 Native libraries cannot be linked: `--system-library` is rejected, and a function the sysroot does not provide is a link error. Recompile dependencies in portable mode or call them through a managed interface. Portable libraries (`-shared`) do not link the C library, because musl's process state (thread pointer, heap, stdio) belongs to the program image; a library that calls the C library must be linked into the program as bitcode. Use scalar and pointer `CExport` signatures across assemblies; aggregate signatures are not yet a stable API.

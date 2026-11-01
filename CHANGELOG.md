@@ -48,6 +48,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - A K&R-style `main(argc)` gets the argument count, as natively (found by WG-02).
 - `tests/llvm-test-suite.sh` builds llvm-test-suite's SingleSource and MultiSource, gcc-c-torture included, through the suite's own CMake and lit in portable, system and portable NativeAOT modes against native builds; `tests/conformance/llvm-test-suite.tsv` classifies every known failure, and an unclassified one fails the run (WG-01, WG-02).
 - `tests/c-testsuite.sh` runs c-testsuite's single-exec programs, pinned by hash in `scripts/sources.lock`, against native builds (WG-02).
+- `docs/user/abi.md` states the frozen `dotnet64-v2` contract, and `tests/abi-freeze.sh` (core) fails when its header set or data layout changes or an object compiled at the freeze stops linking or behaving the same (RL-02).
 
 ### Changed
 
