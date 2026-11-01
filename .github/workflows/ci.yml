@@ -117,11 +117,6 @@ jobs:
           export FUZZ_SEEDS=500 FUZZ_FIRST_SEED=$(( $(date -u +%s) / 86400 * 1000 ))
           tests/run.sh --no-build --tag fuzz --timeout-scale 2
           cp -a artifacts/tests/results artifacts/tests/results-fuzz
-      - name: Conformance suites (libc-test LC-19, libc++ CX-08, FCVS and gfortran FT-06)
-        if: always()
-        run: |
-          tests/run.sh --no-build --tag conformance --timeout-scale 2
-          cp -a artifacts/tests/results artifacts/tests/results-conformance
       # PF-01: the benchmark set against native builds, with the regression thresholds against tests/perf/baseline.tsv.
       # It runs last, alone, so the measurements are not disturbed; a confirmed regression fails the job. Three runs
       # per engine instead of five keep it near an hour on the runner; the thresholds judge each benchmark's fastest run.
@@ -148,12 +143,75 @@ jobs:
           path: |
             artifacts/tests/results-*
             artifacts/tests/fuzz
-            artifacts/tests/libc-conformance/*.tsv
-            artifacts/tests/libc-conformance/failures.txt
-            artifacts/tests/libcxx-conformance/summary.tsv
-            artifacts/tests/libcxx-conformance/failures.txt
-            artifacts/tests/fortran-conformance/*.tsv
-            artifacts/tests/fortran-conformance/failures.txt
+          if-no-files-found: ignore
+
+  # WG-01 to WG-03 (docs/dev/gates.md): the upstream conformance suites, in their own job so the nightly integration
+  # job stays within its time limit. Each suite fails below its threshold; the thresholds are the gate's, set here.
+  conformance:
+    name: Nightly conformance (Linux x64)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 360
+    env:
+      LIBC_THRESHOLD: "88"
+      LIBCXX_THRESHOLD: "97"
+      FORTRAN_THRESHOLD: "99"
+      C_TESTSUITE_THRESHOLD: "99"
+      LLVM_TEST_SUITE_THRESHOLD: "98"
+      LLVM_TEST_SUITE_JOBS: "4"
+      FLANG_RT_UNITTESTS_THRESHOLD: "100"
+    steps:
+      - name: Install git
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install packages
+        run: bash scripts/ci/install-packages.sh --integration
+      - name: Mark the workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Hash the dependency inputs
+        id: deps
+        shell: bash
+        run: echo "hash=$(git ls-files -z '*.csproj' Directory.Build.props scripts/sources.lock | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            artifacts/vendor/downloads
+            artifacts/vendor/musl-native
+          key: deps-${{ runner.os }}-${{ steps.deps.outputs.hash }}
+      - name: Fetch pinned sources
+        run: scripts/fetch-sources.sh musl llvm-project llvm-test-suite libc-test c-testsuite
+      - name: Build
+        run: bash scripts/ensure-built.sh
+      # libc-test (LC-19), libc++ (CX-08), FCVS and the gfortran tests (FT-06), flang-rt's unit tests, c-testsuite and
+      # llvm-test-suite with gcc-c-torture (WG-01, WG-02) in portable, system and portable NativeAOT modes.
+      - name: Conformance suites
+        run: |
+          tests/run.sh --no-build --tag conformance --timeout-scale 2
+          cp -a artifacts/tests/results artifacts/tests/results-conformance
+      - name: libc++ under NativeAOT (CX-08 subset)
+        if: always()
+        run: |
+          LIBCXX_NATIVEAOT=1 LIBCXX_LIT_JOBS=2 bash tests/libcxx-conformance.sh
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-results
+          path: |
+            artifacts/tests/results-conformance
+            artifacts/tests/*-conformance*/summary.tsv
+            artifacts/tests/*-conformance*/failures.txt
+            artifacts/tests/libc-conformance/results.tsv
+            artifacts/tests/fortran-conformance/results.tsv
+            artifacts/tests/c-testsuite/*.tsv
+            artifacts/tests/c-testsuite/failures.txt
+            artifacts/tests/llvm-test-suite/*.tsv
+            artifacts/tests/llvm-test-suite/failures.txt
+            artifacts/tests/flang-rt-unittests/*.tsv
+            artifacts/tests/flang-rt-unittests/failures.txt
           if-no-files-found: ignore
 
   # XP-01 to XP-03: the same portable images the Linux job built and checked against native output run under the JIT

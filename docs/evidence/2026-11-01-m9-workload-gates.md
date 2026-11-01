@@ -51,3 +51,18 @@ Building the suite found these defects, each fixed in its own commit with a test
 - System mode: a call through a K&R declaration (cfrac's `extern int free();` calling `void free(void *)`) produced invalid IL; and `rand()` before any `srand()` gave a time-seeded sequence, because CoreCLR calls `srandom(time)` at startup and a system-mode program shares the C library with it (ft's graphs differed on every run) (`5b82538`).
 
 It also found a limitation now on the limitations page: a conservative garbage collector that scans the C stack and the registers `setjmp` saved, as SIOD's does, cannot see pointers held in CIL locals. And one open item: BE-42, x87 encodings the 80387 rejects (pseudo-NaNs, pseudo-infinities, unnormals) are read by value, while hardware and LLVM's constant folder read them as NaN (`Float/classify`).
+
+## WG-03: library suites with pass-rate tracking
+
+The library suites of LC-19, CX-08 and FT-06 already ran in the nightly job, but reported only (each threshold defaulted to 0), flang-rt's own unit tests were not run, and libc++ never ran under NativeAOT. Now:
+
+- The suites run in their own nightly job, `conformance`, so the integration job keeps its time limit, and each runs against a threshold set in the workflow ([dev/gates.md](../dev/gates.md)).
+- **flang-rt's unit tests** (`tests/flang-rt-unittests.sh`): the 34 test files of `flang-rt/unittests/Runtime` with LLVM's googletest built without LLVMSupport (`GTEST_NO_LLVM_SUPPORT`), natively with `clang++-22` against Debian's flang-rt 22.1.8 and in portable mode against the sysroot's. Each of the 253 tests runs in its own process, because a test that forks aborts the whole program in portable mode. gtest has no death tests on a target it does not recognize, so `tests/support/gtest-without-death-tests.h` turns each `EXPECT_DEATH` and `EXPECT_EXIT` into a failure with the reason "death test (needs fork)".
+- **libc++ under NativeAOT** (`LIBCXX_NATIVEAOT=1 tests/libcxx-conformance.sh`): every test that links is published as a NativeAOT executable; the default subset is vector, the string constructors, futures, string streams and the numeric locale facets.
+
+| Suite | Passed | Counted | Rate | Left out |
+| --- | ---: | ---: | ---: | --- |
+| flang-rt unit tests, portable | 216 | 216 | 100% | 31 need `fork` (27 death tests, 4 asynchronous `EXECUTE_COMMAND_LINE`), 6 not compiled for an unrecognized operating system (`fdate`, `getlog`, `REAL(16)`) |
+| libc++ under NativeAOT (vector, string constructors, futures, string streams, numeric facets) | 327 | 328 | 99.7% | 3 unsupported; the failure, `futures.async/thread_create_failure`, is the one the JIT run has (it expects thread creation to fail under a limit .NET does not apply) |
+
+The first runs of the unit tests found two defects, fixed in their own commits with tests: portable `open` with `O_CREAT` and read-only access failed with `EINVAL` (`14d0bba`), and `EXECUTE_COMMAND_LINE` reported `CMDSTAT` 7 ("Killed by signal") after every successful command, because flang-rt passed `system()`'s status to musl's `WIFSIGNALED` as a 64-bit integer (`fe0a79a`, `ports/flang-rt/execute-status.patch`).
