@@ -26,6 +26,7 @@ Programs are compiled through Clang and Flang 22 and translated from LLVM IR to 
 Further limits of the translation:
 
 - Vector IR runs as scalar code: LLVM's vectorizers are off by default and their output is scalarized (ADR-10); the opt-in `--simd128` header path maps `wasm_simd128.h` intrinsics to `Vector128` ([simd128.md](simd128.md)).
+- x86 target intrinsics (`llvm.x86.*`, from SSE and AVX code paths) are not translated, apart from `_mm_pause` and the SSE fences: compiling a unit that contains one warns, and linking a program that reaches it fails. System mode predefines `__SSE__` and `__SSE2__`, so libraries take such paths there; `-U__SSE__ -U__SSE2__` or the library's own switch selects its C path ([modes.md](modes.md#system-abi)).
 - `longjmp` cannot cross native frames (system mode), and an external thread-local global needs a bitcode definition (SA-03).
 - A function with very many aggregate values or `setjmp` sites can exceed the CLR's limits on locals, and a very large function runs without JIT optimization; `--diagnose-limits` reports both (BE-25, BE-26).
 - Emitted assemblies carry no debug information yet, so stack traces show LLVM symbol names without source lines; `-g` gives compiler diagnostics a `file:line:col` location (BE-28).

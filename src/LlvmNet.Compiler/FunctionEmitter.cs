@@ -1372,6 +1372,17 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Call, typeof(Numeric).GetMethod(nameof(Numeric.CycleCounter))!);
             return;
         }
+        if (name == "llvm.x86.sse2.pause")
+        {
+            Il.Emit(OpCodes.Ldc_I4_1);
+            Il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.SpinWait))!);
+            return;
+        }
+        if (name is "llvm.x86.sse2.mfence" or "llvm.x86.sse2.lfence" or "llvm.x86.sse.sfence")
+        {
+            Il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.MemoryBarrier))!);
+            return;
+        }
         if (name is "llvm.trap" or "llvm.debugtrap" or "llvm.ubsantrap")
         {
             Il.Emit(OpCodes.Call, typeof(Memory).GetMethod(nameof(Memory.Unreachable))!);
@@ -1887,8 +1898,23 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Call, helper);
             return;
         }
+        if (name.StartsWith("llvm.x86.", StringComparison.Ordinal))
+            throw new NotSupportedException(X86IntrinsicMessage(name, Compiler.Host is not null));
         throw new NotSupportedException($"Unsupported intrinsic: {name}");
     }
+
+    /// <summary>
+    /// The x86 target intrinsics the backend translates: the spin-wait hint, which libstdc++'s atomic waits use on
+    /// x86-64, and the SSE fences. They carry no vector data; every other llvm.x86 intrinsic comes from an SSE or AVX
+    /// code path and is rejected when a module is translated, after a warning when its unit was compiled (Driver).
+    /// </summary>
+    internal static bool TranslatesX86Intrinsic(string name) =>
+        name is "llvm.x86.sse2.pause" or "llvm.x86.sse2.mfence" or "llvm.x86.sse2.lfence" or "llvm.x86.sse.sfence";
+
+    internal static string X86IntrinsicMessage(string name, bool system, bool compiling = false) =>
+        $"x86 target intrinsic {name} is not translated{(compiling ? ", so linking a program that reaches it fails" : "")}; build the code's portable C path instead" + (system
+            ? " (system mode predefines __SSE__ and __SSE2__ as native x86-64 does, and libraries usually select their SSE paths by them: try -U__SSE__ -U__SSE2__ or the library's own SIMD option)"
+            : "");
 
     private unsafe void Aggregate(nint instruction, bool insert)
     {

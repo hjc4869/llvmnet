@@ -107,6 +107,9 @@ internal static unsafe class Llvm
     [DllImport(Library)] internal static extern nint LLVMGetFirstUse(nint value);
     [DllImport(Library)] internal static extern nint LLVMGetNextUse(nint use);
     [DllImport(Library)] internal static extern nint LLVMGetUser(nint use);
+    [DllImport(Library)] internal static extern nint LLVMIsAInstruction(nint value);
+    [DllImport(Library)] internal static extern nint LLVMGetInstructionParent(nint instruction);
+    [DllImport(Library)] internal static extern nint LLVMGetBasicBlockParent(nint block);
     [DllImport(Library)] internal static extern nint LLVMIsAConstantInt(nint value);
     [DllImport(Library)] internal static extern long LLVMConstIntGetSExtValue(nint value);
     [DllImport(Library)] internal static extern nint LLVMPrintValueToString(nint value);
