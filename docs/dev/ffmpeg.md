@@ -32,11 +32,10 @@ System-mode threads are native pthreads with managed adapters for callbacks and 
 
 ```sh
 bash tests/ffmpeg-threads.sh
-FFMPEG_THREADS_AOT=1 bash tests/ffmpeg-threads.sh
-FFMPEG_THREADS_SKIP_BUILD=1 FFMPEG_THREADS_AOT=1 bash tests/ffmpeg-threads.sh
+FFMPEG_THREADS_SKIP_BUILD=1 FFMPEG_THREADS_AOT=0 bash tests/ffmpeg-threads.sh
 ```
 
-The test builds both modes and compares threaded decodes under the JIT with single-thread hashes from the native decoder. `FFMPEG_THREADS_AOT=1` also publishes and runs both NativeAOT decoders, which needs the .NET NativeAOT tools. `FFMPEG_THREADS_SKIP_BUILD=1` reuses existing builds. `FFMPEG_THREADS_TIMEOUT` sets the per-process timeout (default 120 seconds). Generating the fixtures needs a host ffmpeg with the libx264, libx265, libvpx-vp9 and libaom-av1 encoders. Logs, fixtures, hashes and thread diagnostics go to `artifacts/tests/ffmpeg-threads/`.
+The test builds both modes and compares threaded decodes under the JIT and from both published NativeAOT decoders with single-thread hashes from the native decoder (WG-05); `FFMPEG_THREADS_AOT=0` checks the JIT only, for a host without the .NET NativeAOT tools. `FFMPEG_THREADS_SKIP_BUILD=1` reuses existing builds. `FFMPEG_THREADS_TIMEOUT` sets the per-process timeout (default 120 seconds). Generating the fixtures needs a host ffmpeg with the libx264, libx265, libvpx-vp9 and libaom-av1 encoders. Logs, fixtures, hashes and thread diagnostics go to `artifacts/tests/ffmpeg-threads/`.
 
 | Decoder | Thread modes | Thread counts | Drain and teardown |
 | --- | --- | --- | --- |

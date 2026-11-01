@@ -8,8 +8,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/ffmpeg-threads"
 mkdir -p "$output"
 timeout_seconds="${FFMPEG_THREADS_TIMEOUT:-120}"
+# WG-05: both ABIs under the JIT and as NativeAOT executables; FFMPEG_THREADS_AOT=0 checks the JIT only.
 engines=(jit)
-if [[ "${FFMPEG_THREADS_AOT:-0}" == 1 ]]; then engines+=(aot); fi
+if [[ "${FFMPEG_THREADS_AOT:-1}" == 1 ]]; then engines+=(aot); fi
 for runtime in system portable; do
     build="$root/artifacts/ffmpeg-browser-$runtime"
     if [[ "${FFMPEG_THREADS_SKIP_BUILD:-0}" != 1 ]]; then
@@ -21,7 +22,7 @@ for runtime in system portable; do
     fi
     test "$(<"$build/llvmnet-runtime")" == "$runtime"
     grep -q '^#define HAVE_PTHREADS 1$' "$build/config.h"
-    if [[ "${FFMPEG_THREADS_AOT:-0}" == 1 ]]; then
+    if [[ "${FFMPEG_THREADS_AOT:-1}" == 1 ]]; then
         "$root/bin/llvmnet" --runtime="$runtime" --nativeaot "$build/decode.bc" -o "$build/decode-aot" \
             >"$output/aot-$runtime.log" 2>&1
     fi
