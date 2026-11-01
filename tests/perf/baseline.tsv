@@ -3,6 +3,7 @@
 # this host's speed relative to the reference host (the geometric mean of the native times); see the script.
 # Host: AMD RYZEN AI MAX+ 395 w/ Radeon 8060S, 32 cores; .NET runtime 10.0.14; Debian clang version 22.1.8 (1+b2)
 # Commit: d2a2711-dirty; written 2026-10-31 17:55 UTC
+# float80 and printf (jit, aot): PF-14 run artifacts/bench/pf14-after, 2026-11-01 (Float80 without BigInteger)
 benchmark	engine	median_s	min_s
 alloca	native	0.2012	0.1936
 alloca	jit	0.3173	0.3078
@@ -47,8 +48,8 @@ fftbench	native	1.1697	1.1454
 fftbench	jit	1.0209	0.9929
 fftbench	aot	0.8620	0.8134
 float80	native	0.0059	0.0045
-float80	jit	1.6297	1.6106
-float80	aot	1.4240	1.3494
+float80	jit	0.3452	0.3430
+float80	aot	0.1709	0.1688
 functionobjects	native	1.8045	1.7852
 functionobjects	jit	2.8099	2.7672
 functionobjects	aot	2.2584	2.2244
@@ -122,8 +123,8 @@ perlin	native	0.9879	0.9504
 perlin	jit	0.9935	0.9824
 perlin	aot	1.0267	0.9800
 printf	native	0.9086	0.8856
-printf	jit	4.5893	4.5162
-printf	aot	4.5383	4.4642
+printf	jit	2.0228	2.0143
+printf	aot	2.0470	2.0205
 ptrdist-anagram	native	0.2676	0.2639
 ptrdist-anagram	jit	0.4554	0.4523
 ptrdist-anagram	aot	0.4089	0.3998

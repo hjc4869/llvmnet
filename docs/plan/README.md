@@ -30,6 +30,7 @@ Measurements are in [evidence/2026-11-01-m8-performance.md](../evidence/2026-11-
 - **PF-10.** A JIT hello world starts in 36 ms (from 39; any `dotnet program.dll` takes 17), NativeAOT in 2 ms like native. Invariant globalization turned out to break IANA time-zone names on Windows: the JIT keeps ICU, and NativeAOT executables for Windows, which had resolved `Europe/London` to UTC, keep it now too.
 - **PF-11.** NativeAOT uses 7 to 12 MB more memory than native; the JIT adds its runtime and generated code (28 MB, and 60 to 150 MB for large programs). GC settings make no difference to translated programs, whose data lives in native memory.
 - **PF-08.** The NativeAOT baseline (SSE2) has no `pshufb`, so the SIMD128 profile's shuffles run in software and it decodes more slowly than the scalar profile; `--aot-instruction-set x86-64-v3` (opt-in, as decided) makes the two equal. Whether `x86-64-v2`, which already has `pshufb`, should become the default for SIMD128 builds is proposed for the owner.
+- **PF-14.** `long double` arithmetic computes in 64- and 128-bit integers instead of `BigInteger` values, with the same results bit for bit: the Float80 microbenchmark went from 263 to 62 times native under the JIT and from 227 to 31 as NativeAOT, and printf, whose `%f` formatting computes in `long double`, from 5.2 to 2.2 times native. Pseudo-zeros are zeros in every operation now (dividing by one threw), and out-of-range conversions to `i128` saturate instead of throwing.
 - **PF-06 and PF-07 (in progress).** Rotates compile to the JIT's intrinsics (salsa20 as NativeAOT went from 8.0 to 1.05 times native) and dynamic PGO is off in `runtimeconfig.json` (6.6% faster). Over-limit functions fall back to MinOpts only in ffmpeg's H.264 decoder within the free set, costing it about a fifth of its JIT time; outlining them (BE-26) and a full review of JIT code remain.
 - **Found by the nightly thresholds.** The first full run after PF-04 flagged lpbench 2.6 times slower under the JIT: without `localsinit` the JIT's on-stack replacement code is slower, so only methods with `localloc` drop the flag now.
 - **M8 exit.** PF-01 and PF-02 are done and the benchmark table is published; the exit's nightly table on CI starts with the first GitHub run (FD-19).
@@ -160,7 +161,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M5 | 0.5 | done; flang-rt and portable OpenMP delivered (FT-08), 22 of 25 OpenMP speed entries pass, the rest excluded | 0 | 2026-10-31 |
 | M6 | 0.6 | exit items done on all three hosts; two weeks of green CI runs need GitHub (FD-19) | 0 | 2026-10-31 |
 | M7 | 0.7 | exit items done; signed packages from a tag need the repository on GitHub (FD-19) | 0 | 2026-10-31 |
-| M8 | 0.7 | exit items done (PF-01, PF-02, benchmark table published); the first GitHub run of the nightly benchmark job needs FD-19. P1: PF-03, 04, 05, 08, 10, 11, 13 done, PF-06 and PF-07 in progress | 0 | 2026-11-01 |
+| M8 | 0.7 | exit items done (PF-01, PF-02, benchmark table published); the first GitHub run of the nightly benchmark job needs FD-19. P1: PF-03, 04, 05, 08, 10, 11, 13, 14 done, PF-06 and PF-07 in progress | 0 | 2026-11-01 |
 | M9 | 1.0-rc | not started | 6 | 2026-10-30 |
 
 ### M0: Foundations
