@@ -123,7 +123,7 @@ Every option falls into one of four classes, per runtime mode:
 | `--help` | This list; docs/user/driver.md is the full reference |
 | `--version` | llvmnet's version, the LLVM version and the ABI tags, then the frontend's own version |
 | `--driver-mode=<mode>` | Frontend to use: gcc or clang (C), g++ or clang++ (C++), flang (Fortran), as the llvmnet-clang, llvmnet-clang++ and llvmnet-flang names do |
-| `-dumpmachine` | Frontend queries, answered by the selected frontend (also -dumpversion, -print-search-dirs, -print-resource-dir, -print-file-name=, -print-prog-name=, -print-target-triple) |
+| `-dumpmachine` | Frontend queries, answered by the selected frontend for the mode's target (x86_64-unknown-none in portable mode; also -dumpversion, -print-search-dirs, -print-resource-dir, -print-file-name=, -print-prog-name=, -print-target-triple, -print-libgcc-file-name) |
 
 ### Frontend options
 
@@ -199,7 +199,7 @@ The comma-separated parts of every `-Wl,` option and each `-Xlinker` value are c
 
 ## Link inputs
 
-A link takes objects (`.o`, `.bc`, `.ll`), archives (`.a`, or `-l` with `-L`) and, in system mode, native libraries (`--system-library`). Every input must carry the ABI tag of the link's runtime mode, which `llvmnet -c` records; an object of the other mode, or untagged LLVM IR, is rejected (`llvmnet --runtime=<mode> -x ir -c` tags IR). The rules:
+A link takes objects (`.o`, `.bc`, `.ll`), archives (`.a`, or `-l` with `-L`) and, in system mode, native libraries (`--system-library`). A file whose extension names no source language is linked by its content, as Clang hands such a file to the linker: an LLVM bitcode object or an archive under any name (CMake's Generic platform names objects `.obj`). Every input must carry the ABI tag of the link's runtime mode, which `llvmnet -c` records; an object of the other mode, or untagged LLVM IR, is rejected (`llvmnet --runtime=<mode> -x ir -c` tags IR). The rules:
 
 - **Objects** are always linked, in order. `-c` on a `.ll`, `.bc` or `.o` input produces an object for the mode (IR is compiled and tagged; an object keeps its tag, which must match).
 - **Archives** are archives of bitcode objects made with `llvmnet-ar` (LLVM's `llvm-ar`). A member is linked when it defines a symbol that is referenced and still undefined; the archives are rescanned until no member resolves anything more, in command-line order within each pass. The order of archives on the command line therefore never matters, as if every archive were inside one `--start-group`/`--end-group` pair (both markers are accepted). An undefined weak reference does not extract a member, as with a native linker. When two archives define the same symbol, the member of the archive named first is the one linked, and the other is left out unless another of its symbols is needed, in which case the link fails as a duplicate.

@@ -22,6 +22,9 @@ internal static class PortableAbi
             throw new DirectoryNotFoundException($"The portable sysroot is missing from {Sysroot}; build it with scripts/build-sysroot.sh.");
     }
 
+    /// <summary>The target triple the frontends compile portable code for; -dumpmachine reports it in portable mode.</summary>
+    internal const string Triple = "x86_64-unknown-none";
+
     internal static List<string> Arguments(IReadOnlyList<string> frontend, bool fortran, bool cpp)
     {
         // The driver's option table rejects the options that would change the ABI (-target, --sysroot, -m<...>,
@@ -33,7 +36,7 @@ internal static class PortableAbi
                 throw new ArgumentException($"{argument} cannot change the versioned portable ABI; use --runtime=system for a native target.");
         RequireSysroot();
         string include = Path.Combine(Sysroot, "include");
-        List<string> result = ["--target=x86_64-unknown-none", "-D__LLVMNET__=1", "-D__LLVMNET_PORTABLE__=1", "-D__LLVMNET_ABI_VERSION=2"];
+        List<string> result = ["--target=" + Triple, "-D__LLVMNET__=1", "-D__LLVMNET_PORTABLE__=1", "-D__LLVMNET_ABI_VERSION=2"];
         if (fortran) return result;
         // The fixed x86-64 data layout must not imply x86 instruction sets: portable code is scalar CIL, and headers
         // such as libc++'s size their SIMD helpers from these macros.

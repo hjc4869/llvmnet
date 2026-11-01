@@ -40,6 +40,9 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 
 - Benchmark harness `scripts/benchmark.py` (PF-01): 58 benchmarks (`tests/perf/benchmarks.tsv`: microbenchmarks, free `llvm-test-suite` programs, the ffmpeg decode harness at one and four threads) built natively, for the JIT and as NativeAOT from the same sources, outputs checked against native, medians compared with `tests/perf/baseline.tsv`; the nightly CI job fails on a confirmed regression. Method in `docs/dev/benchmarks.md`.
 - `--aot-instruction-set x86-64-v3` (x64 targets) compiles NativeAOT executables for AVX2-class CPUs; with it the SIMD128 ffmpeg profile's shuffles use `pshufb` instead of a software fallback (PF-08). Baseline stays the default.
+- The CMake toolchain file states the compiler identity CMake cannot read from bitcode objects and launchers (Clang of the bundled LLVM version, 8-byte little-endian pointers, `gnu17`/`gnu++17` defaults), so `CMAKE_SIZEOF_VOID_P`, compile features and `C_STANDARD` work; it is installed as `share/llvmnet/cmake/llvmnet.cmake`, as the user documentation said, with the Meson cross file as `share/llvmnet/meson/llvmnet.ini`, and finds the package's own drivers and archive tools. The checkout's `bin/` has the `llvmnet-clang`, `llvmnet-clang++` and `llvmnet-flang` aliases the package has (TC-07, found by WG-01).
+- A link input whose extension names no source language is linked by its content, as Clang hands such a file to the linker: an LLVM bitcode object or archive under any name, such as CMake's `.obj` (found by WG-01).
+- In portable mode the frontend queries answer for the portable target (`-dumpmachine` prints `x86_64-unknown-none`), `-print-libgcc-file-name` is answered, and `--target=x86_64-unknown-none` names the portable target without changing anything, so build systems that pass back what `-dumpmachine` reported configure (found by WG-01).
 
 ### Changed
 

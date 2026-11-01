@@ -24,6 +24,22 @@ for notice in LICENSE.TXT THIRD-PARTY-NOTICES.md; do
         exit 1
     fi
 done
+# The CMake toolchain file works from the package: with no compiler given it finds the package's own drivers.
+for file in cmake/llvmnet.cmake meson/llvmnet.ini; do
+    if [[ ! -s "$prefix/share/llvmnet/$file" ]]; then
+        printf 'FAIL: packaged toolchain is missing share/llvmnet/%s\n' "$file" >&2
+        exit 1
+    fi
+done
+mkdir -p "$output/cmake"
+printf 'cmake_minimum_required(VERSION 3.20)\nproject(probe C)\nadd_executable(probe probe.c)\n' >"$output/cmake/CMakeLists.txt"
+printf '#include <stdio.h>\nint main(void) { printf("%%d\\n", (int)sizeof(void *)); return 0; }\n' >"$output/cmake/probe.c"
+rm -rf "$output/cmake-build"
+cmake -G Ninja -S "$output/cmake" -B "$output/cmake-build" -DCMAKE_TOOLCHAIN_FILE="$prefix/share/llvmnet/cmake/llvmnet.cmake" \
+    >"$output/cmake.log" 2>&1 && cmake --build "$output/cmake-build" >>"$output/cmake.log" 2>&1 ||
+    { cat "$output/cmake.log" >&2; printf 'FAIL: the packaged CMake toolchain file did not build a C program\n' >&2; exit 1; }
+grep -q "^set(CMAKE_C_COMPILER \"$prefix/bin/llvmnet-clang\")$" "$output"/cmake-build/CMakeFiles/*/CMakeCCompiler.cmake
+test "$("$output/cmake-build/probe")" == 8
 if [[ -d "$prefix/libexec/llvm" ]] && ! compgen -G "$prefix/share/llvmnet/licenses/*.copyright" >/dev/null; then
     printf 'FAIL: bundled LLVM has no copyright notices under share/llvmnet/licenses\n' >&2
     exit 1

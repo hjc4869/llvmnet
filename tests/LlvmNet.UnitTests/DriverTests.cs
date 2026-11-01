@@ -34,6 +34,39 @@ public sealed class DriverTests
     }
 
     [Theory]
+    [InlineData("--target=x86_64-unknown-none")]
+    [InlineData("-target", "x86_64-unknown-none")]
+    public void NamingThePortableTargetChangesNothing(params string[] target)
+    {
+        // Build systems pass back what -dumpmachine reported; in portable mode that is the portable triple itself.
+        var invocation = new Invocation(DriverOptions.Parse(["--runtime=portable", .. target, "input.c"]), "clang");
+        Assert.Empty(invocation.Frontend);
+        Assert.Single(invocation.Inputs);
+        Assert.Throws<ArgumentException>(() => new Invocation(DriverOptions.Parse(["--runtime=portable", "--target=x86_64-pc-linux-gnu", "input.c"]), "clang"));
+    }
+
+    [Fact]
+    public void FilesThatNameNoLanguageAreLinkedByTheirContent()
+    {
+        string directory = Directory.CreateTempSubdirectory("llvmnet-inputs-").FullName;
+        try
+        {
+            string bitcode = Path.Combine(directory, "object.obj"), wrapped = Path.Combine(directory, "wrapped.obj");
+            string archive = Path.Combine(directory, "library.lib"), text = Path.Combine(directory, "notes.txt");
+            File.WriteAllBytes(bitcode, [0x42, 0x43, 0xC0, 0xDE, 0x35, 0x14, 0x00, 0x00]);
+            File.WriteAllBytes(wrapped, [0xDE, 0xC0, 0x17, 0x0B, 0x00, 0x00, 0x00, 0x00]);
+            File.WriteAllText(archive, "!<arch>\n");
+            File.WriteAllText(text, "not an object");
+            Assert.Equal(".o", Driver.LinkerInputKind(bitcode));
+            Assert.Equal(".o", Driver.LinkerInputKind(wrapped));
+            Assert.Equal(".a", Driver.LinkerInputKind(archive));
+            Assert.Null(Driver.LinkerInputKind(text));
+            Assert.Null(Driver.LinkerInputKind(Path.Combine(directory, "missing.obj")));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Theory]
     [InlineData("-o", "x", new[] { "-o" }, new[] { "x" })]
     [InlineData("-ox", "x", new[] { "-o" }, new[] { "x" })]
     [InlineData("--runtime=system", "system", new[] { "--runtime" }, new[] { "system" })]

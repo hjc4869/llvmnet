@@ -82,6 +82,10 @@ internal sealed class Invocation
             switch (spec.For(Options.Runtime))
             {
                 case Handling.Rejected:
+                    // Naming the portable target itself changes nothing: build systems pass back what -dumpmachine reported.
+                    if (Options.Runtime == "portable" && (argument.Is("--target=") && argument.Text == "--target=" + PortableAbi.Triple ||
+                        argument.Is("-target") && argument.Value == PortableAbi.Triple))
+                        continue;
                     throw new ArgumentException(DriverOptions.RejectionMessage(spec, argument.Text, Options.Runtime));
                 case Handling.Ignored:
                     if (Options.Verbose || arguments.Any(other => other.Is("-v"))) Console.Error.WriteLine("llvmnet: note: " + DriverOptions.IgnoredNote(spec, argument.Text, Options.Runtime));
@@ -148,7 +152,7 @@ internal sealed class Invocation
                         _ => throw new ArgumentException($"--driver-mode requires gcc, g++, clang, clang++ or flang, not '{value}'.")
                     };
                     break;
-                case "--version" or "-dumpmachine" or "-dumpversion" or "-print-search-dirs" or "-print-resource-dir" or "-print-target-triple" or "-print-file-name=" or "-print-prog-name=":
+                case "--version" or "-dumpmachine" or "-dumpversion" or "-print-search-dirs" or "-print-resource-dir" or "-print-target-triple" or "-print-file-name=" or "-print-prog-name=" or "-print-libgcc-file-name":
                     Queries.Add(argument.Text);
                     break;
                 default: throw new InvalidOperationException($"option {spec.Name} is in the table as handled but not implemented.");
@@ -241,7 +245,9 @@ internal static class Driver
                 Console.WriteLine($"llvmnet {BuildInfo.Version} (LLVM {Llvm.Version}; ABIs system-linux-x64-v1, {PortableAbi.Tag})");
                 Console.WriteLine("Frontend follows:");
             }
-            return Toolchain.Run(executable, [.. invocation.Queries.Where(query => query != "-v" || invocation.Inputs.Count == 0), .. invocation.Frontend], options.Verbose);
+            // In portable mode the frontend answers for the portable target (-dumpmachine prints its triple).
+            List<string> target = options.Runtime == "portable" ? ["--target=" + PortableAbi.Triple] : [];
+            return Toolchain.Run(executable, [.. target, .. invocation.Queries.Where(query => query != "-v" || invocation.Inputs.Count == 0), .. invocation.Frontend], options.Verbose);
         }
         if (invocation.LinkerVersion)
         {
@@ -283,6 +289,8 @@ internal static class Driver
             foreach (LinkInput input in inputs)
             {
                 string extension = Path.GetExtension(input.Path);
+                if (input.Language is null && !SourceExtensions.Contains(extension) && extension is not (".o" or ".a") && !IsFortran(input))
+                    extension = LinkerInputKind(input.Path) ?? extension;
                 bool ir = input.Language == "ir" || input.Language is null && extension is ".bc" or ".ll";
                 if (extension is ".o" or ".a" && input.Language is null || ir && !invocation.CompileOnly)
                 {
@@ -299,7 +307,7 @@ internal static class Driver
                 }
                 bool fortran = driver == "flang" || IsFortran(input);
                 bool cpp = driver == "clang++" || IsCpp(input);
-                if (!fortran && input.Language is null && extension is not (".c" or ".cc" or ".cpp" or ".cxx" or ".C" or ".i" or ".ii" or ".ll" or ".bc"))
+                if (!fortran && input.Language is null && !SourceExtensions.Contains(extension))
                     throw new NotSupportedException($"Unsupported input kind: {input.Path} (name the language with -x)");
                 string destination = invocation.CompileOnly ? invocation.Output ?? Path.GetFileNameWithoutExtension(input.Path) + (invocation.Textual ? ".ll" : ".o") : Path.Combine(temporary, $"input{bitcode.Count}.bc");
                 List<string> command = ["-O1"];
@@ -436,6 +444,31 @@ internal static class Driver
             result.Add(arguments[index]);
         }
         return result;
+    }
+
+    private static readonly HashSet<string> SourceExtensions = new(StringComparer.Ordinal) { ".c", ".cc", ".cpp", ".cxx", ".C", ".i", ".ii", ".ll", ".bc" };
+
+    /// <summary>
+    /// What a file whose extension names no language is, read from its content: Clang hands such a file to the linker,
+    /// so llvmnet links it when it is an LLVM bitcode object (".o") or an archive (".a"), whatever its name. CMake's
+    /// Generic platform, for one, names objects <c>.obj</c>.
+    /// </summary>
+    internal static string? LinkerInputKind(string path)
+    {
+        Span<byte> magic = stackalloc byte[8];
+        int read;
+        try
+        {
+            using FileStream stream = File.OpenRead(path);
+            read = stream.ReadAtLeast(magic, magic.Length, throwOnEndOfStream: false);
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+        if (read == 8 && magic.SequenceEqual("!<arch>\n"u8)) return ".a";
+        // Raw bitcode starts with 'BC' 0xC0DE; the bitcode wrapper header with the little-endian word 0x0B17C0DE.
+        if (read >= 4 && (magic[..4].SequenceEqual((ReadOnlySpan<byte>)[0x42, 0x43, 0xC0, 0xDE]) ||
+                          magic[..4].SequenceEqual((ReadOnlySpan<byte>)[0xDE, 0xC0, 0x17, 0x0B]))) return ".o";
+        return null;
     }
 
     private static bool IsFortran(LinkInput input) => input.Language is "f95" or "f95-cpp-input" ||
