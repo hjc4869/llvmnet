@@ -21,7 +21,19 @@ public static unsafe class ProcessRuntime
         Arguments = Strings(values);
         ArgumentCount = values.Length;
         EnvironmentVector = Strings(EnvironmentEntries());
+        RestoreRandomSeed();
         return values.Length;
+    }
+
+    /// <summary>
+    /// A system-mode program shares the C library with the .NET runtime, and CoreCLR seeds glibc's generator with
+    /// srandom(time) while it starts. C requires rand() before any srand() to give the sequence that srand(1) gives, and
+    /// a native program gets it; so seed with 1 again before main (glibc's srand and srandom share one state).
+    /// </summary>
+    private static void RestoreRandomSeed()
+    {
+        if (!AbiContract.SystemCallbacks || !OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64) return;
+        ((delegate* unmanaged[Cdecl]<uint, void>)SystemAbi.Symbol("libc.so.6", "srandom"))(1);
     }
 
     /// <summary>

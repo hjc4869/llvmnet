@@ -80,6 +80,8 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 
 ### Fixed
 
+- System mode: a call through a K&R or other contradicting declaration of a native function whose result type differs (`extern int free();` calling `void free(void *)`) produced IL the JIT rejected (`InvalidProgramException`). The call site's result is now reconciled with the native function's as for translated functions: an unused value is dropped, an ignored result popped, pointers and 64-bit integers converted, anything else rejected at compile time (found by llvm-test-suite's cfrac, WG-01).
+- System mode: `rand()` before any `srand()` gave a different sequence on every run, because the .NET runtime calls `srandom(time)` while it starts and the program shares the C library with it. The runtime seeds with 1 again before `main`, as C requires (found by llvm-test-suite's ft, WG-01).
 - Portable `open` with `O_CREAT` and read-only access (`O_RDONLY | O_CREAT | O_EXCL`) failed with `EINVAL`; it creates the file whatever its mode bits, and the descriptor still only reads (found by flang-rt's unit tests, WG-03).
 - Out-of-range `long double` to integer conversions threw instead of producing the x87 integer-indefinite value.
 - Zero-size `alloca` returned a null pointer, which flang-rt read as an unallocated zero-length character variable.

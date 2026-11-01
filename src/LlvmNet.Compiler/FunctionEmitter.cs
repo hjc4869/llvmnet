@@ -885,6 +885,33 @@ internal sealed class FunctionEmitter : ValueEmitter
     }
 
     /// <summary>
+    /// The native thunk returns the declaration's type; a call through a K&amp;R or another contradicting prototype
+    /// (<c>extern int free();</c> calling <c>void free(void *)</c>) expects its own. Reconcile them as direct calls to
+    /// translated definitions do: a value the call does not use is dropped, a value the declaration does not return is
+    /// only accepted when nothing uses it, pointers and 64-bit integers convert exactly, and anything else is rejected
+    /// with both signatures, never left as invalid IL.
+    /// </summary>
+    private void NativeReturn(nint instruction, nint target, string name, Type returned)
+    {
+        Type site = Types.Map(Llvm.LLVMTypeOf(instruction));
+        if (site == returned) return;
+        if (site == typeof(void)) { Il.Emit(OpCodes.Pop); return; }
+        if (returned == typeof(void) && Llvm.LLVMGetFirstUse(instruction) == 0)
+        {
+            locals.Remove(instruction);
+            storedScalars.Remove(instruction);
+            return;
+        }
+        if (site == typeof(nint) && returned == typeof(long) || site == typeof(long) && returned == typeof(nint))
+        {
+            Il.Emit(site == typeof(nint) ? OpCodes.Conv_I : OpCodes.Conv_I8);
+            return;
+        }
+        throw new NotSupportedException($"Incompatible call signature for native function {name}: " +
+            $"{Llvm.PrintType(Llvm.LLVMGetCalledFunctionType(instruction))} versus {Llvm.PrintType(Llvm.LLVMGlobalGetValueType(target))}");
+    }
+
+    /// <summary>
     /// The operand an empty inline-assembly template returns: its constraints name one direct output, and an input with
     /// the matching constraint (the output's number) of the same type. Also whether it clobbers memory. Null for any other
     /// form, including an untied output, whose value would be undefined.
@@ -1008,6 +1035,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
                 Load(Llvm.LLVMGetOperand(instruction, index));
             Il.Emit(OpCodes.Call, native);
+            NativeReturn(instruction, target, name, native.ReturnType);
             return;
         }
         nint signature = Llvm.LLVMGetCalledFunctionType(instruction);
