@@ -43,6 +43,14 @@ The CI workflow (`.github/workflows/ci.yml`) runs the pull-request gate in the D
 - **JIT validation.** `LlvmNet.Checks jit-all` forces the JIT to compile every method of every assembly the run emitted, so invalid IL fails even on paths no test executes; `ilverify` cannot be used, because translated code is unverifiable by design (raw pointers, `localloc`, `calli`).
 - **Generated pages.** `tests/support-matrix.sh`, `tests/driver-reference.sh` and `tests/limitations.sh` regenerate `docs/user/support-matrix.md`, the tables of `docs/user/driver.md` and `docs/user/limitations.md` and fail when the committed page differs, so the documentation is produced by the code it describes.
 
+## Fuzzing
+
+`tests/fuzz.sh` (FD-16) generates one csmith and one YARPGen program per seed, cycles `-O0` to `-O3` by seed, and compares the output of llvmnet's system and portable builds with a native `clang-22` build; a failing program is kept under `artifacts/tests/fuzz/failures/` with a `repro.sh`. The script header lists its variables (`FUZZ_SEEDS`, `FUZZ_FIRST_SEED`, `FUZZ_GENERATORS`, `FUZZ_OPT`, `FUZZ_RUNTIMES`, `FUZZ_MEMORY_MB`, `JOBS`).
+
+Every program runs with a time limit and a resident memory limit, because about one YARPGen seed in five declares arrays of several GB, some of hundreds; without limits, a 16-job run together with libc-test once exhausted a 124 GB host. A native program gets 10 s and `FUZZ_MEMORY_MB` (default 2048). One whose static data alone is larger is skipped before it runs, one that grows past the limit is stopped and skipped, and `results.tsv` gives the reason. The llvmnet builds get 300 s and 512 MB more for the .NET runtime, which needs about 50 MB beyond the native program; a build that still exceeds its limit fails like a hang. A watchdog reads the program's resident set every 20 ms and kills it at the limit. `ulimit -v` cannot limit `dotnet`, whose runtime reserves 256 GB of address space and, when that is limited, needs gigabytes more than it touches; cgroups need a user systemd, which CI's container does not have.
+
+`JOBS` defaults to half the processors, at most four. With the defaults a run stays under about `JOBS` × 3 GB: 6 GB with the two jobs of the 4-core, 16 GB nightly runner. On a shared workstation, run it in a capped scope as well: `systemd-run --user --scope -p MemoryMax=24G -p MemorySwapMax=0 tests/run.sh fuzz`.
+
 ## Unit tests
 
 `tests/LlvmNet.UnitTests` (xUnit) covers the managed components that need no frontend: `Float80` against x87 encodings, wide integers, the response-file tokenizer, the driver's option table and its rejections, build and ABI compatibility checks, the Windows path forms of the host layer, generated zoneinfo. They run in well under a second and are part of the gate.

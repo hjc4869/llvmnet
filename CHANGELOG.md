@@ -64,6 +64,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - The bundled toolchain package takes only the builtin headers from Clang's resource directory (not its sanitizer and profiling runtimes) and strips the copied binaries: 609 MB to 533 MB installed (TC-13).
 - A managed library (`-shared`) exports only its external, default-visibility definitions, as a native shared library does; static functions and hidden-visibility definitions are private methods (TC-04). `-r` no longer links the runtime libraries into a relocatable object.
 - Native-only options that build systems pass (`-fPIC`, `-pie`, `-Wl,-rpath`, `-Wl,--as-needed`, `-Wl,-z,...`, `-s`, `-static-libgcc`, `-rtlib=`, `-z`) are accepted without effect instead of rejected; `-v` prints the reason. `-m<option>` in portable mode, native linker options without a CIL equivalent (`-e`, `-T`, `-u`, `-Wa,`, `-Wl,--wrap`, ...), `-fsanitize=` and profiling instrumentation now fail as `option '...' is not accepted: <reason>` (TC-01).
+- `tests/fuzz.sh` runs every generated program with a resident memory limit, `FUZZ_MEMORY_MB` (2,048 MB by default; the llvmnet builds get 512 MB more for the .NET runtime), and with at most four jobs by default: YARPGen programs larger than the limit are skipped with the reason instead of exhausting the host's memory, and an llvmnet build over its limit fails like a hang (FD-16).
 
 ### Removed
 
