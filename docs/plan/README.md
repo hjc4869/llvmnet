@@ -17,6 +17,17 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-11-02, library survey fixes)
+
+The fixes for the survey's findings are merged. Measurements are in [link-scaling](../evidence/2026-11-02-link-scaling.md), [configure-probes](../evidence/2026-11-02-configure-probes.md), [musttail-select](../evidence/2026-11-02-musttail-select.md) and [system-mode-survey](../evidence/2026-11-02-system-mode-survey.md); PF-16 has its own entry below.
+
+- **TC-19 and TC-20 (done).** A `main` in an archive member is linked, and archives are recognized by their content under any name. One LLVM linker serves the whole link: Skia's DM links in 23 s instead of 420 s, cjxl against the sysroot in 1.7 s instead of 25 s, with byte-identical translated programs.
+- **TC-07 (progress).** Configure probes give a native build's answers in autotools, Meson, CMake and ffmpeg's configure, and the CMake platform `LlvmNet` sets `UNIX` and builds `SHARED` targets as bitcode archives. CMake configures run 6 to 8 times faster with TC-20.
+- **BE-44 (done).** `musttail` calls are CIL tail calls and run in constant stack under the JIT and NativeAOT.
+- **PF-15 (in progress).** Integer selects, `abs`, min and max compile without branches. The Paeth reproducer went from 6.0 to 1.4 times native, short of the 1.3 target; in the decoders the Paeth filter is 1.18 times native in libpng and 0.95 in Wuffs, and the benchmark set does not regress.
+- **SA-10 and SA-11 (done), SA-12 (in progress).** Under the JIT, system-mode `fork` fails with `ENOSYS`, because CoreCLR's W^X shares generated code with a forked child; NativeAOT keeps the host's `fork`. C++20's libstdc++ members link. Untranslated x86 intrinsics warn at compile time.
+- **Proposed for the owner.** The TC-07 proposals are implemented as defaults and can be accepted or rejected as they work; system mode's SSE macros (SA-12, the evidence recommends option b); whether PF-15's 1.4 times on the reproducer is enough, given the decoders' 0.95 to 1.18.
+
 ## Progress (2026-11-02, PF-16)
 
 Measurements are in [evidence/2026-11-02-pf16-host-memory.md](../evidence/2026-11-02-pf16-host-memory.md).
@@ -211,7 +222,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M5 | 0.5 | done; flang-rt and portable OpenMP delivered (FT-08), 22 of 25 OpenMP speed entries pass, the rest excluded | 0 | 2026-10-31 |
 | M6 | 0.6 | exit items done on all three hosts; two weeks of green CI runs need GitHub (FD-19) | 0 | 2026-10-31 |
 | M7 | 0.7 | exit items done; signed packages from a tag need the repository on GitHub (FD-19) | 0 | 2026-10-31 |
-| M8 | 0.7 | exit items done (PF-01, PF-02, benchmark table published); the first GitHub run of the nightly benchmark job needs FD-19. P1: PF-03, 04, 05, 08, 10, 11, 13, 14 done, PF-06 and PF-07 in progress | 0 | 2026-11-01 |
+| M8 | 0.7 | exit items done (PF-01, PF-02, benchmark table published); the first GitHub run of the nightly benchmark job needs FD-19. P1: PF-03, 04, 05, 08, 10, 11, 13, 14, 16 done, PF-06, PF-07 and PF-15 in progress | 0 | 2026-11-02 |
 | M9 | 1.0-rc | in progress: WG-02, 03, 04, 05, 09 done, WG-01 at 99.1% portable and 98.8% system (target 99%), WG-06 not run (FD-21); RL-02, 05, 08, 09 done; two nightlies on a release candidate need GitHub (FD-19) | 2 (WG-01, WG-06) | 2026-11-01 |
 
 ### M0: Foundations

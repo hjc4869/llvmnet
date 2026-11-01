@@ -2,7 +2,7 @@
 
 Build host: Linux x86-64 (Debian 13, kernel 6.12), AMD Ryzen AI MAX+ 395 (16 cores, 32 threads), 124 GB RAM, .NET SDK 10.0.403 with runtime 10.0.14, LLVM/Clang 22.1.8, starting from commit `a5ab005`. Other sessions shared the host (load average between 1 and 65 from Skia and ANGLE links and gates in other checkouts), so timings are medians or minima of repeated runs, before/after pairs ran back to back or alternated, and the benchmark harness normalizes by the native times it measures alongside. Heavy runs used memory-capped user scopes (`systemd-run --user --scope -p MemoryMax=...`).
 
-The open-source library survey (2026-11-01/02, `artifacts/oss/REPORT.md`, round two; recorded in `docs/evidence/2026-11-02-library-survey.md`) found two translation problems, now plan items BE-44 and PF-15: `musttail` calls became ordinary calls (survey R1, Skia's DM aborts with a stack overflow), and integer `select`/`llvm.abs` became branches that RyuJIT keeps in loops (survey R2, PNG's Paeth filter 3.4–5.7 times native time). Both reproducers are in the survey's `results/skia-repro/musttail/` and `results/libpng-repro/paeth-select/`.
+The open-source library survey (2026-11-01/02, `artifacts/oss/REPORT.md`, round two; recorded in [2026-11-02-library-survey.md](2026-11-02-library-survey.md)) found two translation problems, now plan items BE-44 and PF-15: `musttail` calls became ordinary calls (survey R1, Skia's DM aborts with a stack overflow), and integer `select`/`llvm.abs` became branches that RyuJIT keeps in loops (survey R2, PNG's Paeth filter 3.4–5.7 times native time). Both reproducers are in the survey's `results/skia-repro/musttail/` and `results/libpng-repro/paeth-select/`.
 
 ## BE-44: musttail (survey R1)
 
