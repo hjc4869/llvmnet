@@ -36,6 +36,9 @@ static void mix(uint64_t value) { hash = (hash ^ value) * 1099511628211u; }
                 mix((uint64_t)(x < 0 ? (T)(0 - (uint64_t)x) : x));                                                        \
                 mix((uint64_t)(x < y && u < v));                                                                          \
                 mix((uint64_t)(x < y || u < v));                                                                          \
+                mix((uint64_t)(x > 0 ? x : 0));                                                                           \
+                mix((uint64_t)(x < 0 ? x : 0));                                                                           \
+                mix((uint64_t)(x < (T)3 ? (T)3 : x > (T)100 ? (T)100 : x));                                               \
             }                                                                                                             \
         printf("%-20s %016llx\n", #T, (unsigned long long)hash);                                                          \
     }
@@ -91,9 +94,10 @@ static void floating(void) {
     printf("%-20s %016llx\n", "floating", (unsigned long long)hash);
 }
 
-/* Kernels whose CIL tests/select.sh checks for branches: libpng's Paeth predictor (three abs, an unsigned minimum and
- * two selects), a 64-bit clamp (smax and smin), a select on a flag argument, and a select of 64-bit values on a 64-bit
- * comparison. */
+/* Kernels whose CIL tests/select.sh checks: libpng's Paeth predictor (three abs, an unsigned minimum and two selects),
+ * FFmpeg's 8-bit pixel clip (two selects), a 64-bit clamp to variable bounds (smax and smin), a select on a flag
+ * argument and a select of 64-bit values on a 64-bit comparison have no branch; FFmpeg's 10-bit clip (smax(x, 0), then
+ * umin(x, 1023)) keeps branches for its constant bounds. */
 __attribute__((noinline)) static int paeth_predictor(int a, int b, int c) {
     int p = b - c, pc = a - c;
     int pa = p < 0 ? -p : p, pb = pc < 0 ? -pc : pc;
@@ -102,6 +106,8 @@ __attribute__((noinline)) static int paeth_predictor(int a, int b, int c) {
     if (pc < pa) a = c;
     return a;
 }
+__attribute__((noinline)) static unsigned clip_pixel10(int a) { if (a & ~1023) return (~a) >> 31 & 1023; else return a; }
+__attribute__((noinline)) static unsigned char clip_pixel8(int a) { if (a & ~0xFF) return (~a) >> 31; else return a; }
 __attribute__((noinline)) static long clamp_long(long x, long low, long high) { return x < low ? low : x > high ? high : x; }
 __attribute__((noinline)) static unsigned select_flag(_Bool flag, unsigned a, unsigned b) { return flag ? a : b; }
 __attribute__((noinline)) static long select_wide(long x, long y, long a, long b) { return x < y ? a : b; }
@@ -111,6 +117,8 @@ static void kernels(void) {
         for (int j = 0; j < COUNT; j++) {
             int64_t x = values[i], y = values[j], z = values[(i + j) % COUNT];
             mix((uint64_t)paeth_predictor((int)(x & 255), (int)(y & 255), (int)(z & 255)));
+            mix(clip_pixel10((int)x + (int)(y & 1023)));
+            mix(clip_pixel8((int)x + (int)(y & 255)));
             mix((uint64_t)clamp_long(x, y < z ? y : z, y < z ? z : y));
             mix(select_flag(z & 1, (unsigned)x, (unsigned)y));
             mix((uint64_t)select_wide(x, y, z, x ^ y));

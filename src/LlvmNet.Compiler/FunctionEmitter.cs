@@ -416,7 +416,7 @@ internal sealed class FunctionEmitter : ValueEmitter
     /// turns a branch into cmov only outside loops (ifconversion.cpp), and an unpredictable branch in a loop costs far
     /// more than these four operations (PNG's Paeth filter ran 3.4-5.7 times native time). A boolean select is the and
     /// or the or it stands for. Floating-point, 128-bit and aggregate selects keep the branch, which is exact for every
-    /// value.
+    /// value. Integer min/max against a constant keep theirs too (Intrinsic explains why).
     /// </summary>
     private void Select(nint value)
     {
@@ -427,8 +427,8 @@ internal sealed class FunctionEmitter : ValueEmitter
         Type managed = Types.Map(type);
         if (managed == typeof(int) || managed == typeof(long) || managed == typeof(nint))
         {
-            bool and = TypeSystem.Width(type) == 1 && IsBoolean(whenFalse, false);
-            if (and || TypeSystem.Width(type) == 1 && IsBoolean(whenTrue, true))
+            bool and = TypeSystem.Width(type) == 1 && IsConstant(whenFalse, 0);
+            if (and || TypeSystem.Width(type) == 1 && IsConstant(whenTrue, -1))
             {
                 Load(condition);
                 Load(and ? whenTrue : whenFalse);
@@ -464,8 +464,9 @@ internal sealed class FunctionEmitter : ValueEmitter
         Il.MarkLabel(end);
     }
 
-    private static bool IsBoolean(nint value, bool constant) =>
-        Llvm.LLVMIsAConstantInt(value) != 0 && Llvm.LLVMConstIntGetSExtValue(value) == (constant ? -1 : 0);
+    /// <summary>Whether the value is the integer constant <paramref name="number"/>, sign-extended (an i1 true is -1).</summary>
+    private static bool IsConstant(nint value, long number) =>
+        Llvm.LLVMIsAConstantInt(value) != 0 && TypeSystem.Width(Llvm.LLVMTypeOf(value)) <= 64 && Llvm.LLVMConstIntGetSExtValue(value) == number;
 
     /// <summary>
     /// A condition that is an ordered comparison of integers of at most 32 bits, as the operands of a strict less-than:
@@ -2043,31 +2044,74 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Ldloc, result);
             return;
         }
-        // Without branches, as Select explains: right ^ ((left ^ right) & -(left < right)) for smin, and
-        // (x ^ s) - s with s = x >> (bits - 1) for abs, which wraps the minimum to itself.
+        // Without branches, as Select explains, except against a constant bound. A constant bound is a clamp (FFmpeg's
+        // 10-bit pixels are smax(x, 0) then umin(x, 1023)) whose comparison almost always goes the same way, and a
+        // predicted branch costs less than a mask: with masks, HEVC decoding took 12% longer, and 5% with only
+        // smax(x, 0) as x & ~(x >> 31). Two variable operands are a data-dependent choice, as Paeth's umin(pb, pa),
+        // where a mispredicted branch costs far more. Up to 32 bits, with d = left - right in 64 bits and s = d >> 63
+        // (all ones when left < right): minimum = right + (d & s), maximum = left - (d & s); wider,
+        // right ^ ((left ^ right) & -(left < right)). abs is (x ^ s) - s with s = x >> (bits - 1), which wraps the
+        // minimum to itself.
         if (operation is "smin" or "smax" or "umin" or "umax")
         {
             nint left = Llvm.LLVMGetOperand(instruction, 0);
             nint right = Llvm.LLVMGetOperand(instruction, 1);
             nint type = Llvm.LLVMTypeOf(left);
+            bool signed = operation[0] == 's', minimum = operation.EndsWith("min", StringComparison.Ordinal);
+            if (Llvm.LLVMIsAConstantInt(left) != 0 || Llvm.LLVMIsAConstantInt(right) != 0)
+            {
+                Load(left);
+                if (signed)
+                    SignExtend(type);
+                Load(right);
+                if (signed)
+                    SignExtend(type);
+                Il.Emit(operation switch { "smin" => OpCodes.Clt, "smax" => OpCodes.Cgt, "umin" => OpCodes.Clt_Un, _ => OpCodes.Cgt_Un });
+                Label useRight = Il.DefineLabel();
+                Label done = Il.DefineLabel();
+                Il.Emit(OpCodes.Brfalse, useRight);
+                Load(left);
+                Il.Emit(OpCodes.Br, done);
+                Il.MarkLabel(useRight);
+                Load(right);
+                Il.MarkLabel(done);
+                return;
+            }
+            if (TypeSystem.Width(type) <= 32)
+            {
+                LocalBuilder difference = Scratch(typeof(long));
+                foreach (nint operand in new[] { left, right })
+                {
+                    Load(operand);
+                    if (signed)
+                        SignExtend(type);
+                    Il.Emit(signed ? OpCodes.Conv_I8 : OpCodes.Conv_U8);
+                }
+                Il.Emit(OpCodes.Sub);
+                Il.Emit(OpCodes.Stloc, difference);
+                Load(minimum ? right : left);
+                Il.Emit(OpCodes.Ldloc, difference);
+                Il.Emit(OpCodes.Ldloc, difference);
+                Il.Emit(OpCodes.Ldc_I4, 63);
+                Il.Emit(OpCodes.Shr);
+                Il.Emit(OpCodes.And);
+                Il.Emit(OpCodes.Conv_I4);
+                Il.Emit(minimum ? OpCodes.Add : OpCodes.Sub);
+                Normalize(type);
+                return;
+            }
             Load(right);
             Load(left);
             Load(right);
             Il.Emit(OpCodes.Xor);
-            bool minimum = operation.EndsWith("min", StringComparison.Ordinal);
-            if (TypeSystem.Width(type) <= 32)
-                LessMask(minimum ? left : right, minimum ? right : left, operation[0] == 's', Types.Map(type));
-            else
-            {
-                Load(left);
-                if (operation[0] == 's')
-                    SignExtend(type);
-                Load(right);
-                if (operation[0] == 's')
-                    SignExtend(type);
-                Il.Emit(operation switch { "smin" => OpCodes.Clt, "smax" => OpCodes.Cgt, "umin" => OpCodes.Clt_Un, _ => OpCodes.Cgt_Un });
-                Mask(Types.Map(type));
-            }
+            Load(left);
+            if (signed)
+                SignExtend(type);
+            Load(right);
+            if (signed)
+                SignExtend(type);
+            Il.Emit(operation switch { "smin" => OpCodes.Clt, "smax" => OpCodes.Cgt, "umin" => OpCodes.Clt_Un, _ => OpCodes.Cgt_Un });
+            Mask(Types.Map(type));
             Il.Emit(OpCodes.And);
             Il.Emit(OpCodes.Xor);
             return;
