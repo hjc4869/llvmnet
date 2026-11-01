@@ -17,6 +17,21 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-11-01, M9)
+
+Measurements are in [evidence/2026-11-01-m9-workload-gates.md](../evidence/2026-11-01-m9-workload-gates.md), and [dev/gates.md](../dev/gates.md) says which suites run when, with their thresholds. Every suite counts a test only when the native build passes it.
+
+- **WG-05.** The nightly runs ffmpeg's threaded and SIMD128 profiles in both ABIs under the JIT and NativeAOT; the threaded test now checks NativeAOT by default.
+- **WG-02.** c-testsuite: 219 of 220 in portable mode (a contradicting `strlen` prototype), 220 in system mode. gcc-c-torture, from the pinned llvm-test-suite: 1,473 of 1,488 portable, 1,475 system, every failure classified.
+- **WG-01 (in progress).** llvm-test-suite through its own CMake and lit: portable 2,002 of 2,049 (97.7%; 99.1% without x86 tests and the owner's exclusions), system 2,013 (98.2%; 98.8%), a NativeAOT subset 140 of 141; no unclassified failure. The 99% target holds in portable mode, not yet in system mode.
+- **WG-03.** The library suites run in their own nightly job against thresholds; flang-rt's own unit tests pass 216 of 216 in portable mode, and a libc++ subset as NativeAOT 327 of 328.
+- **WG-04.** FATE against the real `ffmpeg` and `ffprobe`: the portable build passes all 5,285 tests the native build passes, after the harness patched configure's function probe, which portable mode rejects.
+- **WG-09.** The gates page, with thresholds at each suite's lowest group rate rounded down ([proposed for the owner](decisions.md#proposed-for-the-owner-2026-11-01-m9)).
+- **WG-06 (open).** No new SPEC runs: the `train` and `ref` matrices under the JIT and NativeAOT need the private runner (FD-21).
+- **Found by the suites, fixed with tests.** CMake could not identify llvmnet; `.obj` inputs were rejected; portable `-dumpmachine` reported the host; tied-output `asm` barriers, K&R `main(argc)` and min/max vector reductions did not compile (BE-43); portable `open` with `O_CREAT` and read-only access failed; system-mode K&R calls to native functions produced invalid IL; system-mode `rand()` was seeded by the .NET runtime; flang-rt reported `CMDSTAT` 7 for successful commands on musl. A conservative stack-scanning collector (SIOD) is now a documented limitation, and BE-42 records x87 encodings read by value.
+- **1.0 checklist.** RL-02 (the frozen ABI, now documented and tested), RL-05, RL-08 (security and support policy, terms proposed for the owner) and RL-09 are done. RL-01, RL-03, RL-04 and RL-07 wait for the repository on GitHub (FD-19) or a release candidate, RL-06 for TC-18's examples, RL-10 for the tag.
+- **M9 exit.** Not reached: WG-01 in system mode, WG-06, and two consecutive nightlies on a release candidate, which need GitHub.
+
 ## Progress (2026-11-01, M8)
 
 Measurements are in [evidence/2026-11-01-m8-performance.md](../evidence/2026-11-01-m8-performance.md). There is no numeric target (ADR-08); M8 publishes numbers and guards them. Over the 57 benchmarks, the M8 items took the geometric mean from 2.42 to 2.11 times native under the JIT and from 1.72 to 1.45 as NativeAOT; that run is the new baseline.
@@ -162,7 +177,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M6 | 0.6 | exit items done on all three hosts; two weeks of green CI runs need GitHub (FD-19) | 0 | 2026-10-31 |
 | M7 | 0.7 | exit items done; signed packages from a tag need the repository on GitHub (FD-19) | 0 | 2026-10-31 |
 | M8 | 0.7 | exit items done (PF-01, PF-02, benchmark table published); the first GitHub run of the nightly benchmark job needs FD-19. P1: PF-03, 04, 05, 08, 10, 11, 13, 14 done, PF-06 and PF-07 in progress | 0 | 2026-11-01 |
-| M9 | 1.0-rc | not started | 6 | 2026-10-30 |
+| M9 | 1.0-rc | in progress: WG-02, 03, 04, 05, 09 done, WG-01 at 99.1% portable and 98.8% system (target 99%), WG-06 not run (FD-21); RL-02, 05, 08, 09 done; two nightlies on a release candidate need GitHub (FD-19) | 2 (WG-01, WG-06) | 2026-11-01 |
 
 ### M0: Foundations
 

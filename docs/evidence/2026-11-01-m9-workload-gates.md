@@ -62,6 +62,9 @@ The library suites of LC-19, CX-08 and FT-06 already ran in the nightly job, but
 
 | Suite | Passed | Counted | Rate | Left out |
 | --- | ---: | ---: | ---: | --- |
+| musl libc-test (rerun on the final compiler) | 385 | 403 | 95.5% | per group: functional 60 of 67, regression 59 of 67, math 192 of 195, api 74 of 74; 13 fail natively |
+| libc++ lit suite (rerun) | 5,067 | 5,084 | 99.7% | 6 death tests that need fork; per directory from 97.8% (input.output) to 100% |
+| FCVS and gfortran tests (rerun) | 2,854 | 2,859 | 99.8% | FCVS 172 of 172, gfortran 2,682 of 2,687; 16 fail natively |
 | flang-rt unit tests, portable | 216 | 216 | 100% | 31 need `fork` (27 death tests, 4 asynchronous `EXECUTE_COMMAND_LINE`), 6 not compiled for an unrecognized operating system (`fdate`, `getlog`, `REAL(16)`) |
 | libc++ under NativeAOT (vector, string constructors, futures, string streams, numeric facets) | 327 | 328 | 99.7% | 3 unsupported; the failure, `futures.async/thread_create_failure`, is the one the JIT run has (it expects thread creation to fail under a limit .NET does not apply) |
 
@@ -93,3 +96,19 @@ Final run, `tests/ffmpeg-fate.sh` with the patched probe (`LLVMNET_SKIP_BUILD=1 
 | portable | 5,286 | 5,285 | `fate-source` |
 
 Every test the native build passes, the portable build passes: 5,285 of 5,285. The configurations now differ only in what the portable target does not have by design: Linux kernel headers (`asm/types.h`, `linux/perf_event.h`, V4L2, OSS) and x86 features (`MM_EMPTY`, `EBP_AVAILABLE`).
+
+## Test gates for M9
+
+Every commit that changed the compiler, the runtime or the sysroot ran after a green core and toolchain gate (`tests/run.sh --tag core --tag toolchain --exclude-tag slow -j 8`, in a 32 GB memory cap), and the unit tests:
+
+| Run | Before | Result |
+| --- | --- | --- |
+| Gate 1 | `caff471`, `281ec9c`, `14d0bba` (driver, CMake file, tied `asm`, `main(argc)`, read-only `O_CREAT`) | 93 passed in 614 s |
+| Gate 2 | the same with BE-43's reductions | 93 passed in 524 s |
+| Gate 3 | `5b82538`, `fe0a79a`, `a99eb40` (native call results, the random seed, the flang-rt patch with a sysroot rebuild, the ABI freeze test) | 94 passed in 570 s |
+| Unit tests | after each change to the compiler or runtime | 130 passed |
+| `tests/deployment.sh` (slow) | the packaged CMake toolchain file | passed |
+| `dotnet format whitespace --verify-no-changes`, `shellcheck -S error` | the pull-request gate's other steps | clean, after fixing one attribute placement from PF-14 (`78bc36e`) |
+| Link check over all Markdown files | after the documentation changes | 59 files, no broken link (three stale anchors fixed in `fe541ec`) |
+
+The library suites were run again on the final compiler and runtime (`tests/run.sh -j 1 libc-conformance fortran-conformance libcxx-conformance`, 40 GB memory cap, 59 minutes), with the same results and the same failures as at the M8 close: libc-test functional 60 of 67, regression 59 of 67, math 192 of 195, api 74 of 74 (128 s); FCVS 172 of 172 and the gfortran tests 2,682 of 2,687 (1,515 s); libc++ containers 1,809 of 1,809, strings 432 of 432, algorithms 276 of 276, utilities 1,373 of 1,374, thread 342 of 345, localization 261 of 261, input.output 574 of 587 (1,913 s). c-testsuite on the final compiler: as above.
