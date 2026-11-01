@@ -49,6 +49,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - `tests/llvm-test-suite.sh` builds llvm-test-suite's SingleSource and MultiSource, gcc-c-torture included, through the suite's own CMake and lit in portable, system and portable NativeAOT modes against native builds; `tests/conformance/llvm-test-suite.tsv` classifies every known failure, and an unclassified one fails the run (WG-01, WG-02).
 - `tests/c-testsuite.sh` runs c-testsuite's single-exec programs, pinned by hash in `scripts/sources.lock`, against native builds (WG-02).
 - `docs/user/abi.md` states the frozen `dotnet64-v2` contract, and `tests/abi-freeze.sh` (core) fails when its header set or data layout changes or an object compiled at the freeze stops linking or behaving the same (RL-02).
+- `SECURITY.md` says what llvmnet does not protect against and how to report a vulnerability; `docs/user/support.md` gives the supported hosts, the .NET and LLVM bands, compatibility between versions, and the support and deprecation policy (RL-08).
 
 ### Changed
 
