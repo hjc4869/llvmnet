@@ -53,13 +53,18 @@ public sealed class DriverTests
         {
             string bitcode = Path.Combine(directory, "object.obj"), wrapped = Path.Combine(directory, "wrapped.obj");
             string archive = Path.Combine(directory, "library.lib"), text = Path.Combine(directory, "notes.txt");
+            string thin = Path.Combine(directory, "libthin.so"), misnamed = Path.Combine(directory, "object.a");
             File.WriteAllBytes(bitcode, [0x42, 0x43, 0xC0, 0xDE, 0x35, 0x14, 0x00, 0x00]);
             File.WriteAllBytes(wrapped, [0xDE, 0xC0, 0x17, 0x0B, 0x00, 0x00, 0x00, 0x00]);
             File.WriteAllText(archive, "!<arch>\n");
+            File.WriteAllText(thin, "!<thin>\n");
+            File.Copy(bitcode, misnamed);
             File.WriteAllText(text, "not an object");
             Assert.Equal(".o", Driver.LinkerInputKind(bitcode));
             Assert.Equal(".o", Driver.LinkerInputKind(wrapped));
             Assert.Equal(".a", Driver.LinkerInputKind(archive));
+            Assert.Equal(".a", Driver.LinkerInputKind(thin));
+            Assert.Equal(".o", Driver.LinkerInputKind(misnamed));
             Assert.Null(Driver.LinkerInputKind(text));
             Assert.Null(Driver.LinkerInputKind(Path.Combine(directory, "missing.obj")));
         }

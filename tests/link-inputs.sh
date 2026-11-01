@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # tags: core
-# TC-02: link inputs. -c on .ll, .bc and .o inputs; -l:<file>; archives in any order with rescanning; -Wl,--whole-archive;
-# duplicate definitions reported with both files; -r of archives; -nostdlib, -nostartfiles and -nodefaultlibs.
+# TC-02: link inputs. -c on .ll, .bc and .o inputs; -l:<file>; inputs linked by content under any name; archives in any
+# order with rescanning; -Wl,--whole-archive; main from an archive member; duplicate definitions reported with both
+# files; -r of archives; -nostdlib, -nostartfiles and -nodefaultlibs.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 fixtures="$root/tests/c/link"
 rm -rf "$test_output"
@@ -35,6 +36,19 @@ for runtime in system portable; do
     "${compiler[@]}" "$out/main.o" -L"$out" -l:example.a -o "$out/exact.dll"
     dotnet "$out/exact.dll"
     expect_failure "$out/missing.log" 'Cannot find LLVM bitcode archive libmissing.a in the -L directories' "${compiler[@]}" "$out/main.o" -L"$out" -lmissing -o "$out/missing.dll"
+    # An input is linked by its content, whatever its name: archives named .so, .lib or .o, also through -l:<file>, a
+    # bitcode object named .a, and a thin archive.
+    cp "$out/example.a" "$out/libexample.so"
+    cp "$out/example.a" "$out/example.lib"
+    cp "$out/example.a" "$out/archive.o"
+    cp "$out/library.o" "$out/object.a"
+    llvm-ar-22 rcsT "$out/thin.a" "$out/library.o"
+    for input in libexample.so example.lib archive.o object.a thin.a; do
+        "${compiler[@]}" "$out/main.o" "$out/$input" -o "$out/by-content.dll"
+        dotnet "$out/by-content.dll"
+    done
+    "${compiler[@]}" "$out/main.o" -L"$out" -l:libexample.so -o "$out/exact-so.dll"
+    dotnet "$out/exact-so.dll"
     # Archives resolve in any order: libneeds.a needs provided() from libprovides.a, which is named first.
     "${compiler[@]}" -c "$fixtures/needs.c" -o "$out/needs.o"
     "${compiler[@]}" -c "$fixtures/provides.c" -o "$out/provides.o"
@@ -53,6 +67,26 @@ for runtime in system portable; do
     "${compiler[@]}" "$fixtures/main-needs.c" -L"$out" -lprovides -lneeds -Wl,--whole-archive -lctor -Wl,--no-whole-archive -o "$out/with-ctor.dll"
     dotnet "$out/with-ctor.dll" | grep -q '^constructor from the archive$'
     "${compiler[@]}" "$fixtures/main-needs.c" -L"$out" -lprovides -lneeds -Xlinker --whole-archive -Xlinker -lctor -o "$out/xlinker-ctor.dll" 2>"$out/xlinker.log" || true
+    cp "$out/libctor.a" "$out/ctor.lib"
+    "${compiler[@]}" "$fixtures/main-needs.c" -L"$out" -lprovides -lneeds -Wl,--whole-archive "$out/ctor.lib" -Wl,--no-whole-archive -o "$out/whole-lib.dll"
+    dotnet "$out/whole-lib.dll" | grep -q '^constructor from the archive$'
+    # An archive member that defines main is linked (the gtest_main and Catch2 idiom), also when archives are all the
+    # inputs; it stays out when the program defines main, and a relocatable link has no entry point to resolve.
+    "${compiler[@]}" -c "$fixtures/archived-main.c" -o "$out/archived-main.o"
+    "${compiler[@]}" -c "$fixtures/run-tests.c" -o "$out/run-tests.o"
+    llvm-ar-22 rcs "$out/libmain.a" "$out/archived-main.o"
+    llvm-ar-22 rcs "$out/libtests.a" "$out/run-tests.o"
+    "${compiler[@]}" "$out/run-tests.o" -L"$out" -lmain -o "$out/archived-main.dll"
+    dotnet "$out/archived-main.dll" | grep -q '^main from the archive: 7$'
+    "${compiler[@]}" -L"$out" -lmain -ltests -o "$out/archives-only.dll"
+    dotnet "$out/archives-only.dll" | grep -q '^main from the archive: 7$'
+    "${compiler[@]}" "$fixtures/main-needs.c" -L"$out" -lmain -lprovides -lneeds -o "$out/own-main.dll"
+    dotnet "$out/own-main.dll" | grep -q '^needs 5$'
+    "${compiler[@]}" -r "$out/run-tests.o" -L"$out" -lmain -o "$out/no-entry.o"
+    if llvm-nm-22 --defined-only "$out/no-entry.o" | grep -q ' T main$'; then
+        printf 'FAIL: a relocatable link extracted main from an archive (%s)\n' "$runtime" >&2
+        exit 1
+    fi
     # A duplicate definition names both files, for objects and for archive members.
     "${compiler[@]}" -c "$fixtures/dup.c" -o "$out/dup.o"
     expect_failure "$out/dup.log" "duplicate definition of 'calculate' in .*dup.o; it is already defined in .*library.o" "${compiler[@]}" "$out/main.o" "$out/library.o" "$out/dup.o" -o "$out/dup.dll"
@@ -66,7 +100,7 @@ for runtime in system portable; do
     "${compiler[@]}" -r -L"$out" -Wl,--whole-archive -lctor -o "$out/all-members.o"
     llvm-nm-22 --defined-only "$out/all-members.o" | grep -q ' T archived_only$'
     expect_failure "$out/only-archives.log" 'at least one explicit object or source as the link root' "${compiler[@]}" -r -L"$out" -lctor -o "$out/no-root.o"
-    printf 'PASS: %s: -c on IR and objects, -l:<file>, archive order and rescanning, whole archives, duplicate diagnostics, -r of archives\n' "$runtime"
+    printf 'PASS: %s: -c on IR and objects, -l:<file>, inputs by content, archive order and rescanning, whole archives, main from an archive, duplicate diagnostics, -r of archives\n' "$runtime"
 done
 # An object of the other mode is rejected by -c as by a link.
 expect_failure "$test_output/mismatch.log" 'ABI mismatch' "$llvmnet" --runtime=portable -c "$test_output/system/library.o" -o "$test_output/mismatch.o"

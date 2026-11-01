@@ -292,7 +292,8 @@ internal static class Driver
             foreach (LinkInput input in inputs)
             {
                 string extension = Path.GetExtension(input.Path);
-                if (input.Language is null && !SourceExtensions.Contains(extension) && extension is not (".o" or ".a") && !IsFortran(input))
+                // A linker input is what its content says, as for a native linker: an archive named .so or .lib, say.
+                if (input.Language is null && !SourceExtensions.Contains(extension) && !IsFortran(input))
                     extension = LinkerInputKind(input.Path) ?? extension;
                 bool ir = input.Language == "ir" || input.Language is null && extension is ".bc" or ".ll";
                 if (extension is ".o" or ".a" && input.Language is null || ir && !invocation.CompileOnly)
@@ -375,9 +376,13 @@ internal static class Driver
             if (options.Runtime == "system" && !options.Library && !invocation.Relocatable && invocation.DefaultLibraries && File.Exists(systemFortran))
                 bitcode.Add((systemFortran, false));
             string linked = Path.Combine(temporary, "linked.bc");
-            if (bitcode.All(input => Path.GetExtension(input.Path) == ".a" && !input.WholeArchive))
+            // An executable's root is its entry point, which an archive member may define (gtest_main, Catch2's main),
+            // as crt1.o's reference to main extracts it natively. A library or a relocatable object has no entry point.
+            bool executable = !options.Library && !invocation.Relocatable;
+            if (!executable && bitcode.All(input => LinkerInputKind(input.Path) == ".a" && !input.WholeArchive))
                 throw new ArgumentException("Provide at least one explicit object or source as the link root, or -Wl,--whole-archive before an archive.");
-            Llvm.Link([.. bitcode.Select(input => input.Path)], [.. bitcode.Select(input => input.WholeArchive)], linked, options.AbiTag);
+            Llvm.Link([.. bitcode.Select(input => input.Path)], [.. bitcode.Select(input => input.WholeArchive)], linked, options.AbiTag,
+                executable ? ["main", "_QQmain"] : []);
             if (invocation.KeepIr is not null)
                 File.Copy(linked, invocation.KeepIr, true);
             string output = Path.GetFullPath(invocation.Output ?? (options.Library ? "a.dll" : invocation.Relocatable ? "a.o" : invocation.EmitLlvm ? "a.bc" : "a.out"));
@@ -454,7 +459,7 @@ internal static class Driver
     /// <summary>
     /// What a file whose extension names no language is, read from its content: Clang hands such a file to the linker,
     /// so llvmnet links it when it is an LLVM bitcode object (".o") or an archive (".a"), whatever its name. CMake's
-    /// Generic platform, for one, names objects <c>.obj</c>.
+    /// Generic platform, for one, names objects <c>.obj</c>, and Chromium's toolchains archives <c>.so</c> or <c>.lib</c>.
     /// </summary>
     internal static string? LinkerInputKind(string path)
     {
@@ -467,7 +472,7 @@ internal static class Driver
         }
         catch (IOException) { return null; }
         catch (UnauthorizedAccessException) { return null; }
-        if (read == 8 && magic.SequenceEqual("!<arch>\n"u8)) return ".a";
+        if (read == 8 && (magic.SequenceEqual("!<arch>\n"u8) || magic.SequenceEqual("!<thin>\n"u8))) return ".a";
         // Raw bitcode starts with 'BC' 0xC0DE; the bitcode wrapper header with the little-endian word 0x0B17C0DE.
         if (read >= 4 && (magic[..4].SequenceEqual((ReadOnlySpan<byte>)[0x42, 0x43, 0xC0, 0xDE]) ||
                           magic[..4].SequenceEqual((ReadOnlySpan<byte>)[0xDE, 0xC0, 0x17, 0x0B]))) return ".o";
