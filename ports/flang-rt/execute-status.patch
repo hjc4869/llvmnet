@@ -1,0 +1,14 @@
+--- a/execute.cpp
++++ b/execute.cpp
+@@ -67,7 +67,10 @@
+ 
+ // If a condition occurs that would assign a nonzero value to CMDSTAT but
+ // the CMDSTAT variable is not present, error termination is initiated.
+-std::int64_t TerminationCheck(std::int64_t status, const Descriptor *cmdstat,
++// llvmnet: the wait status as the int that system() and waitpid() produce. With a 64-bit operand, musl's
++// WIFSIGNALED(s), defined as (((s)&0xffff)-1U < 0xffu), is true for a status of 0, so every successful command
++// reported CMDSTAT 7 ("Killed by signal"); glibc's definition happens to work with either width.
++std::int64_t TerminationCheck(int status, const Descriptor *cmdstat,
+     const Descriptor *cmdmsg, Terminator &terminator) {
+   // On both Windows and Linux, errno is set when system returns -1.
+   if (status == -1) {

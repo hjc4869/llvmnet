@@ -25,7 +25,10 @@ mkdir -p "$build/generated"
 sed -e 's/#cmakedefine01 HAVE_STRERROR_R/#define HAVE_STRERROR_R 1/' -e 's/#cmakedefine01 HAVE_DECL_STRERROR_S/#define HAVE_DECL_STRERROR_S 0/' \
     -e '/#cmakedefine HAVE_BACKTRACE/d' -e 's/\${BACKTRACE_HEADER}/execinfo.h/' \
     "$llvm/flang-rt/cmake/config.h.cmake.in" >"$build/generated/config.h"
-runtime="$llvm/flang-rt/lib/runtime"
+# The port's fixes (ports/flang-rt/README.md) apply to a copy of the runtime sources.
+cp -a "$llvm/flang-rt/lib/runtime" "$build/runtime"
+for patch in "$root"/ports/flang-rt/*.patch; do patch --quiet -d "$build/runtime" -p1 <"$patch"; done
+runtime="$build/runtime"
 sources=("$llvm/flang/lib/Decimal/binary-to-decimal.cpp" "$llvm/flang/lib/Decimal/decimal-to-binary.cpp")
 for name in ISO_Fortran_binding allocator-registry allocatable array-constructor assign buffer character connection copy \
     derived-api derived descriptor-io descriptor dot-product edit-input edit-output environment exceptions external-unit \
