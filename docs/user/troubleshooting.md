@@ -39,7 +39,7 @@ A compile error names the function and the LLVM instruction, with a `file:line:c
 - **Descriptors left open** at exit are reported with `LLVMNET_CHECK_DESCRIPTORS=1`.
 - **Indirect calls** through mismatched function-pointer types fail inside the CLR; `--check-indirect-calls` makes every indirect call check its target's signature and report the mismatch by name.
 - **Large functions.** `--diagnose-limits` reports each function's IL size and locals and the ones the JIT compiles without optimization.
-- **Threads and processes** in portable mode follow Linux semantics on every host, with the differences in [limitations.md](limitations.md#portable-mode): no `fork`, child processes through `posix_spawn`, `system` and `popen`, signals from inside the process delivered synchronously.
+- **Threads and processes** in portable mode follow Linux semantics on every host, with the differences in [limitations.md](limitations.md#portable-mode): no `fork`, child processes through `posix_spawn`, `system` and `popen`, signals from inside the process delivered synchronously. In system mode `fork` fails with `ENOSYS` under the JIT and works as NativeAOT ([modes.md](modes.md#system-abi)).
 - **Time zones**: `TZ` and the host's zoneinfo files are used where they exist; elsewhere (Windows, a container without tzdata) the host layer generates zone data from .NET's `TimeZoneInfo` with numeric abbreviations. `LLVMNET_ZONEINFO=managed` forces the generated data.
 
 ## Keeping the intermediate files
