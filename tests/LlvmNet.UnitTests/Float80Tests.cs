@@ -218,7 +218,8 @@ public sealed class Float80Tests
     [Fact] public void MultiplyMatchesTheReference() => CompareBinary(16, 300_000, "Multiply", Float80.Multiply, Float80Reference.Multiply);
     [Fact] public void DivideMatchesTheReference() => CompareBinary(17, 300_000, "Divide", Float80.Divide, Float80Reference.Divide);
     [Fact] public void RemainderMatchesTheReference() => CompareBinary(18, 40_000, "Remainder", Float80.Remainder, Float80Reference.Remainder);
-    [Fact] public void MultiplyAddMatchesTheReference() =>
+    [Fact]
+    public void MultiplyAddMatchesTheReference() =>
         CompareBinary(19, 50_000, "MultiplyAdd", (a, b) => Float80.MultiplyAdd(a, b, Float80.Negate(a)), (a, b) => Float80Reference.Add(Float80Reference.Multiply(a, b), Float80.Negate(a)));
 
     [Fact]
