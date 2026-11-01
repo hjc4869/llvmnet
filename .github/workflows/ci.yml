@@ -214,6 +214,56 @@ jobs:
             artifacts/tests/flang-rt-unittests/failures.txt
           if-no-files-found: ignore
 
+  # WG-04: ffmpeg's FATE suite against the real ffmpeg and ffprobe programs, native and portable builds of the same
+  # configuration, with the FATE samples verified against tests/ffmpeg/fate-suite.sha256 and cached between runs.
+  fate:
+    name: Nightly FATE (Linux x64)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    timeout-minutes: 360
+    env:
+      FFMPEG_FATE_THRESHOLD: "99"
+      FFMPEG_FATE_JOBS: "4"
+    steps:
+      - name: Install git
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install packages
+        run: bash scripts/ci/install-packages.sh --integration
+      - name: Mark the workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Hash the dependency inputs
+        id: deps
+        shell: bash
+        run: echo "hash=$(git ls-files -z '*.csproj' Directory.Build.props scripts/sources.lock | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            artifacts/vendor/downloads
+            artifacts/vendor/musl-native
+          key: deps-${{ runner.os }}-${{ steps.deps.outputs.hash }}
+      - uses: actions/cache@v4
+        with:
+          path: artifacts/vendor/fate-suite
+          key: fate-suite-${{ hashFiles('tests/ffmpeg/fate-suite.sha256') }}
+      - name: Build
+        run: bash scripts/ensure-built.sh
+      - name: FATE
+        run: tests/run.sh --no-build --tag fate --timeout-scale 2
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fate-results
+          path: |
+            artifacts/tests/results
+            artifacts/tests/ffmpeg-fate/*.tsv
+            artifacts/tests/ffmpeg-fate/failures.txt
+          if-no-files-found: ignore
+
   # XP-01 to XP-03: the same portable images the Linux job built and checked against native output run under the JIT
   # and, published from their relocatable NativeAOT projects, as native executables on each other supported host.
   xp:

@@ -12,6 +12,7 @@ tests/run.sh --tag core --tag toolchain --exclude-tag slow   # the pull-request 
 tests/run.sh smoke driver link-inputs                        # selected tests by name
 tests/run.sh --tag integration                               # zlib, libxml2, dav1d and ffmpeg from pinned sources
 tests/run.sh --tag conformance                               # libc-test, libc++, FCVS and gfortran, flang-rt unit tests, c-testsuite, llvm-test-suite
+tests/run.sh --tag fate                                      # ffmpeg's FATE suite, native and portable
 FUZZ_SEEDS=500 tests/run.sh fuzz                             # csmith and YARPGen differential fuzzing
 dotnet test tests/LlvmNet.UnitTests -c Release               # the unit tests (under a second)
 ```
@@ -30,6 +31,7 @@ Header keys: `tags` (selection), `requires` (prerequisites), `serial: N` (run al
 | `integration` | zlib, libxml2, dav1d and the ffmpeg profiles from pinned sources, decoded media compared with native builds | nightly |
 | `optional` | System-mode libstdc++ and OpenMP, SIMD128, local media (`FFMPEG_TEST_VIDEO`) | nightly where the prerequisites exist |
 | `conformance` | musl's libc-test, the libc++ and libc++abi lit suites (and, with `LIBCXX_NATIVEAOT=1`, a NativeAOT subset), FCVS and the gfortran tests of llvm-test-suite, flang-rt's own unit tests, c-testsuite, and llvm-test-suite's SingleSource and MultiSource with gcc-c-torture through the suite's CMake in portable, system and portable NativeAOT modes | nightly, in its own job |
+| `fate` | ffmpeg's FATE suite against the real `ffmpeg` and `ffprobe`, native and portable builds of the same configuration, with the samples verified against `tests/ffmpeg/fate-suite.sha256` | nightly |
 | `fuzz` | csmith and YARPGen programs compiled natively and with llvmnet, outputs compared, failures kept with a `repro.sh` | nightly, 500 seeds per generator |
 | `spec` | SPEC CPU 2017 and 2026 through the standard harness ([spec.md](spec.md)); licensed kits, never in public CI | a private runner |
 
@@ -39,7 +41,7 @@ The CI workflow (`.github/workflows/ci.yml`) runs the pull-request gate in the D
 
 - **Native builds.** Most fixture tests build the same source with `clang-22`, `clang++-22` or `flang-22` and compare stdout and the exit status; `LlvmNet.Checks compare-numeric` compares numeric output within a tolerance where native libm and musl differ by an ulp.
 - **Expected files.** IR tests (`tests/ir/*.ll`) carry their expected output, so they need no native oracle.
-- **Upstream suites.** libc-test, the libc++ lit suite (through `llvmnet-clang++` and the launcher), FCVS and the gfortran tests, flang-rt's gtest unit tests, c-testsuite and llvm-test-suite (through its own CMake and lit) run unmodified; each test records its pass counts and failure list under `artifacts/tests/<name>/`, and the nightly jobs upload them. A test counts when the native build passes it. `tests/conformance/llvm-test-suite.tsv` names the class of every known llvm-test-suite failure, and an unclassified one fails the suite.
+- **Upstream suites.** libc-test, the libc++ lit suite (through `llvmnet-clang++` and the launcher), FCVS and the gfortran tests, flang-rt's gtest unit tests, c-testsuite, llvm-test-suite (through its own CMake and lit) and FATE run unmodified; each test records its pass counts and failure list under `artifacts/tests/<name>/`, and the nightly jobs upload them. A test counts when the native build passes it. `tests/conformance/llvm-test-suite.tsv` names the class of every known llvm-test-suite failure, and an unclassified one fails the suite.
 - **The frozen ABI.** `tests/abi-freeze.sh` compares the portable sysroot's header stamp and the data layout `tests/abi/layout.c` prints with their frozen values, and links an object compiled at the freeze with a new program ([user/abi.md](../user/abi.md)).
 - **JIT validation.** `LlvmNet.Checks jit-all` forces the JIT to compile every method of every assembly the run emitted, so invalid IL fails even on paths no test executes; `ilverify` cannot be used, because translated code is unverifiable by design (raw pointers, `localloc`, `calli`).
 - **Generated pages.** `tests/support-matrix.sh`, `tests/driver-reference.sh` and `tests/limitations.sh` regenerate `docs/user/support-matrix.md`, the tables of `docs/user/driver.md` and `docs/user/limitations.md` and fail when the committed page differs, so the documentation is produced by the code it describes.

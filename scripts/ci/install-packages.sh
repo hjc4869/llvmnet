@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the llvmnet build and test prerequisites on Debian 13 (trixie). Run as root.
 # Shared by .devcontainer/Dockerfile and .github/workflows/ci.yml so both use the same package set.
-#   --integration   also install the tools needed by the integration tag (ffmpeg, Meson, Node.js, lld)
+#   --integration   also install the tools needed by the integration tag (ffmpeg, Meson, Node.js, lld, rsync)
 set -euo pipefail
 integration=0
 [[ "${1:-}" == --integration ]] && integration=1
@@ -22,7 +22,7 @@ packages=(
     build-essential zlib1g-dev libzstd-dev libxml2-dev libedit-dev libffi-dev
     cmake ninja-build m4 pkg-config perl python3 shellcheck
 )
-if [[ "$integration" -eq 1 ]]; then packages+=(meson ffmpeg nodejs lld-22); fi
+if [[ "$integration" -eq 1 ]]; then packages+=(meson ffmpeg nodejs lld-22 rsync); fi
 apt-get install -y --no-install-recommends "${packages[@]}"
 # NativeAOT invokes "clang" as its native compiler and linker; use the pinned LLVM release.
 ln -sfn /usr/bin/clang-22 /usr/local/bin/clang

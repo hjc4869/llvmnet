@@ -66,3 +66,30 @@ The library suites of LC-19, CX-08 and FT-06 already ran in the nightly job, but
 | libc++ under NativeAOT (vector, string constructors, futures, string streams, numeric facets) | 327 | 328 | 99.7% | 3 unsupported; the failure, `futures.async/thread_create_failure`, is the one the JIT run has (it expects thread creation to fail under a limit .NET does not apply) |
 
 The first runs of the unit tests found two defects, fixed in their own commits with tests: portable `open` with `O_CREAT` and read-only access failed with `EINVAL` (`14d0bba`), and `EXECUTE_COMMAND_LINE` reported `CMDSTAT` 7 ("Killed by signal") after every successful command, because flang-rt passed `system()`'s status to musl's `WIFSIGNALED` as a 64-bit integer (`fe0a79a`, `ports/flang-rt/execute-status.patch`).
+
+## WG-04: ffmpeg's FATE suite
+
+`tests/ffmpeg-fate.sh` (tag `fate`, its own nightly job) builds the pinned ffmpeg 9.0.2 twice with every component and the same asm-free, offline options (`--disable-asm --disable-inline-asm --disable-hwaccels --disable-autodetect --disable-network --enable-pthreads`), natively with `clang-22` and with llvmnet in portable mode, and runs `make fate` in both against the FATE samples. The samples (2,648 files, 1.3 GB, from `rsync://fate-suite.ffmpeg.org/fate-suite/`) are fetched by hash: every file must match `tests/ffmpeg/fate-suite.sha256`, and the nightly job caches them by that file's hash. FATE compares each output with its own reference; a test counts when the native build passes it. The portable `ffmpeg` and `ffprobe` are launchers beside a 72 MB managed image and run directly, as FATE runs native programs (`ffmpeg -version` takes 0.7 s).
+
+First run, with ffmpeg's configure unchanged (in memory-capped scopes, 12 jobs native and 8 portable):
+
+| Build | FATE tests run | Passed | Failed |
+| --- | ---: | ---: | --- |
+| native (clang-22, glibc) | 5,286 | 5,285 | `fate-source` (a check of the source tree's license headers and file list) |
+| portable (llvmnet) | 5,182 | 5,179 | `fate-source`, `fate-seek-cache-pipe`, `fate-seek-hls` |
+
+The two portable failures and the 104 checkasm tests the portable build did not run have one cause, outside the translation: ffmpeg's `check_func` probes a function by linking `extern int f(); int main(void){ f(); }`, a call without the arguments the definition takes, which llvmnet rejects in portable mode as a prototype that contradicts the definition. Configure therefore left 18 functions out of the portable build only (`mkstemp`, `tempnam`, `mmap`, `isatty`, `sysconf`, `sched_getaffinity`, `usleep` and others):
+
+- `fate-seek-cache-pipe`: without `mkstemp` or `tempnam`, the cache protocol cannot create its temporary file.
+- `fate-seek-hls`: without `sysconf` and `sched_getaffinity`, `av_cpu_count()` is 1, so the MPEG-2 encoder that generates the test's input ran one slice thread where the native build ran several, and the streams differ. With the thread count fixed (`-threads 1`) both builds produce identical streams; intra-only encoding, which slices do not affect, is identical either way.
+
+The harness now runs both builds from a copy of configure whose probe takes the function's address instead of calling it, so the two configurations agree. The probe's form is common: autoconf's `AC_CHECK_FUNCS` also declares the function with a `char` result and calls it with no arguments, so autotools projects configured in portable mode would lose functions the same way; this is [proposed for the owner](../plan/decisions.md#proposed-for-the-owner-2026-11-01-m9) as part of the build-system item TC-07.
+
+Final run, `tests/ffmpeg-fate.sh` with the patched probe (`LLVMNET_SKIP_BUILD=1 FFMPEG_FATE_JOBS=12`, 24 GB memory cap, about 35 minutes: native configure, build and FATE 2 minutes, portable configure 3, build 5, FATE 22):
+
+| Build | FATE tests run | Passed | Failed |
+| --- | ---: | ---: | --- |
+| native | 5,286 | 5,285 | `fate-source` |
+| portable | 5,286 | 5,285 | `fate-source` |
+
+Every test the native build passes, the portable build passes: 5,285 of 5,285. The configurations now differ only in what the portable target does not have by design: Linux kernel headers (`asm/types.h`, `linux/perf_event.h`, V4L2, OSS) and x86 features (`MM_EMPTY`, `EBP_AVAILABLE`).
