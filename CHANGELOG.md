@@ -79,6 +79,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 
 ### Removed
 
+- `tests/all.sh` and `tests/toolchain-all.sh`, thin wrappers nothing referenced; `tests/run.sh --tag` selects the gates (RL-09).
 - The hand-written C library, the C# Fortran runtime, the hand-written portable headers and the MathNet.Numerics dependency (LC-17).
 - **Breaking:** `--native-import symbol=library!entrypoint`, the explicit scalar P/Invoke path of system mode; the option fails with guidance to use `--system-library`, whose generated bridges cover every signature it handled (SA-01, ADR-04).
 
