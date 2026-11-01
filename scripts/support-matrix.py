@@ -142,6 +142,10 @@ probe("Intrinsics: vector reductions", "llvm.vector.reduce.fmax.v4f64", "define 
 probe("Intrinsics: vector", "llvm.vector.reverse", "define <4 x i32> @probe(<4 x i32> %a) {\n  %r = call <4 x i32> @llvm.vector.reverse.v4i32(<4 x i32> %a)\n  ret <4 x i32> %r\n}\ndeclare <4 x i32> @llvm.vector.reverse.v4i32(<4 x i32>)\n")
 probe("Intrinsics: vector", "llvm.get.active.lane.mask", "define <4 x i1> @probe(i64 %a) {\n  %r = call <4 x i1> @llvm.get.active.lane.mask.v4i1.i64(i64 %a, i64 10)\n  ret <4 x i1> %r\n}\ndeclare <4 x i1> @llvm.get.active.lane.mask.v4i1.i64(i64, i64)\n")
 probe("Intrinsics: vector", "vector integer arithmetic (scalarized)", "define <8 x i16> @probe(<8 x i16> %a) {\n  %r = mul <8 x i16> %a, %a\n  %s = call <8 x i16> @llvm.umax.v8i16(<8 x i16> %r, <8 x i16> %a)\n  ret <8 x i16> %s\n}\ndeclare <8 x i16> @llvm.umax.v8i16(<8 x i16>, <8 x i16>)\n")
+probe("Intrinsics: x86", "llvm.x86.sse2.pause", body("  call void @llvm.x86.sse2.pause()\n  ret void") + "declare void @llvm.x86.sse2.pause()\n")
+probe("Intrinsics: x86", "llvm.x86.sse2.mfence / lfence, llvm.x86.sse.sfence", body("  call void @llvm.x86.sse2.mfence()\n  call void @llvm.x86.sse2.lfence()\n  call void @llvm.x86.sse.sfence()\n  ret void")
+      + "declare void @llvm.x86.sse2.mfence()\ndeclare void @llvm.x86.sse2.lfence()\ndeclare void @llvm.x86.sse.sfence()\n")
+probe("Intrinsics: x86", "SSE and AVX operations (llvm.x86.sse2.psad.bw)", "define <2 x i64> @probe(<16 x i8> %a) {\n  %r = call <2 x i64> @llvm.x86.sse2.psad.bw(<16 x i8> %a, <16 x i8> %a)\n  ret <2 x i64> %r\n}\ndeclare <2 x i64> @llvm.x86.sse2.psad.bw(<16 x i8>, <16 x i8>)\n")
 # Linkage
 linkage = [
     ("global alias", "define i32 @f() {\n  ret i32 1\n}\n@g = alias i32 (), ptr @f\ndefine i32 @probe() {\n  %r = call i32 @g()\n  ret i32 %r\n}\n"),

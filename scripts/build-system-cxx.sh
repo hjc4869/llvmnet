@@ -18,6 +18,12 @@ if ! grep -qx '#define _GLIBCXX_RELEASE 16' "$build/header-macros.txt"; then
 fi
 awk '/^#define (_DARWIN_USE_64_BIT_INODE|_FILE_OFFSET_BITS|_LARGE_FILES)( |$)/' \
     "$build/header-macros.txt" > "$build/include/bits/largefile-config.h"
+# The host's libstdc++ embeds the time-zone database (_GLIBCXX_STATIC_TZDATA) as libstdc++'s own build does.
+{
+    printf 'static const char tzdata_chars[] = R"__libstdcxx__(\n'
+    cat "$source_root/src/c++20/tzdata.zi"
+    printf ')__libstdcxx__";\n'
+} > "$build/include/tzdata.zi.h"
 bash "$root/scripts/ensure-built.sh"
 sources=(
     src/c++98/globals_io.cc
@@ -58,6 +64,20 @@ sources=(
     src/c++17/fs_dir.cc
     src/c++17/fs_ops.cc
     src/c++17/fs_path.cc
+    src/c++17/floating_to_chars.cc
+    src/c++17/floating_from_chars.cc
+    # src/c++20 as libstdc++.so has it: the C++20 overloads its headers declare extern (stringstream::str() const &,
+    # string's C++20 members, the formatters), time zones, atomic waits, clocks and synchronized streams. src/c++23
+    # has no instantiation units; its print.cc and stacktrace.cc belong to libstdc++exp, which this archive leaves out.
+    src/c++20/sstream-inst.cc
+    src/c++20/string-inst.cc
+    src/c++20/cow-string-inst.cc
+    src/c++20/format-inst.cc
+    src/c++20/format.cc
+    src/c++20/tzdb.cc
+    src/c++20/atomic.cc
+    src/c++20/clock.cc
+    src/c++20/syncbuf.cc
     src/c++11/hashtable_c++0x.cc
     src/c++11/thread.cc
     src/c++11/future.cc
@@ -118,8 +138,11 @@ for source_spec in "${sources[@]}"; do
     case "$source" in src/c++98/*|config/locale/gnu/*) standard=gnu++98 ;; esac
     if [[ "$source" == config/locale/gnu/ctype_members.cc ]]; then standard=gnu++11; fi
     if [[ "$source" == src/c++17/* ]]; then standard=gnu++17; fi
+    if [[ "$source" == src/c++20/* ]]; then standard=gnu++20; fi
     compiler_args=()
     if [[ "$standard" == gnu++11 ]]; then compiler_args+=(-fchar8_t); fi
+    # libstdc++ compiles format.cc this way: it needs std::text_encoding and the internals of std::locale.
+    if [[ "$source" == src/c++20/format.cc ]]; then standard=gnu++26; compiler_args+=(-fno-access-control); fi
     if [[ "$source_spec" == *:cow ]]; then compiler_args+=(-D_GLIBCXX_USE_CXX11_ABI=0); fi
     if [[ "$source" == src/c++11/random.cc ]]; then compiler_args+=(-include "$root/config/system-cxx-random.h"); fi
     if [[ "$source" == *.c ]]; then

@@ -57,6 +57,10 @@ internal sealed class HostInterop : IDisposable
         "atexit" => typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.AtExit)),
         // exit must run the managed handler list before the native exit, which never sees those handlers.
         "exit" => typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.Exit)),
+        // A forked child keeps running translated code; the adapters refuse while generated code is shared memory.
+        "fork" or "vfork" => typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.Fork)),
+        "_Fork" => typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.ForkWithoutHandlers)),
+        "forkpty" => typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.ForkPty)),
         _ => null
     };
 

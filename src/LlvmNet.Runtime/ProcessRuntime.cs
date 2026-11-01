@@ -141,6 +141,50 @@ public static unsafe class ProcessRuntime
         Environment.Exit(result);
     }
 
+    private static int sharedCode = -1;
+
+    /// <summary>
+    /// fork and vfork in system mode (HostInterop adapters). A forked child goes on running translated code, so it
+    /// needs a private copy of the code the runtime generated. Under the JIT, CoreCLR's W^X maps that code from a shared
+    /// memory object, so a child and its parent would write their compiled methods and stubs into the same pages: the
+    /// call fails with ENOSYS while such a mapping exists, as fork does in portable mode. NativeAOT, which generates no
+    /// code, and the JIT with DOTNET_EnableWriteXorExecute=0 call the host's fork. vfork gets fork's semantics, which
+    /// POSIX permits: its child would overwrite the frames that the suspended parent returns through.
+    /// </summary>
+    public static int Fork() => SharedCode() ? Unavailable() : ((delegate* unmanaged[Cdecl]<int>)SystemAbi.Symbol("libc.so.6", "fork"))();
+
+    /// <summary>_Fork, which runs no atfork handlers; see <see cref="Fork"/>.</summary>
+    public static int ForkWithoutHandlers() => SharedCode() ? Unavailable() : ((delegate* unmanaged[Cdecl]<int>)SystemAbi.Symbol("libc.so.6", "_Fork"))();
+
+    /// <summary>forkpty, which forks inside the C library; see <see cref="Fork"/>.</summary>
+    public static int ForkPty(nint master, nint name, nint terminal, nint size) => SharedCode() ? Unavailable() :
+        ((delegate* unmanaged[Cdecl]<nint, nint, nint, nint, int>)SystemAbi.Symbol("libc.so.6", "forkpty"))(master, name, terminal, size);
+
+    private static int Unavailable()
+    {
+        Marshal.SetLastSystemError(Linux.ENOSYS);
+        return -1;
+    }
+
+    /// <summary>
+    /// Whether the process has a shared executable mapping, which is how CoreCLR's W^X maps generated code. The answer
+    /// does not change while the process runs: W^X is fixed at startup, and the JIT has compiled code by the first call.
+    /// </summary>
+    private static bool SharedCode()
+    {
+        if (sharedCode < 0)
+        {
+            int shared = 0;
+            foreach (string line in File.ReadLines("/proc/self/maps"))
+            {
+                int start = line.IndexOf(' ') + 1;
+                if (start > 0 && line.Length >= start + 4 && line[start + 2] == 'x' && line[start + 3] == 's') { shared = 1; break; }
+            }
+            sharedCode = shared;
+        }
+        return sharedCode == 1;
+    }
+
     /// <summary>libstdc++'s assertion failure (system mode C++ through the bridge).</summary>
     public static void AssertFail(nint assertion, nint file, int line, nint function) =>
         throw new InvalidOperationException($"{CString.Text(file)}:{line}: {CString.Text(function)}: assertion {CString.Text(assertion)} failed");

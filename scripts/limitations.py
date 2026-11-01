@@ -26,6 +26,7 @@ Programs are compiled through Clang and Flang 22 and translated from LLVM IR to 
 Further limits of the translation:
 
 - Vector IR runs as scalar code: LLVM's vectorizers are off by default and their output is scalarized (ADR-10); the opt-in `--simd128` header path maps `wasm_simd128.h` intrinsics to `Vector128` ([simd128.md](simd128.md)).
+- x86 target intrinsics (`llvm.x86.*`, from SSE and AVX code paths) are not translated, apart from `_mm_pause` and the SSE fences: compiling a unit that contains one warns, and linking a program that reaches it fails. System mode predefines `__SSE__` and `__SSE2__`, so libraries take such paths there; `-U__SSE__ -U__SSE2__` or the library's own switch selects its C path ([modes.md](modes.md#system-abi)).
 - `longjmp` cannot cross native frames (system mode), and an external thread-local global needs a bitcode definition (SA-03).
 - A function with very many aggregate values or `setjmp` sites can exceed the CLR's limits on locals, and a very large function runs without JIT optimization; `--diagnose-limits` reports both (BE-25, BE-26).
 - Emitted assemblies carry no debug information yet, so stack traces show LLVM symbol names without source lines; `-g` gives compiler diagnostics a `file:line:col` location (BE-28).
@@ -69,6 +70,7 @@ SYSTEM = """## System mode
 - Linux x86-64 only (`system-linux-x64-v1`); a Linux ARM64 system ABI is post-1.0 (SA-08).
 - Native code cannot call translated variadic or aggregate callbacks (SA-02); thread cancellation and `pthread_exit` across managed frames (SA-05), signal handlers in translated code (SA-06), external native TLS globals (SA-03) and callbacks on threads created by native libraries (SA-04) are incomplete.
 - No native C++ library interchange: C++ library code must be linked as bitcode (the optional libstdc++ archive, or libc++ in portable mode).
+- `fork`, `vfork`, `_Fork` and `forkpty` fail with `ENOSYS` under the JIT, whose W^X protection maps generated code from shared memory that a child would share with its parent; NativeAOT executables, and the JIT with `DOTNET_EnableWriteXorExecute=0`, call the host's `fork`, and the child should do no more than a multithreaded program's child may before `exec`. `posix_spawn`, `system` and `popen` work in every case ([modes.md](modes.md#system-abi)).
 - OpenMP needs a staged LLVM OpenMP runtime on the loader path (`scripts/install-system-openmp.sh`).
 - `-static` is not accepted: the host's C library and native libraries are reached through generated bridges.
 """

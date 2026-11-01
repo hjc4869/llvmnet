@@ -342,6 +342,7 @@ internal static class Driver
                 {
                     throw new InvalidOperationException($"the frontend's output {destination} is not LLVM {(invocation.Textual ? "IR" : "bitcode")} ({error.Message}); an option such as --analyze, -emit-ast or --precompile changes what the frontend writes.");
                 }
+                if (!frontend.Contains("-w")) WarnX86Intrinsics(destination, options.Runtime == "system", new Diagnostics(arguments));
                 bitcode.Add((destination, false));
             }
             if (invocation.CompileOnly || invocation.DryRun)
@@ -439,6 +440,35 @@ internal static class Driver
         finally
         {
             Directory.Delete(temporary, true);
+        }
+    }
+
+    /// <summary>
+    /// Warns, when the unit is compiled, about each x86 target intrinsic the backend does not translate
+    /// (FunctionEmitter.TranslatesX86Intrinsic): such intrinsics come from SSE and AVX code paths, which system mode's
+    /// native feature macros select, and the translation rejects them only at the final link. A warning, not an error:
+    /// the link drops unreferenced functions, and library code often holds such a function that few programs reach
+    /// (flang-rt's floating-point exception accessors read MXCSR). Bitcode keeps symbol names verbatim in its string
+    /// table, so a unit without the prefix is not parsed a second time.
+    /// </summary>
+    private static void WarnX86Intrinsics(string path, bool system, Diagnostics diagnostics)
+    {
+        if (File.ReadAllBytes(path).AsSpan().IndexOf("llvm.x86."u8) < 0) return;
+        using var module = new LlvmModule(path);
+        foreach (nint function in Llvm.Functions(module.Handle))
+        {
+            string name = Llvm.Name(function);
+            if (!name.StartsWith("llvm.x86.", StringComparison.Ordinal) || FunctionEmitter.TranslatesX86Intrinsic(name)) continue;
+            for (nint use = Llvm.LLVMGetFirstUse(function); use != 0; use = Llvm.LLVMGetNextUse(use))
+            {
+                nint call = Llvm.LLVMGetUser(use);
+                if (Llvm.LLVMIsAInstruction(call) == 0) continue;
+                nint caller = Llvm.LLVMGetBasicBlockParent(Llvm.LLVMGetInstructionParent(call));
+                string? location = Llvm.DebugLocation(call) ?? Llvm.DebugLocation(caller);
+                diagnostics.Warning(location, FunctionEmitter.X86IntrinsicMessage(name, system, compiling: true));
+                diagnostics.Note(null, $"in function '{Llvm.Demangle(Llvm.Name(caller))}'{(location is null ? " (compile with -g or -gline-tables-only for source locations)" : "")}");
+                break;
+            }
         }
     }
 
