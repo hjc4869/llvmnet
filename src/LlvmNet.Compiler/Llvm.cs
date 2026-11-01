@@ -8,7 +8,7 @@ internal static unsafe class Llvm
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_constant_bits")]
     private static extern uint ConstantBits(nint value, byte* destination, uint capacity);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_link")]
-    private static extern int LinkFiles(nint* paths, int* wholeArchive, uint count, [MarshalAs(UnmanagedType.LPUTF8Str)] string output, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, out nint message);
+    private static extern int LinkFiles(nint* paths, int* wholeArchive, uint count, nint* entry, uint entryCount, [MarshalAs(UnmanagedType.LPUTF8Str)] string output, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, out nint message);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_stamp_abi")]
     private static extern int StampFile([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, int textual, out nint message);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_create_native_shim")]
@@ -42,21 +42,23 @@ internal static unsafe class Llvm
     }
 
     /// <summary>
-    /// Links objects and archives into one bitcode module: every object, and the archive members that resolve a
-    /// referenced symbol (rescanning until none does) or every member of an archive marked whole-archive.
+    /// Links objects and archives (recognized by content) into one bitcode module: every object, and the archive
+    /// members that resolve a referenced symbol (rescanning until none does) or every member of an archive marked
+    /// whole-archive. While none of the <paramref name="entry"/> names is defined, a member defining one is linked too.
     /// </summary>
-    internal static void Link(string[] paths, bool[] wholeArchive, string output, string abi)
+    internal static void Link(string[] paths, bool[] wholeArchive, string output, string abi, string[]? entry = null)
     {
-        nint[] pointers = new nint[paths.Length];
+        entry ??= [];
+        nint[] pointers = new nint[paths.Length + entry.Length];
         int[] whole = wholeArchive.Select(flag => flag ? 1 : 0).ToArray();
         try
         {
-            for (int index = 0; index < paths.Length; index++)
-                pointers[index] = Marshal.StringToCoTaskMemUTF8(paths[index]);
+            for (int index = 0; index < pointers.Length; index++)
+                pointers[index] = Marshal.StringToCoTaskMemUTF8(index < paths.Length ? paths[index] : entry[index - paths.Length]);
             fixed (nint* pointer = pointers)
             fixed (int* flags = whole)
             {
-                if (LinkFiles(pointer, flags, (uint)paths.Length, output, abi, out nint message) == 0)
+                if (LinkFiles(pointer, flags, (uint)paths.Length, pointer + paths.Length, (uint)entry.Length, output, abi, out nint message) == 0)
                     return;
                 string text = Marshal.PtrToStringUTF8(message) ?? "LLVM link failed";
                 LLVMDisposeMessage(message);

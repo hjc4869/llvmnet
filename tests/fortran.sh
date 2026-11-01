@@ -26,9 +26,15 @@ printf 'PASS: Fortran allocatables, internal records, formatted/list I/O, NEWUNI
 test -f "$output/arithmetic.mod"
 "$root/bin/llvmnet" -I"$output" "$root/tests/fortran/module-main.f90" "$output/arithmetic.o" -o "$output/module-main.dll"
 dotnet "$output/module-main.dll"
+# A main program in an archive member is linked, as a native link extracts it through crt1.o's reference to main.
+"$root/bin/llvmnet" -I"$output" -c "$root/tests/fortran/module-main.f90" -o "$output/module-main.o"
+rm -f "$output/libmodule-main.a"
+llvm-ar-22 rcs "$output/libmodule-main.a" "$output/module-main.o"
+"$root/bin/llvmnet" "$output/arithmetic.o" -L"$output" -lmodule-main -o "$output/archived-main.dll"
+dotnet "$output/archived-main.dll"
 "$root/bin/llvmnet" -E "$root/tests/fortran/arithmetic.f90" -o "$output/arithmetic-preprocessed.f90"
 grep -qi 'module arithmetic' "$output/arithmetic-preprocessed.f90"
-printf 'PASS: separate Fortran modules, persistent module outputs and Flang preprocessing\n'
+printf 'PASS: separate Fortran modules, a main program from an archive, persistent module outputs and Flang preprocessing\n'
 flang-22 -O3 "$root/tests/fortran/character-search.f90" -o "$output/search-native"
 "$output/search-native" ababa
 for runtime in system portable; do
