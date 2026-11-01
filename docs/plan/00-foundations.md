@@ -11,7 +11,7 @@ This workstream makes every later change reviewable and verifiable: a license, a
 - Tests: 79 Bash scripts (2,206 lines) plus 4,111 lines of C/C++/Fortran/LLVM IR fixtures. `tests/all.sh` runs them sequentially under `set -e`, so the first failure aborts the run and there is no per-test result record. Every script re-invokes `dotnet build`. `tests/LlvmNet.Checks` provides `inspect` (IL-only and P/Invoke count), `compare-numeric` and a SIMD probe. There are no unit tests for the compiler or runtime classes.
 - External inputs default to machine-specific paths: ffmpeg from `/mnt/storage/david/Development/LightPlayer-Packages`, test media from `/home/david/Videos/*.mp4`, licensed SPEC kits under `artifacts/`. A new contributor cannot run the integration tags.
 - The version string `llvmnet 0.2.0` is hard-coded in `Driver.cs`. Emitted assemblies carry only the ABI tag, not the compiler version.
-- `tests/smoke.sh` and `tests/driver.sh` pass today. The full `tests/all.sh core` result for 2026-10-30 is recorded in the [README status snapshot](README.md#status-snapshot-2026-10-30).
+- `tests/smoke.sh` and `tests/driver.sh` pass today. The full `tests/all.sh core` result for 2026-10-30 is recorded in the [README status snapshot](README.md#status-snapshot-2026-10-30-before-m0).
 
 ## Items
 

@@ -6,7 +6,7 @@ By contributing you agree that your contribution is licensed under the MIT Licen
 
 ## Build
 
-Requirements are listed in [README.md](README.md#build). `scripts/ci/install-packages.sh` installs them on Debian 13, and `.devcontainer/` provides the same environment as a container.
+Requirements are listed in [README.md](README.md#install). `scripts/ci/install-packages.sh` installs them on Debian 13, and `.devcontainer/` provides the same environment as a container.
 
 ```sh
 bash scripts/ensure-built.sh     # solution and sysroots
