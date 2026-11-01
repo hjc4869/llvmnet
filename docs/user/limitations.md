@@ -6,7 +6,7 @@ What llvmnet does not do, in one place. The two tables are generated from code: 
 
 Programs are compiled through Clang and Flang 22 and translated from LLVM IR to CIL; what the frontends reject is theirs to report. The backend rejects the constructs below with a compile error naming the function and the instruction ([driver.md](driver.md#exit-status)); everything else in the support matrix is translated.
 
-28 of the 214 probed constructs are rejected (186 translated).
+31 of the 220 probed constructs are rejected (189 translated).
 
 | Construct | Diagnostic |
 | --- | --- |
@@ -16,11 +16,14 @@ Programs are compiled through Clang and Flang 22 and translated from LLVM IR to 
 | Types: `fp128` | Unsupported LLVM type: fp128 |
 | Types: `ppc_fp128` | Unsupported LLVM type: ppc_fp128 |
 | Types: `<vscale x 4 x i32>` | Unsupported LLVM type: <vscale x 4 x i32> |
-| Instructions: `indirectbr (computed goto)` | Unresolved value: ptr blockaddress(@probe, %a) |
+| Instructions: `indirectbr (computed goto)` | Unresolved value: ptr blockaddress(@probe, %b) |
 | Instructions: `atomicrmw uinc_wrap` | Atomic RMW operation 15 |
 | Instructions: `inline asm (instructions)` | Inline assembly with instructions or outputs is not supported; use a pure C configuration. |
 | Instructions: `callbr (asm goto)` | Unsupported LLVM opcode 67 |
 | Instructions: `va_arg instruction` | Unsupported LLVM opcode 49 |
+| Instructions: `musttail call with a byval argument` | musttail call to probe: a byval argument cannot be a tail call, because its copy is in the caller's frame. |
+| Instructions: `musttail call forwarding variadic arguments` | musttail call to probe: calls that forward variadic arguments cannot be tail calls. |
+| Instructions: `musttail call with a 32-byte vector argument` | musttail call to probe with type <8 x float> (<8 x float>): arguments and results of more than 16 bytes cannot be tail calls, because Windows x64 and ARM64 pass them by reference to a copy in the caller's frame. |
 | Instructions: `catchswitch / catchpad (Windows EH)` | Unsupported LLVM type: token |
 | Intrinsics: control: `llvm.returnaddress / frameaddress` | Unsupported intrinsic: llvm.returnaddress |
 | Intrinsics: control: `llvm.eh.sjlj.setjmp / longjmp (__builtin_setjmp)` | Unsupported intrinsic: llvm.eh.sjlj.longjmp |
@@ -43,6 +46,7 @@ Further limits of the translation:
 
 - Vector IR runs as scalar code: LLVM's vectorizers are off by default and their output is scalarized (ADR-10); the opt-in `--simd128` header path maps `wasm_simd128.h` intrinsics to `Vector128` ([simd128.md](simd128.md)).
 - `longjmp` cannot cross native frames (system mode), and an external thread-local global needs a bitcode definition (SA-03).
+- A `musttail` call (`[[clang::musttail]]`) becomes a CIL `tail.` call and runs in constant stack under the JIT and NativeAOT; a function that makes one takes its allocas and variadic call area from llvmnet's per-thread arena instead of the CLR stack, because NativeAOT reuses the frame only when it has no `localloc`. The `musttail` calls in the table above are rejected: a `byval` argument, an argument or result of more than 16 bytes (which Windows x64 and ARM64 pass by reference to a copy in the caller's frame), and forwarded variadic arguments. Windows x64 also passes 16-byte vectors, `long double` and 128-bit integers by reference, so there a NativeAOT executable makes a `musttail` call with one an ordinary call (the JIT keeps the guarantee through its tail-call helpers). In system mode a `musttail` call to a native function is an ordinary call. Ordinary `tail` calls stay ordinary calls: the prefix would keep RyuJIT from inlining the callee.
 - A function with very many aggregate values or `setjmp` sites can exceed the CLR's limits on locals, and a very large function runs without JIT optimization; `--diagnose-limits` reports both (BE-25, BE-26).
 - Emitted assemblies carry no debug information yet, so stack traces show LLVM symbol names without source lines; `-g` gives compiler diagnostics a `file:line:col` location (BE-28).
 - Native code cannot call a translated variadic or aggregate callback (system mode, SA-02).

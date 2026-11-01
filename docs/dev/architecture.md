@@ -18,6 +18,8 @@ LLVM SSA values map to typed CIL locals and basic blocks to CIL labels. PHI copi
 
 Integers up to 32 bits use CIL `int32`, up to 64 bits `int64`, and up to 128 bits `UInt128` with explicit signed and unsigned helpers; wider integers are rejected. Narrow values are normalized to their LLVM bit width, and signed operations sign-extend from that width first. Odd-width stores touch only the bytes the LLVM value occupies.
 
+Integer and pointer `select`, `llvm.abs` and the integer min/max intrinsics are computed with masks instead of branches (`false ^ ((true ^ false) & mask)`, `(x ^ s) - s`), because RyuJIT turns a branch into a conditional move only outside loops; a select whose condition orders two integers of at most 32 bits takes its mask from the sign of their 64-bit difference. Floating-point, 128-bit and aggregate selects keep a branch, which is exact for every value.
+
 `float` and `double` use their CIL equivalents. `x86_fp80` uses `Float80`, a software value in 16-byte storage with a 64-bit significand, the full extended exponent range and round-to-nearest-even arithmetic; its constants are extracted bit for bit through LLVM. `half`, `bfloat` and `fp128` are rejected. `llvm.fmuladd` rounds the product and the sum separately, which LLVM permits; `llvm.fma` is fused.
 
 Fixed-length vectors are scalarized by LLVM before translation. Vector values that remain at function boundaries use explicit-layout value storage with lane insertion and extraction, including bit-packed integer masks. Scalable vectors, target-specific intrinsics and some generic vector intrinsics are rejected; [user/support-matrix.md](../user/support-matrix.md) lists them.
@@ -35,6 +37,8 @@ Arrays and structures are explicit-layout value types used as bit containers. Lo
 Functions with more than 32,768 SSA values and no `setjmp` sites reuse primitive locals whose uses stay within one block, and keep values that cross blocks in typed per-call arrays, so they stay below the CIL local limit. Large aggregate-heavy or `setjmp` functions can still exceed CLR limits; `--diagnose-limits` reports the sizes.
 
 Direct `setjmp` sites resume through a managed exception dispatcher in the owning activation, preserving live locals and restoring allocation checkpoints. `longjmp` cannot cross native frames. `sigsetjmp` saves the requested signal mask: the native one in system mode, the host layer's in portable mode.
+
+A `musttail` call becomes a CIL `tail.` call followed by `ret`. The JIT honors it as a fast tail call that reuses the frame or, when it cannot, through the runtime's tail-call helpers; NativeAOT has no helpers, and on x64 refuses a fast tail call from a method that uses `localloc`. A function with a `musttail` call therefore takes its allocas and variadic call area from the scoped allocation arena, and a tail call inside the arena's (or a `setjmp` dispatcher's) protected region first leaves it, so the `finally` releases the arena before the call. Calls a fast tail call cannot carry are compile errors: `byval` arguments, arguments or results of more than 16 bytes, and forwarded variadic arguments. Windows x64 passes 16-byte values by reference too, so there NativeAOT makes a `musttail` call with a vector, `long double` or 128-bit argument an ordinary call. Ordinary `tail` calls are plain calls: an explicit tail call is never inlined.
 
 Defined thread-local globals use lazy per-thread storage with initialization and destructor cleanup. External thread-local globals need a bitcode definition.
 

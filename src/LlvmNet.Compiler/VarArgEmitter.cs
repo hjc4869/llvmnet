@@ -23,10 +23,12 @@ internal sealed class VarArgEmitter(CilCompiler compiler, ILGenerator il, Functi
         return attribute == 0 ? 0 : Llvm.LLVMGetTypeAttributeValue(attribute);
     }
 
-    /// <summary>Whether the method holds a variadic call area (a localloc block).</summary>
+    /// <summary>Whether the method holds a variadic call area (a localloc or arena block).</summary>
     internal bool Allocated => storage is not null;
 
-    internal void Allocate(nint function)
+    /// <summary>Allocates the area for the function's largest variadic call: with localloc, or from the thread's alloca
+    /// arena when <paramref name="arena"/> is set (a function with a musttail call, which must not use localloc).</summary>
+    internal void Allocate(nint function, bool arena)
     {
         int size = 0;
         foreach (nint instruction in Llvm.Blocks(function).SelectMany(Llvm.Instructions))
@@ -45,9 +47,25 @@ internal sealed class VarArgEmitter(CilCompiler compiler, ILGenerator il, Functi
         if (size == 0)
             return;
         storage = il.DeclareLocal(typeof(nint));
-        il.Emit(OpCodes.Ldc_I4, size);
-        il.Emit(OpCodes.Conv_U);
-        il.Emit(OpCodes.Localloc);
+        if (arena)
+        {
+            // Arena blocks are not aligned; the floating-point slots are 16-byte ones, as in localloc's block.
+            il.Emit(OpCodes.Ldc_I4, size + 15);
+            il.Emit(OpCodes.Conv_U);
+            il.Emit(OpCodes.Call, typeof(StackMemory).GetMethod(nameof(StackMemory.Allocate))!);
+            il.Emit(OpCodes.Ldc_I4, 15);
+            il.Emit(OpCodes.Conv_I);
+            il.Emit(OpCodes.Add);
+            il.Emit(OpCodes.Ldc_I4, -16);
+            il.Emit(OpCodes.Conv_I);
+            il.Emit(OpCodes.And);
+        }
+        else
+        {
+            il.Emit(OpCodes.Ldc_I4, size);
+            il.Emit(OpCodes.Conv_U);
+            il.Emit(OpCodes.Localloc);
+        }
         il.Emit(OpCodes.Stloc, storage);
     }
 

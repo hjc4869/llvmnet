@@ -71,6 +71,20 @@ for name, text in instructions.items():
     if text is not None:
         probe("Instructions", name, body(text))
 probe("Instructions", "va_arg instruction", "define i32 @probe(ptr %list) {\n  %v = va_arg ptr %list, i32\n  ret i32 %v\n}\n")
+probe("Instructions", "tail / notail call", "define i32 @probe(i32 %a) {\n  %r = tail call i32 @probe(i32 %a)\n  %s = notail call i32 @probe(i32 %r)\n  ret i32 %s\n}\n")
+probe("Instructions", "musttail call (direct, indirect, with an alloca)",
+      "define i32 @probe(i32 %a, ptr %f) {\n  %x = alloca i32\n  store volatile i32 %a, ptr %x\n  %c = icmp ult i32 %a, 2\n"
+      "  br i1 %c, label %direct, label %indirect\ndirect:\n  %b = sub i32 %a, 1\n  %r = musttail call i32 @probe(i32 %b, ptr %f)\n  ret i32 %r\n"
+      "indirect:\n  %s = musttail call i32 %f(i32 %a, ptr %f)\n  ret i32 %s\n}\n")
+probe("Instructions", "musttail call with a byval argument",
+      "%b = type { [6 x i64] }\ndefine i64 @probe(ptr byval(%b) %p) {\n  %r = musttail call i64 @probe(ptr byval(%b) %p)\n  ret i64 %r\n}\n")
+probe("Instructions", "musttail call forwarding variadic arguments",
+      "define i32 @probe(i32 %n, ...) {\n  %r = musttail call i32 (i32, ...) @probe(i32 %n, ...)\n  ret i32 %r\n}\n")
+probe("Instructions", "musttail call with 16-byte values (vector, i128, x86_fp80)",
+      "define <4 x float> @probe(<4 x float> %a, i128 %b, x86_fp80 %c, ptr %f) {\n"
+      "  %r = musttail call <4 x float> %f(<4 x float> %a, i128 %b, x86_fp80 %c, ptr %f)\n  ret <4 x float> %r\n}\n")
+probe("Instructions", "musttail call with a 32-byte vector argument",
+      "define <8 x float> @probe(<8 x float> %a) {\n  %r = musttail call <8 x float> @probe(<8 x float> %a)\n  ret <8 x float> %r\n}\n")
 probe("Instructions", "invoke / landingpad / resume (C++)",
       "@_ZTIi = external constant ptr\ndeclare void @may_throw()\ndeclare i32 @__gxx_personality_v0(...)\n"
       "define void @probe(ptr %p) personality ptr @__gxx_personality_v0 {\n  invoke void @may_throw() to label %ok unwind label %bad\nok:\n  ret void\nbad:\n"

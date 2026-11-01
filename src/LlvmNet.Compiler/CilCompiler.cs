@@ -108,13 +108,14 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal static bool IsSetJump(nint function) => Llvm.LLVMIsAFunction(function) != 0 && Llvm.LLVMIsDeclaration(function) != 0 &&
         Llvm.Name(function) is "setjmp" or "_setjmp" or "sigsetjmp" or "__sigsetjmp";
 
-    internal void ManagedCalli(ILGenerator il, MethodBuilder method, Type returnType, Type[] parameters)
+    internal void ManagedCalli(ILGenerator il, MethodBuilder method, Type returnType, Type[] parameters, bool tail = false)
     {
         if (options.CheckIndirectCalls)
         {
             il.Emit(OpCodes.Ldstr, CilSignature(returnType, parameters));
             il.Emit(OpCodes.Call, typeof(IndirectCalls).GetMethod(nameof(IndirectCalls.Check))!);
         }
+        if (tail) il.Emit(OpCodes.Tailcall);
         if (NativeScalar(returnType) && parameters.All(NativeScalar))
         {
             il.EmitCalli(OpCodes.Calli, CallingConventions.Standard, returnType, parameters, null);
@@ -215,7 +216,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         return method;
     }
 
-    private static bool NativeScalar(Type type) => type == typeof(void) || type == typeof(int) || type == typeof(long) || type == typeof(nint) || type == typeof(float) || type == typeof(double);
+    internal static bool NativeScalar(Type type) => type == typeof(void) || type == typeof(int) || type == typeof(long) || type == typeof(nint) || type == typeof(float) || type == typeof(double);
 
     internal void Compile(nint module, string output)
     {

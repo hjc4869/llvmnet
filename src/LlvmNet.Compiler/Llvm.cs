@@ -168,6 +168,8 @@ internal static unsafe class Llvm
     [DllImport(Library)] internal static extern uint LLVMGetNumArgOperands(nint instruction);
     [DllImport(Library)] internal static extern nint LLVMGetCalledValue(nint instruction);
     [DllImport(Library)] internal static extern nint LLVMGetCalledFunctionType(nint instruction);
+    /// <summary>0 none, 1 tail, 2 musttail, 3 notail.</summary>
+    [DllImport(Library)] internal static extern int LLVMGetTailCallKind(nint call);
     [DllImport(Library)] internal static extern uint LLVMGetInstructionCallConv(nint instruction);
     [DllImport(Library)] internal static extern uint LLVMGetFunctionCallConv(nint function);
     [DllImport(Library)] internal static extern uint LLVMGetNumIndices(nint instruction);
