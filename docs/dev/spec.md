@@ -158,7 +158,7 @@ These programs rely on glibc behavior that no flag selects; built natively again
 Native code tolerates a call whose prototype disagrees with the callee when the registers happen to line up; llvmnet, which sees both sides of a call into a translated C library or runtime, rejects it (`Incompatible direct call signature`; [dev/calling-convention.md](calling-convention.md#direct-calls)). In system mode these calls reach native code, so the mismatch is invisible there.
 
 - **722.palm_r, 822.palm_s** declare `open` with a fixed four-argument prototype, while the C library defines it as variadic.
-- **621.wrf_s** calls `omp_get_thread_num` in `module_fr_fire_util` with the `use omp_lib` and the declaration commented out, so implicit typing makes the result `REAL`: `float ()` against the runtime's `i32 ()`. Natively the caller reads an unrelated register. 521.wrf_r does not compile the line, which sits under an OpenMP sentinel.
+- **621.wrf_s** calls `omp_get_thread_num` in `module_fr_fire_util` with the `use omp_lib` and the declaration commented out, so implicit typing makes the result `REAL`: `float ()` against the runtime's `i32 ()`. Natively the caller reads an unrelated register. 521.wrf_r does not compile the line, which sits under an OpenMP sentinel. Since TC-07 (2026-11-02) a call without arguments through an interface without parameters, the shape of configure probes, compiles to a run-time trap instead of an error ([calling-convention.md](calling-convention.md#direct-calls)), so this call no longer stops the build; it traps if the run reaches it. 621.wrf_s has not been rerun since, and stays listed until a run shows whether its workload reaches the call.
 
 ### Stack sizes
 

@@ -209,6 +209,16 @@ A link takes objects (`.o`, `.bc`, `.ll`), archives (`.a`, or `-l` with `-L`) an
 - **`-r`** links the objects and the needed archive members into one relocatable bitcode object instead of an image, without the runtime libraries; `-emit-llvm` does the same and also links the runtime libraries of the mode. A link needs at least one object as its root, or a whole archive.
 - **Runtime libraries.** A portable executable links musl's start object `crt1.o` and the sysroot archives (OpenMP, flang-rt, libc++, libc++abi, musl, the compiler-rt builtins) after the inputs. `-nostartfiles` leaves out the start object (then `main` is called directly, without musl's initialization), `-nodefaultlibs` the archives (the sysroot's `lib/` archives can be named explicitly), `-nostdlib++` libc++ and libc++abi, and `-nostdlib` all of them. A portable library (`-shared`) links none of them, because musl's process state belongs to the program image. A system executable links flang-rt built against glibc; its C library is the host's.
 
+## Calls that contradict their definition
+
+The linker sees every function's definition, so it checks each direct call against it; [dev/calling-convention.md](../dev/calling-convention.md#direct-calls) lists the differences that x86-64's calling convention makes harmless. One shape is what autoconf, Meson, CMake and ffmpeg link to check that a function exists: a call that passes no arguments through a prototype without parameters (`char f(void);`, or `int f();` without a prototype). When such a call contradicts the definition, in its parameters or its return type, it compiles to a run-time trap instead of an error, and the link prints
+
+```text
+llvmnet: warning: emitting runtime trap: Invalid direct call through a prototype without parameters: main -> __gmtime_r: i8 () versus ptr (ptr, ptr)
+```
+
+so the probe links as it does natively. A program that executes the call stops with `InvalidProgramException` and the same message. `-w` silences the warning, as it silences the frontend's. `--trap-missing-arguments` does the same for a `void` call with fewer arguments than a `void` definition takes. Every other contradiction is a compile error (`Incompatible direct call signature`). In system mode, a call to a function of a native library goes through a bridge with the call site's signature, as a native call does, and is not checked.
+
 ## Response files
 
 `@file` inserts the arguments read from `file`, with shell-style quoting (`"..."`, `'...'`, backslash escapes) and nested `@file` references up to 32 levels; a response file that includes itself is an error.

@@ -32,25 +32,16 @@ options=(--disable-asm --disable-inline-asm --disable-x86asm --disable-hwaccels 
     --disable-runtime-cpudetect --disable-network --disable-doc --disable-debug --disable-stripping --enable-pthreads
     --samples="$samples")
 # configure's check_func links "extern int f(); int main(void){ f(); }", a call without the arguments the definition
-# takes, which llvmnet rejects in portable mode (a prototype that contradicts the definition). Unchanged, the probe
-# would leave mkstemp, mmap, isatty and 15 more functions out of the portable build only. Both builds therefore run a
-# copy of configure whose probe takes the function's address instead, so their configurations agree.
+# takes. llvmnet compiles such a call to a run-time trap (TC-07), so the probe links as it does natively and both builds
+# run configure unchanged, with the sources linked as src/.
 build() {
     local name="$1" build_dir="$root/artifacts/ffmpeg-fate-$1"
     shift
     if [[ "${FFMPEG_FATE_SKIP_BUILD:-0}" != 1 ]]; then
         rm -rf "$build_dir"
-        mkdir -p "$build_dir/ffbuild"
+        mkdir -p "$build_dir"
         ln -sfn "$source_dir" "$build_dir/src"
-        python3 - "$source_dir/configure" "$build_dir/ffbuild/llvmnet-configure" <<'PYEOF'
-import sys
-text = open(sys.argv[1]).read()
-probe = 'extern int $func();\nint main(void){ $func(); }\n'
-assert text.count(probe) == 1, 'check_func probe not found'
-open(sys.argv[2], 'w').write(text.replace(probe, 'extern int $func();\nint main(void){ return (int)(long)&$func; }\n'))
-PYEOF
-        chmod +x "$build_dir/ffbuild/llvmnet-configure"
-        (cd "$build_dir" && ./ffbuild/llvmnet-configure "${options[@]}" "$@") >"$test_output/configure-$name.log" 2>&1 ||
+        (cd "$build_dir" && ./src/configure "${options[@]}" "$@") >"$test_output/configure-$name.log" 2>&1 ||
             { tail -20 "$test_output/configure-$name.log" >&2; return 1; }
         make -C "$build_dir" -j"$jobs" >"$test_output/build-$name.log" 2>&1 ||
             { tail -20 "$test_output/build-$name.log" >&2; return 1; }

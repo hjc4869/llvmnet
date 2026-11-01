@@ -73,7 +73,8 @@ internal sealed class FunctionEmitter : ValueEmitter
                 if (TypeSystem.Kind(type) != 0)
                     valueCount++;
                 hasAllocations |= Llvm.LLVMGetInstructionOpcode(instruction) == 26;
-                if (Llvm.LLVMGetInstructionOpcode(instruction) == 45 && CilCompiler.IsSetJump(Llvm.LLVMGetCalledValue(instruction)))
+                if (Llvm.LLVMGetInstructionOpcode(instruction) == 45 && CilCompiler.IsSetJump(Llvm.LLVMGetCalledValue(instruction)) &&
+                    Llvm.LLVMGetNumArgOperands(instruction) != 0)
                     jumpSites.Add(instruction, (jumpSites.Count + 1, Il.DefineLabel()));
                 if (Llvm.LLVMGetInstructionOpcode(instruction) == 45)
                 {
@@ -1029,6 +1030,13 @@ internal sealed class FunctionEmitter : ValueEmitter
             Intrinsic(instruction, name);
             return;
         }
+        if (Llvm.LLVMGetNumArgOperands(instruction) == 0 && Llvm.LLVMIsAFunction(target) != 0 && Llvm.LLVMIsDeclaration(target) != 0 &&
+            Compiler.ManagedContradiction(target, Llvm.LLVMGetCalledFunctionType(instruction)) is string implementation)
+        {
+            // The configure probe described below, against a function the runtime implements in managed code.
+            TrapCall(instruction, $"Invalid direct call through a prototype without parameters: {Llvm.Name(function)} -> {name}: {Llvm.PrintType(Llvm.LLVMGetCalledFunctionType(instruction))} versus {implementation}");
+            return;
+        }
         if (Compiler.Host is not null && Compiler.Host.IsSystem(target))
         {
             MethodInfo native = Compiler.Host.Resolve(target, instruction);
@@ -1052,11 +1060,7 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Llvm.LLVMIsDeclaration(target) == 0 && Llvm.LLVMIsFunctionVarArg(definition) == 0 &&
                 TypeSystem.Kind(Llvm.LLVMGetReturnType(signature)) == 0 && TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) == 0)
             {
-                string diagnostic = $"Invalid direct call with missing arguments: {Llvm.Name(function)} -> {name}: {Llvm.PrintType(signature)} versus {Llvm.PrintType(definition)}";
-                Console.Error.WriteLine($"llvmnet: emitting runtime trap: {diagnostic}");
-                Il.Emit(OpCodes.Ldstr, diagnostic);
-                Il.Emit(OpCodes.Newobj, typeof(InvalidProgramException).GetConstructor([typeof(string)])!);
-                Il.Emit(OpCodes.Throw);
+                TrapCall(instruction, $"Invalid direct call with missing arguments: {Llvm.Name(function)} -> {name}: {Llvm.PrintType(signature)} versus {Llvm.PrintType(definition)}");
                 return;
             }
             discardReturn = TypeSystem.Kind(Llvm.LLVMGetReturnType(signature)) == 0 && TypeSystem.Kind(Llvm.LLVMGetReturnType(definition)) != 0;
@@ -1077,7 +1081,18 @@ internal sealed class FunctionEmitter : ValueEmitter
                 !discardReturn && !unusedVoidReturn && !truncateBooleanReturn && !pointerReturn && byteReturn is null && Llvm.LLVMGetReturnType(definition) != Llvm.LLVMGetReturnType(signature) ||
                 Enumerable.Range(0, checked((int)parameters)).Any(index => Llvm.LLVMTypeOf(Llvm.LLVMGetParam(target, (uint)index)) != Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index)) &&
                     !SystemIntegerArgumentCompatible(instruction, target, (uint)index)))
+            {
+                // A call that passes no arguments through a prototype without parameters ("char f(void);" or an
+                // unprototyped "int f();") is how autoconf, Meson and ffmpeg's configure check that a function links.
+                // Natively it links whatever the definition is and only executing it is undefined, so it compiles to a
+                // trap: the probe gets the native answer and a program that executes the call still stops (TC-07).
+                if (arguments == 0 && Llvm.LLVMIsDeclaration(target) == 0)
+                {
+                    TrapCall(instruction, $"Invalid direct call through a prototype without parameters: {Llvm.Name(function)} -> {name}: {Llvm.PrintType(signature)} versus {Llvm.PrintType(definition)}");
+                    return;
+                }
                 throw new NotSupportedException($"Incompatible direct call signature for {name}: {Llvm.PrintType(signature)} versus {Llvm.PrintType(definition)}");
+            }
             if (unusedVoidReturn) { locals.Remove(instruction); storedScalars.Remove(instruction); }
             signature = definition;
         }
@@ -1185,6 +1200,17 @@ internal sealed class FunctionEmitter : ValueEmitter
         if (truncateBooleanReturn) Normalize(Llvm.LLVMTypeOf(instruction));
         if (convertReturn is not null) Il.Emit(convertReturn == typeof(nint) ? OpCodes.Conv_I : OpCodes.Conv_I8);
         if (byteReturn is (nint from, nint to)) ConvertOneByte(from, to);
+    }
+
+    /// <summary>Compiles a direct call that contradicts its definition to an InvalidProgramException with the diagnostic,
+    /// and reports it as a warning while translating.</summary>
+    private void TrapCall(nint instruction, string diagnostic)
+    {
+        Compiler.Warning($"emitting runtime trap: {diagnostic}");
+        Il.Emit(OpCodes.Ldstr, diagnostic);
+        Il.Emit(OpCodes.Newobj, typeof(InvalidProgramException).GetConstructor([typeof(string)])!);
+        Il.Emit(OpCodes.Throw);
+        if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0) Zero(Llvm.LLVMTypeOf(instruction));
     }
 
     private static bool ByteArray(nint type) => TypeSystem.Kind(type) == 11 && Llvm.LLVMGetArrayLength2(type) == 1 &&

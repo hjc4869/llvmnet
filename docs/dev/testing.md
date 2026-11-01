@@ -23,8 +23,8 @@ Header keys: `tags` (selection), `requires` (prerequisites), `serial: N` (run al
 
 | Tag | Contents | When it runs |
 | --- | --- | --- |
-| `core` | Compiler and runtime regressions in both modes: the driver and its option sweep, link inputs, optimization levels, language options, diagnostics, IR semantics probes against native (`semantics`), C, C++ and Fortran fixtures, the host interface against native (`host`), JIT validation of every emitted assembly (`jit-validation`, serial), the support matrix and limitations pages, the cross-platform bundle on this host (`xp`) | every pull request |
-| `toolchain` | Packaging and deployment: the relocatable package, the dotnet publish forms, NativeAOT provisioning (`aot-offline`), the driver reference | every pull request (without `slow`) |
+| `core` | Compiler and runtime regressions in both modes: the driver and its option sweep, link inputs, optimization levels, language options, diagnostics, the function probes of autoconf, Meson, CMake and ffmpeg against native links (`configure-probes`), IR semantics probes against native (`semantics`), C, C++ and Fortran fixtures, the host interface against native (`host`), JIT validation of every emitted assembly (`jit-validation`, serial), the support matrix and limitations pages, the cross-platform bundle on this host (`xp`) | every pull request |
+| `toolchain` | Packaging and deployment: the relocatable package, the dotnet publish forms, NativeAOT provisioning (`aot-offline`), the driver reference; the CMake toolchain file, whose probe results are compared with a native configure of the same project (`cmake-toolchain`) | every pull request (without `slow`) |
 | `aot` | Tests that also publish NativeAOT executables | with their other tags |
 | `cpp`, `fortran` | Need `clang++-22` or `flang-22` | with their other tags |
 | `slow` | The full package and deployment test (`deployment`), the release reproducibility test (`release`) | nightly |

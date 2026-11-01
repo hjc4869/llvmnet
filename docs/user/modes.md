@@ -62,7 +62,7 @@ Threads are native pthreads; an adapter wraps thread start and TLS destructors s
 
 Inline assembly is rejected except for empty or comment-only `asm` statements without outputs, which become a memory barrier in both modes, and empty ones whose one register output is tied to an input (`asm("" : "+r"(x))`, `asm("" : "=r"(y) : "0"(x))`), which yield that input. System mode also accepts the x86 `int3` trap, which raises `SIGTRAP`, and the CPUID and XGETBV forms used by LLVM's and Eigen's host detection, which run in generated native thunks.
 
-By default, a void call to a translated function with fewer arguments than its definition is a compile error. `--trap-missing-arguments` (both modes) instead compiles the call site to throw `InvalidProgramException` and reports each such call while compiling.
+By default, a call to a translated function that contradicts its definition is a compile error, with one exception: a call without arguments through a prototype without parameters, which configure probes link, compiles to a trap that throws `InvalidProgramException`, and the link prints a warning ([driver.md](driver.md#calls-that-contradict-their-definition)). `--trap-missing-arguments` (both modes) also compiles a void call with fewer arguments than its definition to such a trap, and reports each one while compiling.
 
 ## Optional System C++ Library
 

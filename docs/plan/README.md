@@ -30,6 +30,7 @@ Every library ran its own suite under the JIT, compared with a native Clang buil
 - **WG-07 and TC-07 (progress).**
   - zlib, libpng, libjpeg-turbo and expat pass their suites locally, through local scripts that are not yet in CI.
   - Configure probes give wrong answers in all three build systems, so features drop out silently. The CMake toolchain file's `Generic` platform hides `UNIX` and makes `SHARED` targets an error.
+  - Fixed in TC-07 with the owner proposals as defaults ([evidence](../evidence/2026-11-02-configure-probes.md)): probes give native answers in autotools, Meson, CMake and ffmpeg's configure; the CMake platform sets `UNIX` and builds `SHARED` targets as bitcode archives; `-DLLVMNET_RUNTIME` selects the mode.
 - **New items.**
   - TC-19: `main` in an archive member, and archives under any name.
   - TC-20: link time grows super-linearly, for example 371 s for Skia's DM.

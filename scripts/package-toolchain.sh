@@ -34,9 +34,11 @@ for utility in ar ranlib nm; do
 done
 cp -a "$root/docs" "$prefix/share/llvmnet/"
 # The build-system files the user documentation names: <prefix>/share/llvmnet/cmake/llvmnet.cmake finds the
-# toolchain's bin/ from there, and the Meson cross file calls llvmnet from PATH.
-mkdir -p "$prefix/share/llvmnet/cmake" "$prefix/share/llvmnet/meson"
-cp "$root/cmake/llvmnet.cmake" "$prefix/share/llvmnet/cmake/"
+# toolchain's bin/ from there (with its platform module and build rules beside it), and the Meson cross file calls
+# llvmnet from PATH.
+mkdir -p "$prefix/share/llvmnet/cmake/Platform" "$prefix/share/llvmnet/meson"
+cp "$root/cmake/llvmnet.cmake" "$root/cmake/llvmnet-rules.cmake" "$prefix/share/llvmnet/cmake/"
+cp "$root/cmake/Platform/LlvmNet.cmake" "$prefix/share/llvmnet/cmake/Platform/"
 cp "$root/meson/llvmnet.ini" "$prefix/share/llvmnet/meson/"
 mkdir -p "$prefix/share/llvmnet/spec"
 cp "$root/config/spec/llvmnet.cfg" "$root/config/spec/llvmnet.xml" "$prefix/share/llvmnet/spec/"

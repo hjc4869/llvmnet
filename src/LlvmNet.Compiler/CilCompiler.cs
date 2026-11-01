@@ -27,6 +27,7 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal HostInterop? Host { get; private set; }
     internal bool TrapMissingArguments => options.TrapMissingArguments;
     internal bool CheckIndirectCalls => options.CheckIndirectCalls;
+    internal void Warning(string message) => options.Warnings?.Warning(null, message);
 
     /// <summary>CIL-level signature text used by --check-indirect-calls; calli compatibility is decided at this level.</summary>
     internal static string CilSignature(Type returnType, IEnumerable<Type> parameters) =>
@@ -103,6 +104,24 @@ internal sealed class CilCompiler(CompilerOptions options)
         }
         undefinedWeak[value] = result;
         return result;
+    }
+
+    /// <summary>
+    /// Describes the managed implementation of a declaration when its signature differs from a call site's: a system-mode
+    /// adapter, a runtime export, or the setjmp family, which only a direct call with its arguments reaches. Null when the
+    /// declaration has no managed implementation or the signatures agree.
+    /// </summary>
+    internal string? ManagedContradiction(nint function, nint signature)
+    {
+        string name = Llvm.Name(function);
+        if (IsSetJump(function)) return $"{name} with its jump buffer";
+        MethodInfo? method = Host is not null && Host.IsSystem(function) ? null
+            : Host is not null && HostInterop.Adapter(name) is MethodInfo adapter ? adapter
+            : runtimeExports.TryGetValue(name, out MethodInfo? export) && (options.Runtime != "portable" || MuslVisible(name, export)) ? export : null;
+        if (method is null) return null;
+        Type[] parameters = method.GetParameters().Select(parameter => parameter.ParameterType).ToArray();
+        return Types.Map(Llvm.LLVMGetReturnType(signature)) == method.ReturnType && Types.Parameters(signature).SequenceEqual(parameters)
+            ? null : $"{method.DeclaringType!.Name}.{method.Name} {CilSignature(method.ReturnType, parameters)}";
     }
 
     internal static bool IsSetJump(nint function) => Llvm.LLVMIsAFunction(function) != 0 && Llvm.LLVMIsDeclaration(function) != 0 &&

@@ -25,7 +25,7 @@ for notice in LICENSE.TXT THIRD-PARTY-NOTICES.md; do
     fi
 done
 # The CMake toolchain file works from the package: with no compiler given it finds the package's own drivers.
-for file in cmake/llvmnet.cmake meson/llvmnet.ini; do
+for file in cmake/llvmnet.cmake cmake/llvmnet-rules.cmake cmake/Platform/LlvmNet.cmake meson/llvmnet.ini; do
     if [[ ! -s "$prefix/share/llvmnet/$file" ]]; then
         printf 'FAIL: packaged toolchain is missing share/llvmnet/%s\n' "$file" >&2
         exit 1

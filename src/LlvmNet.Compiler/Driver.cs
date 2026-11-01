@@ -12,6 +12,8 @@ internal sealed class CompilerOptions
     internal bool TrapMissingArguments { get; set; }
     internal bool DiagnoseLimits { get; set; }
     internal bool CheckIndirectCalls { get; set; }
+    /// <summary>Prints llvmnet's warnings while translating; -w, as for the frontend, silences them.</summary>
+    internal Diagnostics? Warnings { get; set; }
     internal string AbiTag => Runtime == "system" ? "system-linux-x64-v1" : PortableAbi.Tag;
     internal List<string> SystemLibraries { get; } = [];
     internal List<string> CilReferences { get; } = [];
@@ -233,6 +235,7 @@ internal static class Driver
         var invocation = new Invocation(parsed, driver);
         driver = invocation.Driver;
         CompilerOptions options = invocation.Options;
+        if (!invocation.Frontend.Contains("-w")) options.Warnings = new Diagnostics(arguments);
         string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");
         string flang = Toolchain.Executable("flang-22", "LLVMNET_FLANG");
         Toolchain.DryRun = invocation.DryRun;

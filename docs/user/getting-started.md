@@ -56,7 +56,7 @@ llvmnet-ar rcs libab.a a.o b.o
 llvmnet-clang main.c -L. -lab -o program.dll
 ```
 
-For CMake, `cmake -DCMAKE_TOOLCHAIN_FILE=<toolchain>/share/llvmnet/cmake/llvmnet.cmake` (in a checkout, `cmake/llvmnet.cmake`); for Meson, `meson setup --cross-file <toolchain>/share/llvmnet/meson/llvmnet.ini`. Both run the produced executables for configure checks, so a configured project builds and runs its tests as usual. `scripts/build-dependencies.sh` builds zlib, libxml2 and dav1d this way, and the ffmpeg profile on top of them ([dev/ffmpeg.md](../dev/ffmpeg.md)).
+For CMake, `cmake -DCMAKE_TOOLCHAIN_FILE=<toolchain>/share/llvmnet/cmake/llvmnet.cmake` (in a checkout, `cmake/llvmnet.cmake`; add `-DLLVMNET_RUNTIME=system` for system mode); for Meson, `meson setup --cross-file <toolchain>/share/llvmnet/meson/llvmnet.ini`. Both run the produced executables for configure checks, so a configured project builds and runs its tests as usual. `scripts/build-dependencies.sh` builds zlib, libxml2 and dav1d this way, and the ffmpeg profile on top of them ([dev/ffmpeg.md](../dev/ffmpeg.md)).
 
 ## Two runtime modes
 
