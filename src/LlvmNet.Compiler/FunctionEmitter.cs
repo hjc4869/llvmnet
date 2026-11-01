@@ -24,6 +24,9 @@ internal sealed class FunctionEmitter : ValueEmitter
     private bool usesLocalloc;
     private LocalBuilder? stackReturn;
     private Label stackExit;
+    private bool tailCalled;
+    private readonly List<(Label Site, nint Call)> tailSites = [];
+    private readonly Dictionary<Type, LocalBuilder> scratch = [];
 
     internal FunctionEmitter(CilCompiler compiler, nint function, MethodBuilder method) : base(compiler, method.GetILGenerator())
     {
@@ -34,9 +37,40 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     internal void Emit()
     {
-        varargs.Allocate(function);
         for (uint index = 0; index < Llvm.LLVMCountParams(function); index++)
             arguments[Llvm.LLVMGetParam(function, index)] = (int)index;
+        bool scopedStack = false;
+        bool hasAllocations = false;
+        bool variadicCalls = false;
+        bool mustTail = false;
+        int valueCount = 0;
+        foreach (nint block in Llvm.Blocks(function))
+        {
+            labels[block] = Il.DefineLabel();
+            foreach (nint instruction in Llvm.Instructions(block))
+            {
+                nint type = Llvm.LLVMTypeOf(instruction);
+                if (TypeSystem.Kind(type) != 0)
+                    valueCount++;
+                int opcode = Llvm.LLVMGetInstructionOpcode(instruction);
+                hasAllocations |= opcode == 26;
+                variadicCalls |= opcode is 5 or 45 && Llvm.LLVMIsFunctionVarArg(Llvm.LLVMGetCalledFunctionType(instruction)) != 0;
+                if (opcode == 45 && CilCompiler.IsSetJump(Llvm.LLVMGetCalledValue(instruction)) &&
+                    Llvm.LLVMGetNumArgOperands(instruction) != 0)
+                    jumpSites.Add(instruction, (jumpSites.Count + 1, Il.DefineLabel()));
+                if (opcode == 45)
+                {
+                    string name = Llvm.Name(Llvm.LLVMGetCalledValue(instruction));
+                    scopedStack |= name.StartsWith("llvm.stacksave", StringComparison.Ordinal) || name.StartsWith("llvm.stackrestore", StringComparison.Ordinal);
+                    mustTail |= Llvm.LLVMGetTailCallKind(instruction) == 2;
+                }
+            }
+        }
+        // A function with a musttail call takes its stack memory from the arena, never from localloc (MustTailCall). It
+        // has no byval parameters: those would be byval arguments of its musttail calls, which are rejected.
+        bool arenaFrame = mustTail && (hasAllocations || variadicCalls);
+        if (!arenaFrame)
+            varargs.Allocate(function, arena: false);
         for (uint index = 0; index < Llvm.LLVMCountParams(function); index++)
         {
             nint byValue = Llvm.ParameterAttribute(function, index, "byval");
@@ -61,30 +95,8 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Pop);
             locals[Llvm.LLVMGetParam(function, index)] = copy;
         }
-        bool scopedStack = false;
-        bool hasAllocations = false;
-        int valueCount = 0;
-        foreach (nint block in Llvm.Blocks(function))
-        {
-            labels[block] = Il.DefineLabel();
-            foreach (nint instruction in Llvm.Instructions(block))
-            {
-                nint type = Llvm.LLVMTypeOf(instruction);
-                if (TypeSystem.Kind(type) != 0)
-                    valueCount++;
-                hasAllocations |= Llvm.LLVMGetInstructionOpcode(instruction) == 26;
-                if (Llvm.LLVMGetInstructionOpcode(instruction) == 45 && CilCompiler.IsSetJump(Llvm.LLVMGetCalledValue(instruction)) &&
-                    Llvm.LLVMGetNumArgOperands(instruction) != 0)
-                    jumpSites.Add(instruction, (jumpSites.Count + 1, Il.DefineLabel()));
-                if (Llvm.LLVMGetInstructionOpcode(instruction) == 45)
-                {
-                    string name = Llvm.Name(Llvm.LLVMGetCalledValue(instruction));
-                    scopedStack |= name.StartsWith("llvm.stacksave", StringComparison.Ordinal) || name.StartsWith("llvm.stackrestore", StringComparison.Ordinal);
-                }
-            }
-        }
         AllocateFunctionLocals(valueCount > 32768 && jumpSites.Count == 0);
-        if (scopedStack || hasAllocations && jumpSites.Count != 0)
+        if (scopedStack || hasAllocations && jumpSites.Count != 0 || arenaFrame)
         {
             // The thread's alloca arena top on entry, restored on every exit (BE-17).
             stackMemory = Il.DeclareLocal(typeof(nint));
@@ -94,6 +106,8 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Stloc, stackMemory);
             Il.BeginExceptionBlock();
         }
+        if (arenaFrame)
+            varargs.Allocate(function, arena: true);
         if (jumpSites.Count != 0)
         {
             jumpFrame = Il.DeclareLocal(typeof(long));
@@ -125,6 +139,8 @@ internal sealed class FunctionEmitter : ValueEmitter
                 {
                     throw CompilationError.InFunction(error, function, instruction);
                 }
+                // A musttail call returns itself; what follows it is its ret (and possibly a pointer bitcast).
+                if (tailCalled) { tailCalled = false; break; }
             }
         }
         if (jumpFrame is not null)
@@ -180,6 +196,13 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.MarkLabel(stackExit);
             if ((jumpReturn ?? stackReturn) is LocalBuilder result) Il.Emit(OpCodes.Ldloc, result);
             Il.Emit(OpCodes.Ret);
+        }
+        // Tail calls that left the protected regions: the finally above has released the arena, and the operands are
+        // still in their locals.
+        foreach ((Label site, nint call) in tailSites)
+        {
+            Il.MarkLabel(site);
+            TailCall(call);
         }
         // A method with localloc (allocas, byval copies, the variadic call area) does not zero its locals and stack
         // buffers on entry (C# SkipLocalsInit): an alloca's contents are undefined in LLVM, and zeroing large stack
@@ -332,18 +355,15 @@ internal sealed class FunctionEmitter : ValueEmitter
             case 44:
                 return;
             case 45:
+                if (Llvm.LLVMGetTailCallKind(value) == 2 && MustTailCall(value))
+                {
+                    tailCalled = true;
+                    return;
+                }
                 Call(value);
                 break;
             case 46:
-                Label otherwise = Il.DefineLabel();
-                Label end = Il.DefineLabel();
-                Load(Llvm.LLVMGetOperand(value, 0));
-                Il.Emit(OpCodes.Brfalse, otherwise);
-                Load(Llvm.LLVMGetOperand(value, 1));
-                Il.Emit(OpCodes.Br, end);
-                Il.MarkLabel(otherwise);
-                Load(Llvm.LLVMGetOperand(value, 2));
-                Il.MarkLabel(end);
+                Select(value);
                 break;
             case 50:
             case 51:
@@ -390,6 +410,129 @@ internal sealed class FunctionEmitter : ValueEmitter
         StoreResult(value);
         if (jumpSites.TryGetValue(value, out var jump))
             Il.MarkLabel(jump.Resume);
+    }
+
+    /// <summary>
+    /// An integer or pointer select is computed without a branch, as false ^ ((true ^ false) &amp; -condition): RyuJIT
+    /// turns a branch into cmov only outside loops (ifconversion.cpp), and an unpredictable branch in a loop costs far
+    /// more than these four operations (PNG's Paeth filter ran 3.4-5.7 times native time). A boolean select is the and
+    /// or the or it stands for. Floating-point, 128-bit and aggregate selects keep the branch, which is exact for every
+    /// value. Integer min/max against a constant keep theirs too (Intrinsic explains why).
+    /// </summary>
+    private void Select(nint value)
+    {
+        nint condition = Llvm.LLVMGetOperand(value, 0);
+        nint whenTrue = Llvm.LLVMGetOperand(value, 1);
+        nint whenFalse = Llvm.LLVMGetOperand(value, 2);
+        nint type = Llvm.LLVMTypeOf(value);
+        Type managed = Types.Map(type);
+        if (managed == typeof(int) || managed == typeof(long) || managed == typeof(nint))
+        {
+            bool and = TypeSystem.Width(type) == 1 && IsConstant(whenFalse, 0);
+            if (and || TypeSystem.Width(type) == 1 && IsConstant(whenTrue, -1))
+            {
+                Load(condition);
+                Load(and ? whenTrue : whenFalse);
+                Il.Emit(and ? OpCodes.And : OpCodes.Or);
+                return;
+            }
+            (nint Less, nint Greater, bool Signed, bool Inverted)? order = Order(condition);
+            if (order is { Inverted: true })
+                (whenTrue, whenFalse) = (whenFalse, whenTrue);
+            Load(whenFalse);
+            Il.Emit(OpCodes.Dup);
+            Load(whenTrue);
+            Il.Emit(OpCodes.Xor);
+            if (order is (nint less, nint greater, bool signed, _))
+                LessMask(less, greater, signed, managed);
+            else
+            {
+                Load(condition);
+                Mask(managed);
+            }
+            Il.Emit(OpCodes.And);
+            Il.Emit(OpCodes.Xor);
+            return;
+        }
+        Label otherwise = Il.DefineLabel();
+        Label end = Il.DefineLabel();
+        Load(condition);
+        Il.Emit(OpCodes.Brfalse, otherwise);
+        Load(whenTrue);
+        Il.Emit(OpCodes.Br, end);
+        Il.MarkLabel(otherwise);
+        Load(whenFalse);
+        Il.MarkLabel(end);
+    }
+
+    /// <summary>Whether the value is the integer constant <paramref name="number"/>, sign-extended (an i1 true is -1).</summary>
+    private static bool IsConstant(nint value, long number) =>
+        Llvm.LLVMIsAConstantInt(value) != 0 && TypeSystem.Width(Llvm.LLVMTypeOf(value)) <= 64 && Llvm.LLVMConstIntGetSExtValue(value) == number;
+
+    /// <summary>
+    /// A condition that is an ordered comparison of integers of at most 32 bits, as the operands of a strict less-than:
+    /// x &gt; y is y &lt; x, and x &gt;= y is the inverse of x &lt; y. Null for any other condition.
+    /// </summary>
+    private static (nint Less, nint Greater, bool Signed, bool Inverted)? Order(nint condition)
+    {
+        if (Llvm.LLVMGetInstructionOpcode(condition) != 42)
+            return null;
+        nint left = Llvm.LLVMGetOperand(condition, 0), right = Llvm.LLVMGetOperand(condition, 1);
+        if (TypeSystem.Width(Llvm.LLVMTypeOf(left)) is 0 or > 32)
+            return null;
+        return Llvm.LLVMGetICmpPredicate(condition) switch
+        {
+            34 => (right, left, false, false),
+            35 => (left, right, false, true),
+            36 => (left, right, false, false),
+            37 => (right, left, false, true),
+            38 => (right, left, true, false),
+            39 => (left, right, true, true),
+            40 => (left, right, true, false),
+            41 => (right, left, true, true),
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// All one bits of <paramref name="type"/> when <paramref name="less"/> &lt; <paramref name="greater"/>, integers
+    /// of at most 32 bits, else zero: the sign of their 64-bit difference, which takes two operations where a 0 or 1
+    /// comparison result takes three more (setcc, zero extension, negation) and lengthens the dependency chain.
+    /// </summary>
+    private void LessMask(nint less, nint greater, bool signed, Type type)
+    {
+        foreach (nint operand in new[] { less, greater })
+        {
+            Load(operand);
+            if (signed)
+                SignExtend(Llvm.LLVMTypeOf(operand));
+            Il.Emit(signed ? OpCodes.Conv_I8 : OpCodes.Conv_U8);
+        }
+        Il.Emit(OpCodes.Sub);
+        Il.Emit(OpCodes.Ldc_I4, 63);
+        Il.Emit(OpCodes.Shr);
+        if (type == typeof(int))
+            Il.Emit(OpCodes.Conv_I4);
+        else if (type == typeof(nint))
+            Il.Emit(OpCodes.Conv_I);
+    }
+
+    /// <summary>Turns the 0 or 1 of a condition on the stack into all zero or all one bits of <paramref name="type"/>.</summary>
+    private void Mask(Type type)
+    {
+        Il.Emit(OpCodes.Neg);
+        if (type == typeof(long))
+            Il.Emit(OpCodes.Conv_I8);
+        else if (type == typeof(nint))
+            Il.Emit(OpCodes.Conv_I);
+    }
+
+    /// <summary>A local of the function for a value used only within one instruction's lowering.</summary>
+    private LocalBuilder Scratch(Type type)
+    {
+        if (!scratch.TryGetValue(type, out LocalBuilder? local))
+            scratch.Add(type, local = Il.DeclareLocal(type));
+        return local;
     }
 
     private void VectorElement(nint value, bool insert)
@@ -1213,6 +1356,107 @@ internal sealed class FunctionEmitter : ValueEmitter
         if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0) Zero(Llvm.LLVMTypeOf(instruction));
     }
 
+    /// <summary>
+    /// A musttail call ([[clang::musttail]]) must not grow the stack: the callee replaces this frame, so a chain of such
+    /// calls runs in constant stack, as Skia's raster pipeline relies on. It becomes a CIL tail. call and ret. The JIT
+    /// always honors that, with a fast tail call that reuses the frame or else through the runtime's tail-call helpers,
+    /// but NativeAOT has no helpers and needs a fast tail call, which x64 refuses from a method that uses localloc. So a
+    /// function with a musttail call takes its allocas and variadic call area from the thread's arena (StackMemory), and
+    /// its tail calls first leave the try/finally that releases it: LLVM does not let the callee use the caller's
+    /// allocas. What a fast tail call cannot carry is rejected: arguments and results of more than 16 bytes, which
+    /// Windows x64 and ARM64 pass by reference to a copy in the caller's frame, byval arguments, whose copy is in the
+    /// caller's frame, forwarded variadic arguments, and calls through a prototype other than the callee's. Windows x64
+    /// also passes 16-byte values (vectors, long double, i128) by reference, so there NativeAOT makes a call with one an
+    /// ordinary call; Skia's skcms passes &lt;4 x float&gt;. Returns false for the calls made as ordinary calls: an
+    /// undefined weak callee, which traps, and in system mode a native callee.
+    /// </summary>
+    private bool MustTailCall(nint instruction)
+    {
+        nint target = Llvm.LLVMGetCalledValue(instruction);
+        if (Llvm.LLVMIsAGlobalAlias(target) != 0 && Llvm.LLVMIsAFunction(CilCompiler.ResolveAlias(target)) != 0)
+            target = CilCompiler.ResolveAlias(target);
+        bool direct = Llvm.LLVMIsAFunction(target) != 0;
+        if (direct && (Compiler.IsUndefinedWeak(target) || Compiler.Host is not null && Compiler.Host.IsSystem(target)))
+            return false;
+        string name = direct ? Llvm.Name(target) : "a function pointer";
+        nint signature = Llvm.LLVMGetCalledFunctionType(instruction);
+        if (Llvm.LLVMIsAInlineAsm(target) != 0 || name.StartsWith("llvm.", StringComparison.Ordinal) || jumpSites.ContainsKey(instruction))
+            throw new NotSupportedException($"musttail call to {name}: only calls to functions can be tail calls.");
+        if (Llvm.LLVMIsFunctionVarArg(signature) != 0)
+            throw new NotSupportedException($"musttail call to {name}: calls that forward variadic arguments cannot be tail calls.");
+        if (direct && signature != Llvm.LLVMGlobalGetValueType(target))
+            throw new NotSupportedException($"musttail call to {name} through another prototype: {Llvm.PrintType(signature)} versus {Llvm.PrintType(Llvm.LLVMGlobalGetValueType(target))}");
+        nint[] types = [Llvm.LLVMGetReturnType(signature), .. Enumerable.Range(0, checked((int)Llvm.LLVMCountParamTypes(signature)))
+            .Select(index => Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index)))];
+        if (Types.Map(types[0]) != method.ReturnType || types.Any(type => !CilCompiler.NativeScalar(Types.Map(type)) && Types.Size(type) > 16))
+            throw new NotSupportedException($"musttail call to {name} with type {Llvm.PrintType(signature)}: arguments and results of more than 16 bytes " +
+                "cannot be tail calls, because Windows x64 and ARM64 pass them by reference to a copy in the caller's frame.");
+        uint byvalKind = Llvm.LLVMGetEnumAttributeKindForName("byval", 5);
+        for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
+            if (Llvm.LLVMGetCallSiteEnumAttribute(instruction, index + 1, byvalKind) != 0)
+                throw new NotSupportedException($"musttail call to {name}: a byval argument cannot be a tail call, because its copy is in the caller's frame.");
+        if (stackMemory is null && jumpFrame is null)
+            TailCall(instruction);
+        else
+        {
+            Label site = Il.DefineLabel();
+            Il.Emit(OpCodes.Leave, site);
+            tailSites.Add((site, instruction));
+        }
+        return true;
+    }
+
+    /// <summary>The call of <see cref="MustTailCall"/>: its operands, a tail. call or calli, and ret.</summary>
+    private void TailCall(nint instruction)
+    {
+        nint target = Llvm.LLVMGetCalledValue(instruction);
+        if (Llvm.LLVMIsAGlobalAlias(target) != 0 && Llvm.LLVMIsAFunction(CilCompiler.ResolveAlias(target)) != 0)
+            target = CilCompiler.ResolveAlias(target);
+        nint signature = Llvm.LLVMGetCalledFunctionType(instruction);
+        for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
+            Load(Llvm.LLVMGetOperand(instruction, index));
+        Type returnType = Types.Map(Llvm.LLVMGetReturnType(signature));
+        Type[] parameters = Types.Parameters(signature);
+        if (Llvm.LLVMIsAFunction(target) != 0)
+        {
+            Il.Emit(OpCodes.Tailcall);
+            Il.Emit(OpCodes.Call, Compiler.Methods.TryGetValue(target, out MethodInfo? callee) ? callee : Compiler.ResolveFunction(target));
+        }
+        else
+        {
+            Load(target);
+            if (Compiler.Host is null)
+                ManagedCalli(returnType, parameters, tail: true);
+            else
+            {
+                // System mode: a pointer to a native function is called as Call calls it, without the guarantee.
+                LocalBuilder managedTarget = Il.DeclareLocal(typeof(nint));
+                Label native = Il.DefineLabel();
+                Il.Emit(OpCodes.Dup);
+                Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.ResolveCallback))!);
+                Il.Emit(OpCodes.Stloc, managedTarget);
+                Il.Emit(OpCodes.Ldloc, managedTarget);
+                Il.Emit(OpCodes.Brfalse, native);
+                Il.Emit(OpCodes.Pop);
+                Il.Emit(OpCodes.Ldloc, managedTarget);
+                ManagedCalli(returnType, parameters, tail: true);
+                Il.Emit(OpCodes.Ret);
+                Il.MarkLabel(native);
+                if (CilCompiler.NativeScalar(returnType) && parameters.All(CilCompiler.NativeScalar))
+                    Il.EmitCalli(OpCodes.Calli, System.Runtime.InteropServices.CallingConvention.Cdecl, returnType, parameters);
+                else
+                {
+                    for (int index = 0; index <= parameters.Length; index++) Il.Emit(OpCodes.Pop);
+                    Il.Emit(OpCodes.Ldstr, "Indirect native aggregate calls are not supported; compile the callback to bitcode.");
+                    Il.Emit(OpCodes.Newobj, typeof(NotSupportedException).GetConstructor([typeof(string)])!);
+                    Il.Emit(OpCodes.Throw);
+                    return;
+                }
+            }
+        }
+        Il.Emit(OpCodes.Ret);
+    }
+
     private static bool ByteArray(nint type) => TypeSystem.Kind(type) == 11 && Llvm.LLVMGetArrayLength2(type) == 1 &&
         TypeSystem.Kind(Llvm.LLVMGetElementType(type)) == 8 && TypeSystem.Width(Llvm.LLVMGetElementType(type)) == 8;
 
@@ -1243,9 +1487,9 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
     }
 
-    private void ManagedCalli(Type returnType, Type[] parameters)
+    private void ManagedCalli(Type returnType, Type[] parameters, bool tail = false)
     {
-        Compiler.ManagedCalli(Il, method, returnType, parameters);
+        Compiler.ManagedCalli(Il, method, returnType, parameters, tail);
     }
 
     private bool SystemIntegerArgumentCompatible(nint instruction, nint target, uint index)
@@ -1837,41 +2081,96 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Ldloc, result);
             return;
         }
+        // Without branches, as Select explains, except against a constant bound. A constant bound is a clamp (FFmpeg's
+        // 10-bit pixels are smax(x, 0) then umin(x, 1023)) whose comparison almost always goes the same way, and a
+        // predicted branch costs less than a mask: with masks, HEVC decoding took 12% longer, and 5% with only
+        // smax(x, 0) as x & ~(x >> 31). Two variable operands are a data-dependent choice, as Paeth's umin(pb, pa),
+        // where a mispredicted branch costs far more. Up to 32 bits, with d = left - right in 64 bits and s = d >> 63
+        // (all ones when left < right): minimum = right + (d & s), maximum = left - (d & s); wider,
+        // right ^ ((left ^ right) & -(left < right)). abs is (x ^ s) - s with s = x >> (bits - 1), which wraps the
+        // minimum to itself.
         if (operation is "smin" or "smax" or "umin" or "umax")
         {
             nint left = Llvm.LLVMGetOperand(instruction, 0);
             nint right = Llvm.LLVMGetOperand(instruction, 1);
             nint type = Llvm.LLVMTypeOf(left);
+            bool signed = operation[0] == 's', minimum = operation.EndsWith("min", StringComparison.Ordinal);
+            if (Llvm.LLVMIsAConstantInt(left) != 0 || Llvm.LLVMIsAConstantInt(right) != 0)
+            {
+                Load(left);
+                if (signed)
+                    SignExtend(type);
+                Load(right);
+                if (signed)
+                    SignExtend(type);
+                Il.Emit(operation switch { "smin" => OpCodes.Clt, "smax" => OpCodes.Cgt, "umin" => OpCodes.Clt_Un, _ => OpCodes.Cgt_Un });
+                Label useRight = Il.DefineLabel();
+                Label done = Il.DefineLabel();
+                Il.Emit(OpCodes.Brfalse, useRight);
+                Load(left);
+                Il.Emit(OpCodes.Br, done);
+                Il.MarkLabel(useRight);
+                Load(right);
+                Il.MarkLabel(done);
+                return;
+            }
+            if (TypeSystem.Width(type) <= 32)
+            {
+                LocalBuilder difference = Scratch(typeof(long));
+                foreach (nint operand in new[] { left, right })
+                {
+                    Load(operand);
+                    if (signed)
+                        SignExtend(type);
+                    Il.Emit(signed ? OpCodes.Conv_I8 : OpCodes.Conv_U8);
+                }
+                Il.Emit(OpCodes.Sub);
+                Il.Emit(OpCodes.Stloc, difference);
+                Load(minimum ? right : left);
+                Il.Emit(OpCodes.Ldloc, difference);
+                Il.Emit(OpCodes.Ldloc, difference);
+                Il.Emit(OpCodes.Ldc_I4, 63);
+                Il.Emit(OpCodes.Shr);
+                Il.Emit(OpCodes.And);
+                Il.Emit(OpCodes.Conv_I4);
+                Il.Emit(minimum ? OpCodes.Add : OpCodes.Sub);
+                Normalize(type);
+                return;
+            }
+            Load(right);
             Load(left);
-            if (operation[0] == 's')
+            Load(right);
+            Il.Emit(OpCodes.Xor);
+            Load(left);
+            if (signed)
                 SignExtend(type);
             Load(right);
-            if (operation[0] == 's')
+            if (signed)
                 SignExtend(type);
             Il.Emit(operation switch { "smin" => OpCodes.Clt, "smax" => OpCodes.Cgt, "umin" => OpCodes.Clt_Un, _ => OpCodes.Cgt_Un });
-            Label useRight = Il.DefineLabel();
-            Label done = Il.DefineLabel();
-            Il.Emit(OpCodes.Brfalse, useRight);
-            Load(left);
-            Il.Emit(OpCodes.Br, done);
-            Il.MarkLabel(useRight);
-            Load(right);
-            Il.MarkLabel(done);
+            Mask(Types.Map(type));
+            Il.Emit(OpCodes.And);
+            Il.Emit(OpCodes.Xor);
             return;
         }
         if (operation == "abs")
         {
             nint operand = Llvm.LLVMGetOperand(instruction, 0);
             nint type = Llvm.LLVMTypeOf(operand);
+            Type managed = Types.Map(type);
+            LocalBuilder extended = Scratch(managed);
             Load(operand);
             SignExtend(type);
-            Il.Emit(OpCodes.Dup);
-            Zero(type);
-            Il.Emit(OpCodes.Clt);
-            Label done = Il.DefineLabel();
-            Il.Emit(OpCodes.Brfalse, done);
-            Il.Emit(OpCodes.Neg);
-            Il.MarkLabel(done);
+            Il.Emit(OpCodes.Stloc, extended);
+            Il.Emit(OpCodes.Ldloc, extended);
+            Il.Emit(OpCodes.Ldloc, extended);
+            Il.Emit(OpCodes.Ldc_I4, managed == typeof(long) ? 63 : 31);
+            Il.Emit(OpCodes.Shr);
+            Il.Emit(OpCodes.Xor);
+            Il.Emit(OpCodes.Ldloc, extended);
+            Il.Emit(OpCodes.Ldc_I4, managed == typeof(long) ? 63 : 31);
+            Il.Emit(OpCodes.Shr);
+            Il.Emit(OpCodes.Sub);
             Normalize(type);
             return;
         }

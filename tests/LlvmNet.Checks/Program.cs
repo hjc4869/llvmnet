@@ -66,6 +66,45 @@ try
         }
         return 0;
     }
+    if (args is ["il-opcodes", string opcodePath, string methodName])
+    {
+        // The CIL opcodes of each method named methodName, one line per method, for checks of what a lowering emits.
+        var opcodes = typeof(System.Reflection.Emit.OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Select(field => (System.Reflection.Emit.OpCode)field.GetValue(null)!).ToDictionary(opcode => (ushort)opcode.Value);
+        using FileStream stream = File.OpenRead(opcodePath);
+        using var image = new PEReader(stream);
+        MetadataReader metadata = image.GetMetadataReader();
+        int found = 0;
+        foreach (MethodDefinitionHandle handle in metadata.MethodDefinitions)
+        {
+            MethodDefinition method = metadata.GetMethodDefinition(handle);
+            if (method.RelativeVirtualAddress == 0 || metadata.GetString(method.Name) != methodName) continue;
+            BlobReader il = image.GetMethodBody(method.RelativeVirtualAddress).GetILReader();
+            var names = new List<string>();
+            while (il.RemainingBytes > 0)
+            {
+                ushort value = il.ReadByte();
+                if (value == 0xFE) value = (ushort)(0xFE00 | il.ReadByte());
+                System.Reflection.Emit.OpCode opcode = opcodes[value];
+                names.Add(opcode.Name!);
+                int operand = opcode.OperandType switch
+                {
+                    System.Reflection.Emit.OperandType.InlineNone => 0,
+                    System.Reflection.Emit.OperandType.ShortInlineBrTarget or System.Reflection.Emit.OperandType.ShortInlineI or
+                        System.Reflection.Emit.OperandType.ShortInlineVar => 1,
+                    System.Reflection.Emit.OperandType.InlineVar => 2,
+                    System.Reflection.Emit.OperandType.InlineI8 or System.Reflection.Emit.OperandType.InlineR => 8,
+                    System.Reflection.Emit.OperandType.InlineSwitch => 4 * il.ReadInt32(),
+                    _ => 4
+                };
+                il.Offset += operand;
+            }
+            Console.WriteLine($"{methodName}: {string.Join(' ', names)}");
+            found++;
+        }
+        if (found == 0) throw new InvalidOperationException($"No method named {methodName} in {opcodePath}.");
+        return 0;
+    }
     if (args is ["inspect-signatures", string signaturePath])
     {
         using FileStream stream = File.OpenRead(signaturePath);
@@ -139,7 +178,7 @@ try
         }
         return 0;
     }
-    Console.Error.WriteLine("Usage: LlvmNet.Checks compare-numeric expected actual absolute-tolerance | inspect assembly.dll | jit-all path... | inspect-methods assembly.dll name-filter | inspect-signatures assembly.dll | simd128-probe inputs.bin");
+    Console.Error.WriteLine("Usage: LlvmNet.Checks compare-numeric expected actual absolute-tolerance | inspect assembly.dll | jit-all path... | inspect-methods assembly.dll name-filter | il-opcodes assembly.dll method | inspect-signatures assembly.dll | simd128-probe inputs.bin");
     return 2;
 }
 catch (Exception error)
