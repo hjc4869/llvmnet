@@ -13,6 +13,22 @@ The nightly job already ran `tests/ffmpeg-threads.sh` and `tests/ffmpeg-simd128.
 
 Both decoders of both ABIs have no explicit P/Invoke imports in portable mode (`LlvmNet.Checks inspect`), as before.
 
+## WG-02: gcc-c-torture and c-testsuite
+
+Two suites, both against a native build of the same source:
+
+- **c-testsuite** (pinned at commit `5c72756` in `scripts/sources.lock`, fetched by hash): 220 single-file programs, each with the output it must print and exit status 0. `tests/c-testsuite.sh` (tag `conformance`) builds each with `clang-22` and with llvmnet and compares. All 220 pass natively.
+- **gcc-c-torture execute tests**: the copy in the pinned `llvm-test-suite` 22.1.8 (`SingleSource/Regression/C/gcc-c-torture`), built through that suite's CMake with its list of GCC extensions Clang does not implement (nested functions, VLAs in structures and others), so the set is the one native Clang builds: 1,488 tests, all passing natively. They run as part of `tests/llvm-test-suite.sh` (WG-01 below), which reports them as their own group.
+
+| Suite | Mode | Passed | Counted | Rate | Failures by cause |
+| --- | --- | ---: | ---: | ---: | --- |
+| c-testsuite | portable | 219 | 220 | 99.5% | `00025` declares `int strlen(char *)` against the C library's definition, a contradicting prototype (owner exclusion, 2026-10-31) |
+| c-testsuite | system | 220 | 220 | 100% | |
+| gcc-c-torture | portable | 1,473 | 1,488 | 99.0% (99.2% without the 3 x86 tests) | computed goto (9), `__builtin_setjmp` (2), `__builtin_return_address` (1), x86 tests that do not apply to the portable target (3: x87 control-word assembly, and two that compare a `long double`'s padding unless `__x86_64__` is defined) |
+| gcc-c-torture | system | 1,475 | 1,488 | 99.1% | computed goto (9), `__builtin_setjmp` (2), `__builtin_return_address` (1), x87 control-word inline assembly (1) |
+
+The first runs found three defects in llvmnet, each fixed in its own commit with a test: empty `asm` statements with an output tied to an input (an optimization barrier 12 torture tests use) were rejected (`281ec9c`); a K&R `main(argc)` was rejected (`281ec9c`); and `__builtin_setjmp` is now listed as rejected in the support matrix and the limitations page, where it was missing.
+
 ## WG-01: llvm-test-suite through its own CMake
 
 `tests/llvm-test-suite.sh` (tag `conformance`) configures `llvm-test-suite` 22.1.8's `SingleSource` and `MultiSource` with `cmake/llvmnet.cmake` and `llvmnet-clang`/`llvmnet-clang++` wrappers for one mode each, builds with Ninja and runs the suite's own lit configuration against its reference outputs (`TEST_SUITE_USER_MODE_EMULATION`, so the suite's tools are host builds and the programs, launchers, run directly). The same directories built natively with `clang-22` against glibc define which tests count: all 2,049 pass natively. The NativeAOT subset publishes every program of `SingleSource/Benchmarks` as a NativeAOT executable. Run in a 32 GB memory-capped scope with 12 jobs (3 for NativeAOT): the three modes take about 75 minutes.
