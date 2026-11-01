@@ -1,7 +1,8 @@
 # Cross-platform fixture set (XP-01 to XP-03). tests/xp/build.sh compiles each line natively on Linux, records what the
 # native build prints and returns, and compiles the same sources in portable mode; tests/xp/run.sh reproduces the native
 # result on any .NET host. Fixtures here must not depend on the host: no host paths, time zones, locales, permission
-# bits or process identity in their output (docs/dev/host-abi.md lists what differs between hosts).
+# bits or process identity in their output (docs/dev/host-abi.md lists what differs between hosts). Both scripts run the
+# fixtures under an 8 MB stack limit, the RLIMIT_STACK portable images report on Windows and macOS.
 # name	aot	sources	flags	arguments	environment
 smoke	aot	c/smoke.c	-O1	-	-
 core	aot	c/core.c	-O1	-	-

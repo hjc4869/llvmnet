@@ -46,6 +46,8 @@ mkdir -p "$results"
 timeout_command=()
 if command -v timeout >/dev/null 2>&1; then timeout_command=(timeout 600); elif command -v gtimeout >/dev/null 2>&1; then timeout_command=(gtimeout 600); fi
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+# The stack limit build.sh recorded the native results under; Windows and macOS images report 8 MB without it.
+ulimit -S -s 8192 2>/dev/null || true
 if [[ $aot -eq 1 && -z "$rid" ]]; then
     rid="$("$dotnet" --info 2>/dev/null | sed -n 's/^ *RID: *//p' | head -1 | tr -d '\r')"
     if [[ -z "$rid" ]]; then printf 'Cannot determine the runtime identifier; pass --rid\n' >&2; exit 2; fi

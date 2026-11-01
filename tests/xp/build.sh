@@ -14,6 +14,9 @@ llvmnet="$root/bin/llvmnet"
 rm -rf "$bundle"
 mkdir -p "$bundle/images" "$bundle/expected" "$bundle/aot" "$bundle/native"
 work="$bundle/native/work"
+# The native results are recorded under Linux's usual 8 MB stack limit, which is what the portable runtime reports for
+# RLIMIT_STACK on hosts without one (Windows, macOS); GitHub's Linux runners default to 16 MB. run.sh sets the same.
+ulimit -S -s 8192
 {
     printf '# name\taot\targuments\tenvironment\n'
 } >"$bundle/manifest.tsv"
