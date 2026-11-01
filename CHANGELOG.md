@@ -80,6 +80,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 
 ### Fixed
 
+- Portable `open` with `O_CREAT` and read-only access (`O_RDONLY | O_CREAT | O_EXCL`) failed with `EINVAL`; it creates the file whatever its mode bits, and the descriptor still only reads (found by flang-rt's unit tests, WG-03).
 - Out-of-range `long double` to integer conversions threw instead of producing the x87 integer-indefinite value.
 - Zero-size `alloca` returned a null pointer, which flang-rt read as an unallocated zero-length character variable.
 - Signaling NaN `float` constants were quieted by the .NET JIT at `-O0`.

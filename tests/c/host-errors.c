@@ -84,6 +84,12 @@ static void files(void)
     CHECK("open directory for writing", open("dir", O_WRONLY));
     CHECK("open below a file", open("file/x", O_RDONLY));
     CHECK("open existing with O_EXCL", open("file", O_WRONLY | O_CREAT | O_EXCL, 0644));
+    /* O_CREAT creates the file with read-only access too, whatever its mode bits; the descriptor still only reads. */
+    int created = open("created", O_RDONLY | O_CREAT | O_EXCL, 0);
+    FACT("create read-only, mode 0, with O_EXCL", created >= 0);
+    CHECK("write to the created read-only descriptor", write(created, "x", 1));
+    close(created);
+    unlink("created");
     CHECK("open file with O_DIRECTORY", open("file", O_RDONLY | O_DIRECTORY));
     CHECK("read bad descriptor", read(99, buffer, 1));
     CHECK("write bad descriptor", write(99, buffer, 1));

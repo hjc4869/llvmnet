@@ -458,7 +458,9 @@ public static unsafe partial class HostSyscalls
             Share = FileShare.ReadWrite | FileShare.Delete,
             BufferSize = 0
         };
-        if (options.Access == FileAccess.Read && options.Mode is FileMode.Create or FileMode.Truncate) options.Access = FileAccess.ReadWrite;
+        // .NET refuses to create or truncate a file it opens only for reading; POSIX allows it, so open the stream for
+        // reading and writing. The descriptor still reads only: OpenFile checks reads and writes against flags.
+        if (options.Access == FileAccess.Read && options.Mode is FileMode.Create or FileMode.CreateNew or FileMode.Truncate) options.Access = FileAccess.ReadWrite;
         if (create && !OperatingSystem.IsWindows()) options.UnixCreateMode = (UnixFileMode)(mode & 0x1ff & ~fileCreationMask);
         return Install(new OpenFile(FileKind.Regular, new FileStream(path, options), path, flags & ~O_CREAT & ~O_EXCL & ~O_TRUNC), closeOnExec);
     }
