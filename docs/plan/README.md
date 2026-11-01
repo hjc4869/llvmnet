@@ -17,6 +17,12 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-11-02, PF-16)
+
+Measurements are in [evidence/2026-11-02-pf16-host-memory.md](../evidence/2026-11-02-pf16-host-memory.md).
+
+- **PF-16.** Portable mode's `mmap` emulation takes small mappings from slabs and finds them through page tables. A one-page mapping costs one page, and unmapping is linear in any order. libxml2's DOM parse is 2.7 times faster on Linux with 42% less memory, 5 times faster on macOS and 3 times on Windows, and now beats system mode. The allocation-heavy olden benchmarks run 1.2 to 1.9 times faster, and the benchmark harness shows no regression. Releasing pages discarded with `MADV_DONTNEED` would need an operating-system call and stays undone.
+
 ## Progress (2026-11-02, library survey)
 
 Measurements are in [evidence/2026-11-02-library-survey.md](../evidence/2026-11-02-library-survey.md).

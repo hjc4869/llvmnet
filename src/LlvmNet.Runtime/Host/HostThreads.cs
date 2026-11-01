@@ -411,8 +411,7 @@ public static unsafe partial class HostSyscalls
         long requested = 0;
         if (stack != 0)
             lock (mappingGate)
-                foreach (Mapping mapping in Overlapping(stack - 1, 1))
-                    requested = mapping.Length;
+                requested = MappingAt(stack - 1)?.Length ?? 0;
         return (int)Math.Clamp(requested, DefaultStackSize, MaximumStackSize);
     }
 
