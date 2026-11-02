@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The synthetic provider of tests/extensions.sh (NX-02): stubs written in C#, registered by the program it is linked with
+       through a CIL reference. Build with -p:LlvmNetRuntime=(path of LlvmNet.Runtime.dll). -->
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="llvmnet.abi" Value="dotnet64-v2" />
+    <AssemblyMetadata Include="llvmnet.version" Value="$(VersionPrefix)" />
+    <Reference Include="LlvmNet.Runtime" HintPath="$(LlvmNetRuntime)" Private="false" />
+  </ItemGroup>
+</Project>

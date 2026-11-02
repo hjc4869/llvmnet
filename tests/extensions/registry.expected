@@ -1,0 +1,27 @@
+dlopen before registration           null: Dynamic loading not supported: libllvmnet-registry.so.1
+dlopen(NULL)                         null: Dynamic loading not supported: a portable program cannot look up its own symbols
+dlopen by path                       ok: (no error)
+dlopen again, same handle            yes
+dlopen unknown                       null: Dynamic loading not supported: libllvmnet-unknown.so.2
+dlopen absent host library           null: registry: libllvmnet-absent.so.1 is not installed on this host (tried libllvmnet-absent.so.1)
+dlopen RTLD_NOLOAD, not loaded       null: Library libllvmnet-registry.so is not already loaded
+dlopen RTLD_NOLOAD, loaded           ok: (no error)
+dlsym registry_add                   ok: (no error)
+calls through the stubs              42 4.5 hello from a managed stub
+dlsym missing                        null: Symbol not found: registry_missing
+dlsym resolver failure               null: registry: the stub table is damaged
+dlsym invalid handle                 null: Invalid library handle 0x1234
+dlsym RTLD_DEFAULT, nothing global   null: Symbol not found: registry_add
+dlopen second name, RTLD_GLOBAL      ok: (no error)
+second name, another handle          yes
+dlsym RTLD_DEFAULT                   ok: (no error)
+dlsym RTLD_NEXT missing              null: Symbol not found: registry_missing
+dladdr of a stub                     1 libllvmnet-registry.so.1 registry_add same-address handle-base
+dladdr of main                       0
+thread: dlopen unknown               null: Dynamic loading not supported: libllvmnet-thread.so
+main thread keeps its own error      ok: Dynamic loading not supported: libllvmnet-unknown.so.3
+dlclose                              0
+dlsym after dlclose                  ok: (no error)
+dlclose invalid handle               1
+error of dlclose                     null: Invalid library handle 0x1234
+dlerror cleared                      ok: (no error)

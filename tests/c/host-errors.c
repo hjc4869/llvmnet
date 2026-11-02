@@ -4,6 +4,7 @@
  * Values that legitimately differ between runs (times, sizes, ids) are reduced to facts that do not. */
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -463,6 +464,23 @@ static void clocks(void)
     }
 }
 
+/* Dynamic loading of a library nobody provides: natively the loader finds no file, in portable mode no native extension
+ * serves the name (tests/extensions.sh covers the libraries one does). The messages differ; both name what failed. */
+static void loading(void)
+{
+    FACT("dlopen of a missing library fails", dlopen("libllvmnet-no-such-library.so.1", RTLD_NOW) == 0);
+    const char *error = dlerror();
+    FACT("dlerror names the library", error && strstr(error, "libllvmnet-no-such-library.so.1"));
+    FACT("dlerror is cleared by reading it", dlerror() == 0);
+    FACT("dlopen by path, RTLD_LAZY | RTLD_GLOBAL", dlopen("/nonexistent/libllvmnet-no-such-library.so.1", RTLD_LAZY | RTLD_GLOBAL) == 0);
+    error = dlerror();
+    FACT("dlerror names the path", error && strstr(error, "/nonexistent/libllvmnet-no-such-library.so.1"));
+    FACT("dlsym RTLD_DEFAULT of a missing symbol", dlsym(RTLD_DEFAULT, "llvmnet_no_such_symbol") == 0);
+    error = dlerror();
+    FACT("dlerror names the symbol", error && strstr(error, "llvmnet_no_such_symbol"));
+    FACT("dlerror without an error", dlerror() == 0);
+}
+
 int main(void)
 {
     setvbuf(stdout, 0, _IONBF, 0);
@@ -472,5 +490,6 @@ int main(void)
     memory();
     process();
     clocks();
+    loading();
     return 0;
 }

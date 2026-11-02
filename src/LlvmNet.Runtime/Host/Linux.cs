@@ -68,6 +68,10 @@ internal static class Linux
     internal const ulong RLIM_INFINITY = ulong.MaxValue;
     internal const int R_OK = 4, W_OK = 2, X_OK = 1;
 
+    // dlopen(3) flags and dlsym(3) pseudo-handles, as musl's dlfcn.h defines them.
+    internal const int RTLD_NOLOAD = 4, RTLD_GLOBAL = 256;
+    internal const nint RTLD_DEFAULT = 0, RTLD_NEXT = -1;
+
     /// <summary>The identity every portable program sees on every host: one user and group, number 1000.</summary>
     internal const int UserId = 1000, GroupId = 1000;
 
@@ -158,6 +162,16 @@ internal static class Linux
         internal ulong Flags;
         internal nint Restorer;
         internal ulong Mask;
+    }
+
+    /// <summary>Dl_info, which dladdr fills.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct DlInfo
+    {
+        internal nint FileName;
+        internal nint Base;
+        internal nint SymbolName;
+        internal nint SymbolAddress;
     }
 
     [StructLayout(LayoutKind.Sequential)]
