@@ -59,10 +59,7 @@ LLVMNET_EXT_SYNTHETIC_DIR="$native" dotnet "$test_output/lname/synthetic.dll" | 
     { cat "$test_output/synthetic-aot.log" >&2; exit 1; }
 LLVMNET_EXT_SYNTHETIC_DIR="$native" "$test_output/synthetic-aot" | diff -u "$test_output/native.txt" -
 # System mode links the manifest's Linux library through a generated bridge; the headers are the program's business.
-# Its calls through native function pointers do not yet extend narrow arguments or results (a system-mode defect that
-# predates extensions), so the two dlsym calls with narrow types are left out of that comparison.
 LIBRARY_PATH="$native" LD_LIBRARY_PATH="$native" "$llvmnet" --runtime=system -O1 -I"$fixtures/synthetic/include" \
     "$fixtures/synthetic.c" --extension=synthetic -o "$test_output/system/synthetic.dll"
-LD_LIBRARY_PATH="$native" dotnet "$test_output/system/synthetic.dll" | grep -v '^dlsym synthetic_\(mix\|low\):' |
-    diff -u <(grep -v '^dlsym synthetic_\(mix\|low\):' "$test_output/native.txt") -
+LD_LIBRARY_PATH="$native" dotnet "$test_output/system/synthetic.dll" | diff -u "$test_output/native.txt" -
 printf 'PASS: the synthetic extension links with --extension and -l, prints what native prints under the JIT, NativeAOT and system mode, and is listed in the image\n'

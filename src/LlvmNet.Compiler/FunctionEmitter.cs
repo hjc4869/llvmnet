@@ -1334,7 +1334,27 @@ internal sealed class FunctionEmitter : ValueEmitter
                     Il.Emit(OpCodes.Throw);
                 }
                 else
+                {
+                    // Native code expects a narrow integer argument extended to 32 bits as its signext or zeroext attribute
+                    // says, and leaves the upper bits of a narrow result undefined, while llvmnet keeps narrow integers
+                    // zero-extended: the arguments are loaded again, extended, and the result is masked.
+                    if (Enumerable.Range(0, parameters.Length).Any(index => NarrowInteger(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index)))))
+                    {
+                        for (int index = 0; index <= parameters.Length; index++) Il.Emit(OpCodes.Pop);
+                        uint signext = Llvm.LLVMGetEnumAttributeKindForName("signext", 7);
+                        for (uint index = 0; index < parameters.Length; index++)
+                        {
+                            nint argument = Llvm.LLVMGetOperand(instruction, index);
+                            Load(argument);
+                            if (!NarrowInteger(Llvm.LLVMTypeOf(argument))) continue;
+                            if (Llvm.LLVMGetCallSiteEnumAttribute(instruction, index + 1, signext) != 0) SignExtend(Llvm.LLVMTypeOf(argument));
+                            else Normalize(Llvm.LLVMTypeOf(argument));
+                        }
+                        Load(target);
+                    }
                     Il.EmitCalli(OpCodes.Calli, System.Runtime.InteropServices.CallingConvention.Cdecl, returnType, parameters);
+                    if (NarrowInteger(Llvm.LLVMGetReturnType(signature))) Normalize(Llvm.LLVMGetReturnType(signature));
+                }
                 Il.MarkLabel(complete);
             }
         }
@@ -1462,6 +1482,9 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     /// <summary>i8 and [1 x i8], which x86-64 passes and returns in the same register: Fortran passes character(1) by value
     /// as the array where C takes char.</summary>
+    /// <summary>An integer type narrower than the 32-bit CIL value that holds it (i1, i8, i16).</summary>
+    private static bool NarrowInteger(nint type) => TypeSystem.Kind(type) == 8 && TypeSystem.Width(type) < 32;
+
     private static bool OneByte(nint first, nint second) =>
         ByteArray(first) && TypeSystem.Kind(second) == 8 && TypeSystem.Width(second) == 8 ||
         ByteArray(second) && TypeSystem.Kind(first) == 8 && TypeSystem.Width(first) == 8;
