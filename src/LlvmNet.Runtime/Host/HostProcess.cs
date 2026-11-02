@@ -273,9 +273,13 @@ public static unsafe partial class HostSyscalls
         return result;
     }
 
-    /// <summary>execvp's search: a name without a slash is looked up in PATH (from the child's environment), others are paths.</summary>
+    /// <summary>
+    /// execvp's search: a name without a slash is looked up in PATH (from the child's environment), others are paths.
+    /// /proc/self/exe starts the program's own executable (the launcher), as it does natively, not the dotnet host.
+    /// </summary>
     private static string? FindExecutable(string program, bool search, nint environment)
     {
+        if (HostPaths.IsExecutableLink(program) && ProcessRuntime.Executable is string self) return self;
         string? path = environment == 0 ? Environment.GetEnvironmentVariable("PATH")
             : Strings(environment).FirstOrDefault(variable => variable.StartsWith("PATH=", StringComparison.Ordinal))?[5..];
         if (program.Contains('/') || !search)

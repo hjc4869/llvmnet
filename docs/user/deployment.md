@@ -7,11 +7,27 @@ What a compiled program consists of, what the host that runs it needs, how the t
 | Output | What to ship | Needs on the host |
 | --- | --- | --- |
 | `-o program.dll` | `program.dll`, `program.runtimeconfig.json`, `LlvmNet.Runtime.dll` (and in system mode `libprogram.llvmnet-host.so`), all in one directory | the .NET 10 runtime (`dotnet program.dll`) |
-| `-o program` (a launcher) | `program` and the `program.llvmnet/` directory next to it | the .NET 10 runtime, `/bin/sh`; `LLVMNET_DOTNET` names another `dotnet` |
+| `-o program` (a [launcher](#launchers)) | `program` and the `program.llvmnet/` directory next to it; symbolic links to `program` may be anywhere | the .NET 10 runtime, `/bin/sh` (and `readlink` when started through a symbolic link); `LLVMNET_DOTNET` names another `dotnet` |
 | `-shared -o Library.dll` | `Library.dll` with its `LlvmNet.Runtime.dll`, alongside the program or .NET application that references it | the .NET 10 runtime |
 | `--nativeaot -o program` | `program` alone (system mode: plus the `--system-library` libraries, which stay dynamic dependencies) | nothing from .NET; the C library of the target |
 
 An image's `runtimeconfig.json` pins the .NET 10 band (`rollForward: Minor`): patch and minor updates of .NET 10 are accepted, a host with only a later major refuses to run it until `DOTNET_ROLL_FORWARD=LatestMajor` is set. It also turns off the JIT's dynamic profile-guided optimization (`System.Runtime.TieredPGO: false`), which made translated programs about 7% slower on average; `DOTNET_TieredPGO=1` turns it back on for a run. A host the runtime cannot support (32-bit, big-endian, Mono, .NET before 10) prints one `llvmnet:` line naming the problem and the fix and exits with status 1 before any translated code runs.
+
+### Launchers
+
+A launcher is a POSIX shell script that runs `dotnet program.llvmnet/program.dll`. It finds its payload beside its own file, following symbolic links to it as the kernel does, so it can be linked from another directory (`/usr/local/bin/program` to `/opt/program/bin/program`) or under other names. The program sees what a native program started the same way sees:
+
+- `argv[0]` is what the launcher was started as (`./program`, `../bin/alias`, `/opt/program/bin/program`), so usage texts and programs that choose their behavior by their name (`llvm-ar` started as `ranlib`, `clang` as `clang++`) work.
+- `/proc/self/exe` names the launcher with every link resolved: `readlink`, `realpath`, `stat` and `open` see it there, and `posix_spawn` of it starts the launcher. Programs that find files relative to themselves (Clang's resource directory) or start themselves again (Flang's driver runs `<self> -fc1`) work.
+- The launcher passes the two to the runtime in `LLVMNET_ARGV0` and `LLVMNET_EXE`, which the runtime takes out of the environment, so neither the program nor its children see them. A launcher of one's own (a packager's script, a `.cmd` file on Windows) can set them the same way.
+
+What still differs from a native program:
+
+- Started through `PATH` (or bash's `exec -a`), a native program sees the name it was started by, `program`; a launcher sees the path the shell found, `/usr/local/bin/program`, because the kernel gives a script that path as `$0`. The base name is the same.
+- In system mode, glibc asks the kernel for `/proc/self/exe`, which names the `dotnet` host; `argv[0]` is the launcher's.
+- A child started with `posix_spawn`, `system` or `popen` gets the path of its executable as `argv[0]`, not the one its parent passed ([LC-33](../plan/02-portable-c-library.md)).
+
+`dotnet program.dll` and `.dll` outputs keep the image's path as `argv[0]` and the `dotnet` host as `/proc/self/exe`. NativeAOT executables are native programs and see their own name and path. `tests/launcher-identity.sh` compares all three forms with the native build ([evidence](../evidence/2026-11-02-tc21-launcher-identity.md)).
 
 ## Supported hosts
 

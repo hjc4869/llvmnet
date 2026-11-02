@@ -77,6 +77,13 @@ internal static class Toolchain
         return result.ToArray();
     }
 
+    /// <summary>
+    /// Writes the launcher for <paramref name="assembly"/>, a POSIX shell script that runs it with dotnet. The script follows
+    /// symbolic links to itself, as the kernel does for /proc/self/exe, so a link in another directory finds the payload,
+    /// and passes its $0 (LLVMNET_ARGV0) and its resolved path (LLVMNET_EXE) to the runtime, which reports them as argv[0]
+    /// and /proc/self/exe (ProcessRuntime.ProgramName and Executable). It runs no utility unless it was reached through a
+    /// link, which takes one readlink per link.
+    /// </summary>
     internal static void Launcher(string output, string assembly)
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
@@ -84,7 +91,19 @@ internal static class Toolchain
         string relative = Path.GetRelativePath(Path.GetDirectoryName(output)!, assembly);
         if (relative.Contains('\n')) throw new ArgumentException("Newlines are not supported in executable output paths.");
         string quoted = relative.Replace("'", "'\"'\"'", StringComparison.Ordinal);
-        File.WriteAllText(output, "#!/bin/sh\nroot=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd) || exit 1\nexec \"${LLVMNET_DOTNET:-dotnet}\" \"$root\"/'" + quoted + "' \"$@\"\n");
+        File.WriteAllText(output, $$"""
+            #!/bin/sh
+            self=$0
+            while [ -h "$self" ]; do
+                link=$(readlink -- "$self") || exit 1
+                case $link in /*) self=$link ;; *) case $self in */*) self=${self%/*}/$link ;; *) self=$link ;; esac ;; esac
+            done
+            case $self in */*) directory=${self%/*} ;; *) directory=. ;; esac
+            root=$(CDPATH= cd -P -- "${directory:-/}" && pwd -P) || exit 1
+            export LLVMNET_ARGV0="$0" LLVMNET_EXE="${root%/}/${self##*/}"
+            exec "${LLVMNET_DOTNET:-dotnet}" "$root"/'{{quoted}}' "$@"
+
+            """);
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
             File.SetUnixFileMode(output, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
     }

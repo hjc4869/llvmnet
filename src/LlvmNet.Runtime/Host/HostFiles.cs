@@ -427,6 +427,7 @@ public static unsafe partial class HostSyscalls
         string path = Resolve(directory, pathPointer);
         bool closeOnExec = (flags & O_CLOEXEC) != 0;
         if (OpenDevice(path, flags) is OpenFile device) return Install(device, closeOnExec);
+        if (HostPaths.IsExecutableLink(path) && (flags & O_NOFOLLOW) == 0 && ProcessRuntime.Executable is string executable) path = executable;
         if ((flags & O_TMPFILE) == O_TMPFILE) return -EOPNOTSUPP;
         bool create = (flags & O_CREAT) != 0, exclusive = (flags & O_EXCL) != 0, truncate = (flags & O_TRUNC) != 0;
         int access = flags & O_ACCMODE;

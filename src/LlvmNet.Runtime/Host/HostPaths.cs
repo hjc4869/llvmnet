@@ -42,9 +42,26 @@ internal static class HostPaths
         return path;                                  // UNC "//server/share/x" and relative paths keep their spelling
     }
 
+    private static readonly string processExecutableLink = $"/proc/{Environment.ProcessId}/exe";
+
+    /// <summary>
+    /// /proc/self/exe, the link to the program's executable (ProcessRuntime.Executable), which the host layer serves on
+    /// every host; also under the process's own id, where realpath arrives after reading the /proc/self link on Linux.
+    /// </summary>
+    internal static bool IsExecutableLink(string path) => path == "/proc/self/exe" || path == processExecutableLink;
+
+    private static readonly string processDirectory = $"/proc/{Environment.ProcessId}";
+
+    /// <summary>
+    /// On a host without /proc (macOS, Windows), the directories above /proc/self/exe, which musl's realpath reads as
+    /// links on its way: /proc/self is a link to the process's id there as on Linux, and the others are directories.
+    /// </summary>
+    internal static bool IsProcessDirectory(string path) =>
+        !OperatingSystem.IsLinux() && (path == "/proc" || path == "/proc/self" || path == processDirectory);
+
     /// <summary>Paths the host layer answers itself on every host, which must not be read as host paths (on Windows, "/dev" would name a directory on the current drive).</summary>
     internal static bool IsVirtual(string path) =>
-        path == "/proc/self/exe" || path == "/etc/localtime" || path == "/etc/passwd" || path == "/etc/group" ||
+        IsExecutableLink(path) || IsProcessDirectory(path) || path == "/etc/localtime" || path == "/etc/passwd" || path == "/etc/group" ||
         path.StartsWith("/dev/", StringComparison.Ordinal) || path.StartsWith("/usr/share/zoneinfo/", StringComparison.Ordinal) ||
         path.StartsWith("/share/zoneinfo/", StringComparison.Ordinal) || path.StartsWith("/etc/zoneinfo/", StringComparison.Ordinal);
 

@@ -25,6 +25,7 @@ public static unsafe partial class HostSyscalls
     /// <summary>What stat (following links) sees at <paramref name="path"/>; null when nothing exists there.</summary>
     private static FileSystemInfo? Target(string path)
     {
+        if (HostPaths.IsExecutableLink(path) && ProcessRuntime.Executable is string executable) path = executable;
         if (SymbolicLinkAt(path) is FileSystemInfo link)
         {
             // The resolved entry has the link's own type (FileInfo), whose Exists is false for a directory target.
@@ -36,6 +37,15 @@ public static unsafe partial class HostSyscalls
         if (Directory.Exists(path)) return new DirectoryInfo(path);
         return File.Exists(path) ? new FileInfo(path) : null;
     }
+
+    /// <summary>The target of the symbolic link at <paramref name="path"/> as the host names it, or null when it is none; /proc/self/exe is a link on every host.</summary>
+    private static string? LinkTarget(string path) => path switch
+    {
+        _ when HostPaths.IsExecutableLink(path) => ProcessRuntime.Executable,
+        "/proc/self" when HostPaths.IsProcessDirectory(path) => Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        _ when HostPaths.IsProcessDirectory(path) => null,
+        _ => SymbolicLinkAt(path)?.LinkTarget
+    };
 
     /// <summary>The errno when following <paramref name="path"/> finds nothing: for a symbolic link, the error of its final target.</summary>
     private static long Unreachable(string path)
@@ -119,12 +129,14 @@ public static unsafe partial class HostSyscalls
             return 0;
         }
         FileSystemInfo? info;
-        if ((flags & AT_SYMLINK_NOFOLLOW) != 0 && SymbolicLinkAt(path) is FileSystemInfo link)
+        // /proc/self/exe has the times of the executable it names.
+        if ((flags & AT_SYMLINK_NOFOLLOW) != 0 && (HostPaths.IsExecutableLink(path) ? Target(path) : SymbolicLinkAt(path)) is FileSystemInfo link &&
+            LinkTarget(path) is string target)
         {
             stat->Device = 1;
             stat->Inode = InodeOf(path);
             stat->Mode = S_IFLNK | 0x1ff;
-            stat->Size = Encoding.UTF8.GetByteCount(HostPaths.ToProgram(link.LinkTarget!));
+            stat->Size = Encoding.UTF8.GetByteCount(HostPaths.ToProgram(target));
             stat->Access = Timespec.From(link.LastAccessTimeUtc);
             stat->Modification = stat->Change = Timespec.From(link.LastWriteTimeUtc);
             return 0;
@@ -283,8 +295,8 @@ public static unsafe partial class HostSyscalls
     {
         if (size <= 0) return -EINVAL;
         string path = Resolve(directory, pathPointer);
-        string? target = HostPaths.ToProgram(path == "/proc/self/exe" ? Environment.ProcessPath : SymbolicLinkAt(path)?.LinkTarget);
-        if (target is null) return File.Exists(path) || Directory.Exists(path) ? -EINVAL : Missing(path);
+        string? target = HostPaths.ToProgram(LinkTarget(path));
+        if (target is null) return File.Exists(path) || Directory.Exists(path) || HostPaths.IsProcessDirectory(path) ? -EINVAL : Missing(path);
         byte[] bytes = Encoding.UTF8.GetBytes(target);
         int length = (int)Math.Min(bytes.Length, size);
         bytes.AsSpan(0, length).CopyTo(new Span<byte>(buffer, length));
