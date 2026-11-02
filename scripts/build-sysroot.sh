@@ -70,6 +70,8 @@ cp "$llvm/flang-rt/LICENSE.TXT" "$stage/share/licenses/flang-rt.LICENSE.TXT" 2>/
 printf '%s\n' "$inputs" >"$stage/.llvmnet-inputs"
 # Objects compiled against the sysroot depend only on its headers: builds of other projects key on this hash.
 (cd "$stage/include" && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1) >"$stage/.llvmnet-headers"
+# Native extensions installed in ext/ are not built here: they move into the new sysroot, outside its header set.
+if [[ -d "$sysroot/ext" ]]; then cp -a "$sysroot/ext" "$stage/ext"; fi
 rm -rf "${sysroot:?}.old"
 [[ -d "$sysroot" ]] && mv "$sysroot" "$sysroot.old"
 mv "$stage" "$sysroot"

@@ -115,7 +115,7 @@ internal static class DriverOptions
         new("-###", OptionKind.Flag, Steps, "Print the frontend commands instead of running them, and stop before linking", H),
         // Inputs and libraries
         new("-L", OptionKind.JoinedOrSeparate, Inputs, "Directory searched for -l archives", H, value: "<dir>"),
-        new("-l", OptionKind.JoinedOrSeparate, Inputs, "Link lib<name>.a, an archive of LLVM bitcode objects (-l:<file> names the file exactly); -lc, -lm, -lpthread, -ldl, -lrt and, in portable mode, -lc++ and the Fortran runtime names need no archive", H, value: "<name>"),
+        new("-l", OptionKind.JoinedOrSeparate, Inputs, "Link lib<name>.a, an archive of LLVM bitcode objects (-l:<file> names the file exactly), or else the native extension whose manifest lists the name (--extension); -lc, -lm, -lpthread, -ldl, -lrt and, in portable mode, -lc++ and the Fortran runtime names need no archive", H, value: "<name>"),
         new("-nostdlib", OptionKind.Flag, Inputs, "Portable: link neither the start object nor the sysroot libraries; system: no Fortran runtime", H),
         new("-nodefaultlibs", OptionKind.Flag, Inputs, "Portable: link no sysroot library (musl, libc++, flang-rt, OpenMP, builtins); system: no Fortran runtime", H),
         new("-nostartfiles", OptionKind.Flag, Inputs, "Portable: do not link musl's start object crt1.o", H),
@@ -129,6 +129,7 @@ internal static class DriverOptions
         // Managed and native libraries
         new("--cil-reference", OptionKind.JoinedOrSeparate, Managed, "Resolve calls to the public CExport methods of a managed library built with -shared, in the same mode", H, value: "<assembly>"),
         new("--system-library", OptionKind.JoinedOrSeparate, Managed, "System mode: a native shared library whose functions the program calls through generated bridges", H, value: "<library>"),
+        new("--extension", OptionKind.JoinedOrSeparate, Managed, "Link a native extension installed in the sysroot's ext/ directory: in portable mode its assembly, registered for dlopen; in system mode its Linux libraries, as --system-library (also -l<name> for a name its manifest lists)", H, value: "<name>"),
         new("--native-import", OptionKind.JoinedOrSeparate, NotAccepted, "", R, "it was removed (ADR-04, SA-01); --runtime=system resolves every native function through generated bridges, and --system-library <shared-library> adds a library", "<spec>"),
         // NativeAOT
         new("--nativeaot", OptionKind.Flag, Aot, "Publish a native executable with NativeAOT (needs the .NET 10 SDK and the target's native toolchain)", H),
@@ -146,6 +147,7 @@ internal static class DriverOptions
         // Information
         new("--help", OptionKind.Flag, Information, "This list; docs/user/driver.md is the full reference", H),
         new("--version", OptionKind.Flag, Information, "llvmnet's version, the LLVM version and the ABI tags, then the frontend's own version", H),
+        new("--list-extensions", OptionKind.Flag, Information, "List the native extensions installed in the sysroot's ext/ directory, with their -l names, host libraries and headers", H),
         new("--driver-mode", OptionKind.JoinedOrSeparate, Information, "Frontend to use: gcc or clang (C), g++ or clang++ (C++), flang (Fortran), as the llvmnet-clang, llvmnet-clang++ and llvmnet-flang names do", H, value: "<mode>"),
         new("-dumpmachine", OptionKind.Flag, Information, "Frontend queries, answered by the selected frontend for the mode's target (x86_64-unknown-none in portable mode; also -dumpversion, -print-search-dirs, -print-resource-dir, -print-file-name=, -print-prog-name=, -print-target-triple, -print-libgcc-file-name)", H),
         new("-dumpversion", OptionKind.Flag, Hidden, "", H),

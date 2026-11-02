@@ -34,6 +34,28 @@ if "$root/bin/llvmnet" --nativeaot --aot-instruction-set x86-64-v3 --runtime-id 
     exit 1
 fi
 grep -q 'x86-64-v3 is an x64 instruction set; the target is linux-arm64' "$output/aot-arm-v3.log"
+# Native extensions (NX-03): a name that is not installed fails as a usage error, and a package whose header and -l name
+# clash with the sysroot's cannot be used, by --extension or by -l, and --list-extensions shows why.
+extension_root "$output/toolchain"
+clash="$output/toolchain/sysroot/dotnet64-v2/ext/clash"
+mkdir -p "$clash/include" "$clash/lib"
+printf '{"name": "clash", "version": "0.1", "libraries": {"linux": ["libclash.so.1"]}, "link": ["m", "clash"], "headers": ["stdio.h"]}\n' >"$clash/manifest.json"
+: >"$clash/include/stdio.h"
+: >"$clash/lib/LlvmNet.Ext.Clash.dll"
+result=0
+LLVMNET_ROOT="$output/toolchain" "$root/bin/llvmnet" "$root/tests/c/smoke.c" --extension=missing -o "$output/missing.dll" 2>"$output/missing.log" || result=$?
+test "$result" -eq 2
+grep -qF "native extension 'missing' is not installed in $output/toolchain/sysroot/dotnet64-v2/ext; llvmnet --list-extensions lists the installed ones." "$output/missing.log"
+clash_message="native extension 'clash' cannot be used: its header stdio.h clashes with the sysroot's stdio.h; -lm clashes with the sysroot's library of that name."
+for option in --extension=clash -lclash; do
+    if LLVMNET_ROOT="$output/toolchain" "$root/bin/llvmnet" "$root/tests/c/smoke.c" "$option" -o "$output/clash.dll" 2>"$output/clash.log"; then
+        printf 'FAIL: %s linked an extension that clashes with the sysroot\n' "$option" >&2
+        exit 1
+    fi
+    grep -qF "$clash_message" "$output/clash.log" || { cat "$output/clash.log" >&2; exit 1; }
+done
+LLVMNET_ROOT="$output/toolchain" "$root/bin/llvmnet" --list-extensions >"$output/extensions.txt"
+grep -qF "  problem:   its header stdio.h clashes with the sysroot's stdio.h" "$output/extensions.txt"
 (
     cd "$root"
     bin/llvmnet @tests/driver.rsp

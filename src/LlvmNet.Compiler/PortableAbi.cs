@@ -51,6 +51,8 @@ internal static class PortableAbi
             result.AddRange(["-D_GNU_SOURCE", "-nostdinc++", "-isystem", cppInclude]);
         }
         result.AddRange(["-isystem", include]);
+        foreach (string directory in Extensions.IncludeDirectories())
+            result.AddRange(["-isystem", directory]);
         string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");
         var start = new ProcessStartInfo(clang) { UseShellExecute = false, RedirectStandardOutput = true };
         start.ArgumentList.Add("-print-resource-dir");

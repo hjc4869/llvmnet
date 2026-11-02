@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The synthetic native extension of tests/extensions.sh (NX-03), written by hand in the form the generator (NX-04) will
+       write: stubs that call the native test library through unmanaged function pointers, and its registration class.
+       Build with -p:LlvmNetRuntime=(path of LlvmNet.Runtime.dll). -->
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="llvmnet.abi" Value="dotnet64-v2" />
+    <AssemblyMetadata Include="llvmnet.version" Value="$(VersionPrefix)" />
+    <AssemblyMetadata Include="llvmnet.extension" Value="synthetic/1.0.0" />
+    <Reference Include="LlvmNet.Runtime" HintPath="$(LlvmNetRuntime)" Private="false" />
+  </ItemGroup>
+</Project>
