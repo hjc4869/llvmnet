@@ -9,7 +9,7 @@ llvmnet translates linked LLVM bitcode to CIL. The same pipeline serves both run
 3. Portable executables link musl's `crt1.o` and the sysroot archives (libomp, flang-rt, libc++, libc++abi, musl, compiler-rt builtins), extracting only the members the program uses; system executables link flang-rt from `sysroot/system-linux-x64-v1`.
 4. `opt-22` runs the lowering passes. Executables internalize everything except the entry points and run global dead-code elimination; libraries keep their public definitions. Both expand vector reductions and masked memory intrinsics and run LLVM's scalarizer, which by default also scalarizes vector loads and stores; `--simd128` keeps those and the SIMD128 helper calls.
 5. The C# backend reads the module through LLVM's C API. LLVM's data layout determines sizes, alignments and structure offsets.
-6. `PersistedAssemblyBuilder` emits static CIL methods into a PE image, which the .NET JIT executes.
+6. `PersistedAssemblyBuilder` emits static CIL methods into a PE image, which the .NET JIT executes. Functions are methods of a class `Program`; because the CLR allows at most 65,535 methods per type, internal methods beyond 32,768 go to further internal classes named `Program` in namespaces `LlvmNet.Methods<n>` (exports and the entry methods stay on `Program`), as static fields beyond 32,768 go to `__Statics<n>` classes.
 7. `--nativeaot` publishes the emitted assembly with NativeAOT. System-mode native bridges become static native inputs, so the result is one executable.
 
 ## Values and Control Flow
