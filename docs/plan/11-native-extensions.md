@@ -1,0 +1,100 @@
+# Workstream NX: Native extensions of the portable ABI
+
+Prefix `NX`. Owner: unassigned. Milestone: proposed [M10](README.md#milestones) after 1.0; the owner decides whether NX-02 and NX-03 land before the `dotnet64-v2` freeze (they are compatible additions). The decision this workstream depends on is [ADR-15](decisions.md#adr-15-native-extensions-of-the-portable-abi).
+
+Portable programs are one image for every host, and that is why they cannot link native libraries: the host's libraries differ by operating system and CPU, and the image contains no native code. Some libraries cannot realistically be recompiled into portable bitcode, because they are the operating system's or the GPU vendor's: EGL and OpenGL ES, Vulkan, windowing. This workstream gives portable mode a well-defined way to reach such libraries through *native extensions*: a named package of neutral headers plus a platform-neutral managed proxy assembly, generated from the API's registry or headers, which loads the host's implementation at run time and calls it through the CLR's own native calling convention. The program stays one image; what differs per host is only which native library the proxy finds, and whether it finds one.
+
+## Current state (verified 2026-11-03)
+
+- Portable mode rejects `--system-library` and fails the link on any function the sysroot does not provide ([modes.md](../user/modes.md#portable-net-abi)). The library survey found that this is exactly where ANGLE stops in portable mode: everything but the host GL libraries runs ([evidence](../evidence/2026-11-02-library-survey.md)).
+- Managed libraries work: `--cil-reference` resolves a program's undefined C functions to the public `CExport` methods of an assembly tagged `llvmnet.abi = dotnet64-v2`, with an exact check of the CIL signature; the assembly is copied next to the image and into the NativeAOT project (`CilCompiler.cs`, `Toolchain.AotProject`). ADR-09 makes scalar and pointer `CExport` signatures the stable surface.
+- musl's static `dlopen` is a weak stub that fails with "Dynamic loading not supported"; `dlsym`, `dlclose` and `dlerror` are its static companions. There is no host entry point for dynamic loading ([host-abi.md](../dev/host-abi.md)).
+- System mode has the opposite design: LLVM generates a native bridge per signature at compile time, which ties the image to Linux x86-64 and needs the native library on the compiler host ([05-system-abi.md](05-system-abi.md)).
+- The spike ([evidence](../evidence/2026-11-03-native-extension-spike.md)) built a proxy for EGL and GL from the Khronos registries with no compiler or runtime change: a plain GLES program and ANGLE's unmodified GL backend render through the host's driver from one portable image on Linux x64 (Mesa, JIT and NativeAOT), Windows x64 (ANGLE over Direct3D 11) and macOS ARM64 (ANGLE over Metal), with identical pixels, callbacks from the driver into portable code, and about 1 ns of overhead per call.
+
+## Design
+
+### Terms
+
+- **Extension**: a named, versioned package `sysroot/dotnet64-v2/ext/<name>/` with a manifest, neutral headers under `include/`, and the extension assembly `lib/LlvmNet.Ext.<Name>.dll`. Example: `gles` (EGL and OpenGL ES), `vulkan`.
+- **Host library**: the native library the extension stands for, under the names the manifest lists per operating system (`libEGL.so.1`, `libEGL.dll`, `libEGL.dylib`). It is never part of the image; it is the host's, the application's, or absent.
+- **Stub**: the `CExport` method for one entry point. **Reverse thunk**: the native-callable entry for a portable callback. **Registry**: the runtime's table of extension assemblies that serve `dlopen` names.
+
+### Architecture
+
+```
+portable program (bitcode, one image)           extension headers: <EGL/egl.h>, <GLES3/gl3.h> (neutral: pointer-sized native handles)
+   | direct calls: eglInitialize(...)               | dlopen("libEGL.so.1"), dlsym(h, "eglGetProcAddress"), calls through the pointers
+   v                                                v
+extension assembly LlvmNet.Ext.Gles.dll (managed, platform-neutral, generated from egl.xml and gl.xml)
+   stubs: [CExport] eglInitialize(nint, nint, nint) -> bind "eglInitialize" once -> calli unmanaged <nint, nint, nint, uint>
+   table: name -> managed function pointer of the stub (what dlsym and eglGetProcAddress return)
+   reverse thunks: [UnmanagedCallersOnly] for the callback types the manifest declares
+   loader: per-OS library names, NativeLibrary.TryLoad, availability
+   |
+   v
+host library: Mesa libEGL.so.1 / ANGLE libEGL.dll / ANGLE libEGL.dylib / none (availability says so)
+
+LlvmNet.Runtime: __llvmnet_dlopen/__llvmnet_dlsym/__llvmnet_dlclose/__llvmnet_dlerror host entry points over the registry
+                 of extension assemblies the image registered at start
+```
+
+### What crosses the boundary
+
+The rules are those of a C ABI boundary, applied by the CLR at run time, which is what makes one proxy serve every host:
+
+- **Scalars** are passed with their exact C types on the native side (`byte`, `short`, `uint`, `long`, `nint`, `float`, `double`), so narrow values are extended as each host's convention requires (AAPCS64 and Win64 differ from SysV here), while the stub's own signature is llvmnet's CIL mapping of the prototype.
+- **Pointers** are addresses in process memory: buffers, strings and structures are read and written in place, with no copying. The data layout of what they point to is the one both sides compiled: `dotnet64-v2` is LP64 x86-64 layout, and the APIs this workstream targets use fixed-width and pointer-sized types only (the Khronos `khronos_*` types), so the layout is the same on every 64-bit host. `long` and `long double` are not allowed in an extension's prototypes or structures (the generator rejects them); `EGLNativeDisplayType` and the other native handle types are pointer-sized integers in the neutral headers, as ANGLE's Ozone and Apple's `eglplatform.h` define them.
+- **Function pointers into the extension** (`dlsym`, `eglGetProcAddress`, `vkGetInstanceProcAddr`) are managed pointers of stubs, which portable code calls with `calli` like any translated function, with the same signature rules as [calling-convention.md](../dev/calling-convention.md#indirect-calls). The table holds every entry point of the API, not only those the program names, and a lookup returns null exactly when the host library lacks the function, so extension and version checks behave as natively.
+- **Function pointers out of the extension** (callbacks) are converted to reverse thunks for the callback types the manifest declares, as parameters or as fields of named structures (Vulkan's `pfnUserCallback`, `VkAllocationCallbacks`). A callback type the manifest does not declare makes the stub fail with a message. A thunk calls the portable function on the thread the native library used; threads the native library created have no musl thread state until NX-08.
+- **Structures by value** become typed CLR structures with sequential layout, so the CLR classifies them per host convention (SysV, Win64, AAPCS64) from the field types; llvmnet's own byte-container aggregates are reinterpreted, not copied. Structures with bit-fields, `long double` or vectors are rejected (NX-07). EGL, GL and Vulkan have none.
+- **Variadic** entry points are not proxied (the software `va_list` of the portable ABI is not a native one); the generator rejects them.
+- **C++** interfaces are not proxied; an extension is a C API.
+- **Errors**: the host library's `errno` is not the portable program's; an API that reports errors through `errno` (POSIX libraries) needs a manifest rule, which the first extensions do not need.
+
+### Generation
+
+`scripts/ext-gen.py` (or a C# tool once NX-09 needs libclang) takes a manifest and writes the extension:
+
+- **Inputs**: the manifest (`name`, `version`, the registry or headers, APIs and extensions to include, per-OS host library names, the C library names the extension answers for (`-lEGL`, `-lGLESv2`), callback types to thunk and how, entry points with default implementations, non-blocking entry points), and a Khronos registry XML (`gl.xml`, `egl.xml`, `vk.xml`, pinned in `scripts/sources.lock`) or, with NX-09, C headers parsed with libclang.
+- **Outputs**: `Generated.cs` (stubs, the table, thunks), `Loader.cs` from a template (library names, binding, availability, the `dlopen` registration), the project file, and the neutral headers (the registry's generated headers plus the extension's platform header). The assembly records `llvmnet.abi`, `llvmnet.version`, `llvmnet.extension = <name>/<version>` and the registry version.
+- **Checks**: the stub signatures are compared with what llvmnet gives the same prototypes, by compiling the extension's headers with `llvmnet -c` and reading the declarations back (`LlvmNet.Checks`), so a type-mapping difference is a build error of the extension, not a link error of a user. Output is deterministic.
+
+### Loading, packaging and the driver
+
+- **Installation**: an extension is a directory under `sysroot/dotnet64-v2/ext/`, shipped in the toolchain package and the dotnet tool, or installed by a user (`llvmnet --install-extension <dir>`, NX-13). Its headers are on the portable include path, as a `-dev` package's would be; `-l<name>` for a name the manifest lists adds the extension; `--extension=<name>` adds it explicitly; `llvmnet --list-extensions` prints what is installed.
+- **Linking**: the driver passes the extension assembly as a CIL reference; the image's initializer registers the extension with the runtime's `dlopen` registry; the assembly is copied next to the image and into the NativeAOT project as managed references are today; the image's metadata lists its extensions, which `LlvmNet.Checks inspect` prints.
+- **Run time**: the host library is found through .NET's `NativeLibrary` with the manifest's names for the running OS, searched in the image's directory first (an application that bundles ANGLE ships `libEGL.dll` beside the image), then the loader's default path, then `LLVMNET_EXT_<NAME>_DIR`. Loading is lazy: a program that never calls the extension never loads the library.
+- **Availability**: `<llvmnet/ext.h>` declares `int llvmnet_ext_available(const char *name)` (loads the host library and reports whether every entry point the manifest marks as required is present) and `const char *llvmnet_ext_library(const char *name)` (the path loaded, or the names tried). A `dlopen` of a proxied name fails with the same information in `dlerror`. A direct call into an extension whose host library is absent fails fast with one `llvmnet:` line naming the entry point, the library and the names tried, unless the manifest gives the entry point a default implementation (`eglGetDisplay` returning `EGL_NO_DISPLAY`, `eglGetError` returning `EGL_NOT_INITIALIZED`), which is how a program probes for GL without the availability call.
+- **Versioning**: extensions are versioned apart from `dotnet64-v2`; the frozen header set ([abi.md](../user/abi.md)) is untouched, because `ext/` is outside it. The host entry points for `dlopen` are compatible additions to the host interface. An extension assembly checks `llvmnet.version` compatibility as managed libraries do.
+- **System mode** needs no extension: the driver maps `--extension=<name>` to `--system-library` with the manifest's Linux names, so one build-system configuration serves both modes.
+- **Security**: a host library runs as native code with the process's rights, like the program itself; [SECURITY.md](../../SECURITY.md) says so, and an extension loads only the names its manifest lists.
+
+### Candidate extensions
+
+| Extension | Source | Host libraries | Notes |
+| --- | --- | --- | --- |
+| `gles` | `egl.xml`, `gl.xml` (EGL 1.5, GLES 2.0 to 3.2, desktop GL, registered extensions) | Mesa, vendor drivers, ANGLE (Chromium, Electron, Firefox ship it on Windows and macOS) | The spike. Callback: `GLDEBUGPROC`. Windowing is the host application's: it passes a native window handle (`EGLNativeWindowType`) to portable code, as AvaloniaStatic would from Avalonia |
+| `vulkan` | `vk.xml` | the Vulkan loader (`libvulkan.so.1`, `vulkan-1.dll`, MoltenVK's `libvulkan.dylib`) | Entry points through `vkGetInstanceProcAddr`/`vkGetDeviceProcAddr`; callbacks in structures and `pNext` chains (NX-10) |
+| `sdl3` or `glfw` | C headers (NX-09) | SDL3, GLFW | Only where the portable program must own the window; a few structures by value (NX-07) |
+| Chromium-scale (fontconfig, X11, Wayland, dbus, GTK, ...) | | | Out of scope: the mechanism scales, but the number of APIs does not; such projects run in system mode or with a host application that provides the platform |
+
+## Items
+
+- [ ] **NX-01** (S, P1) Record [ADR-15](decisions.md#adr-15-native-extensions-of-the-portable-abi) with the spike evidence, the milestone placement and the names (`ext/`, `--extension`); done when the owner has accepted or amended it.
+- [ ] **NX-02** (M, P1) Dynamic loading in the portable runtime: `ports/musl/src/ldso/llvmnet/` implements `dlopen`, `dlsym`, `dlclose`, `dlerror` and `dladdr` over new host entry points `__llvmnet_dlopen`, `__llvmnet_dlsym`, `__llvmnet_dlclose`, `__llvmnet_dlerror` (scalar signatures, rows in [host-abi.md](../dev/host-abi.md)); `LlvmNet.Runtime` keeps a registry of extension assemblies (name, the sonames served, a resolver); `dlopen` of a name no extension serves fails with musl's message plus the name, `dlopen(NULL)` returns a handle whose `dlsym` finds the program's own `CExport` symbols (what `-rdynamic` users expect) or stays unsupported, decided here; `RTLD_*` flags accepted. Done when `tests/host.sh` covers the errors and a test registers a synthetic extension and calls through `dlsym`.
+- [ ] **NX-03** (M, P1) Extension packages and the driver: the `ext/<name>/` layout and `manifest.json`; `--extension=<name>`, `-l<name>` mapping, headers on the include path, `--list-extensions`; the assembly linked as a CIL reference, registered in the image initializer, copied with the output and into the NativeAOT project; image metadata and `LlvmNet.Checks inspect`; system mode maps the option to `--system-library`. Done when a synthetic extension builds, links, runs under the JIT and NativeAOT and shows up in `inspect`, with `tests/driver.sh` cases for a missing extension and a name clash with the sysroot.
+- [ ] **NX-04** (L, P1) The generator for Khronos registries: the manifest schema; stubs, table, loader, thunks for declared callback parameters, default implementations, availability; rejection of variadic and `long`/`long double` prototypes; the signature check against `llvmnet -c`; deterministic output; `tests/ext-gen.sh` builds a small synthetic registry into an extension and runs a program against a test library built natively for the host (the one place a test compiles native code). Done when the `gles` extension (NX-05) is produced by it without hand edits.
+- [ ] **NX-05** (M, P1) The `gles` extension: EGL 1.5, GLES 2.0 to 3.2 and desktop GL with the registered extensions from `egl.xml`/`gl.xml` pinned in `sources.lock`; neutral `khrplatform.h`/`eglplatform.h` (pointer-sized native handles); host names for Mesa and ANGLE; `GLDEBUGPROC` thunks; default implementations for `eglGetDisplay`, `eglGetPlatformDisplay`, `eglGetError`, `eglQueryString`. Tests: the spike's `direct.c` against Mesa on Linux in `tests/ext-gles.sh` (a GPU or `llvmpipe`, `LIBGL_ALWAYS_SOFTWARE=1`), the same program in the `tests/xp/` bundle on Windows and macOS against a pinned ANGLE build or the hosts' Electron copies (the choice is [proposed for the owner](decisions.md#proposed-for-the-owner-2026-11-03-native-extensions)), and ANGLE's smoke program as a weekly job with the WG-07 Skia and ANGLE builds. Done when all three hosts reproduce the native pixels under the JIT and as NativeAOT executables.
+- [ ] **NX-06** (S, P1) Documentation: `docs/user/extensions.md` (using an extension, availability, shipping a host library with an application, writing one), the rows in [modes.md](../user/modes.md), [linking.md](../user/linking.md), [deployment.md](../user/deployment.md) and [limitations.md](../user/limitations.md), and the native-code note in SECURITY.md.
+- [ ] **NX-07** (M, P2) Structures by value: typed CLR structures generated from the registry or headers, a layout check against the LLVM data layout, rejection of bit-fields, `long double` and vectors; a synthetic extension exercising `{float, float}`, `{int, double}`, 17-byte and 32-byte structures as parameters and results, run on all four hosts through the `xp` bundle against a native test library built on each.
+- [ ] **NX-08** (M, P2) Callbacks on threads the host library created: a reverse thunk on a thread without musl state attaches one (a thread control block as `__init_tp` builds for the main thread, TLS, `errno`, a `pthread_self`), and detaches it when the .NET thread ends; thunks for one callback type serve many registrations (a pool, or one thunk per registration keyed by the user pointer). Test with a native test library that calls back from its own thread.
+- [ ] **NX-09** (L, P2) C-header input for the generator through libclang (ClangSharp or `clang -ast-dump=json`), with include and exclude lists in the manifest, for APIs without a registry; validate on SDL3 or GLFW.
+- [ ] **NX-10** (L, P2) The `vulkan` extension from `vk.xml`: `vkGetInstanceProcAddr`/`vkGetDeviceProcAddr` returning stubs, platform-free `vulkan.h` (surface extensions through handles the host application passes), callbacks in `VkAllocationCallbacks` and `VkDebugUtilsMessengerCreateInfoEXT` including `pNext` chains; test headless with Mesa's `lavapipe` (a clear and a read-back, or a compute shader) on Linux, MoltenVK and the Windows loader through the `xp` bundle where available.
+- [ ] **NX-11** (S, P2) Performance: `SuppressGCTransition` for entry points the manifest marks non-blocking, measured on the `glGetError` loop; the first-call binding cost; whether direct calls should bind at image start.
+- [ ] **NX-12** (M, P2) Installation and distribution: `--install-extension <dir>`, extensions in the toolchain package and the dotnet tool, the versioning policy ([versioning.md](../dev/versioning.md)), and a template repository for third-party extensions.
+- [ ] **NX-13** (M, P2) The AvaloniaStatic scenario end to end: Skia's GL backend (`GrGLInterface` through `eglGetProcAddress`) and ANGLE in portable mode rendering into a window the host application owns, on Linux, Windows and macOS; the integration test of the whole mechanism, kept out of CI unless the runners have a display.
+
+## Exit criteria for M10
+
+NX-02 through NX-06 are done: a portable program using the `gles` extension renders the native pixels on Linux x64, Windows x64 and macOS ARM64 under the JIT and as NativeAOT executables in CI, a program built without the extension is byte-identical to today's, and the ABI freeze test passes unchanged.

@@ -17,6 +17,10 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-11-03, native extensions of the portable ABI)
+
+The owner asked how a portable program could reference standardized native libraries (EGL and OpenGL ES, Vulkan) through clear FFI boundaries without depending on a host ABI, so that the shared code stays neutral and runs on Windows and macOS, where no system mode exists. The design is a new workstream, [11-native-extensions.md](11-native-extensions.md) (prefix NX, proposed milestone M10 after 1.0), and [ADR-15](decisions.md#adr-15-native-extensions-of-the-portable-abi): generated managed proxy assemblies per API, platform-neutral, loading the host's library at run time, with `dlopen` host entry points in the runtime and extension packages under the sysroot. A feasibility spike ([evidence](../evidence/2026-11-03-native-extension-spike.md), `artifacts/native-ext/`) built such a proxy for EGL and GL from the Khronos registries without changing the compiler or runtime: a plain GLES program and ANGLE's unmodified GL backend render the native pixels from one portable image on Linux x64 (Mesa, JIT and NativeAOT), Windows x64 (ANGLE over Direct3D 11) and macOS ARM64 (ANGLE over Metal), driver callbacks reach portable code, and a call costs about 1 ns more than natively. The decisions (ADR-15, the milestone, the first extensions, how the other hosts' tests obtain ANGLE, the names) are [proposed for the owner](decisions.md#proposed-for-the-owner-2026-11-03-native-extensions).
+
 ## Progress (2026-11-02, LLVM built with llvmnet)
 
 An experiment outside the repository (`artifacts/selfhost/`, like the library survey) built LLVM, Clang and Flang 22.1.8 with llvmnet in portable mode: every LLVM tool llvmnet runs (`clang-22`, `flang-22`, `opt-22`, `llvm-ar-22`, `llvm-nm-22`) became a .NET program, under the JIT and as a NativeAOT executable. Replaying the build's 3,542 compile commands with the built `clang-22` gave the same IR as native Clang, and llvmnet's sysroots rebuilt by those tools match master's.
@@ -217,6 +221,7 @@ Non-goals for 1.0: native C++ ABI interoperability, general SIMD lowering, socke
 | [M7](#m7-toolchain-and-distribution) Toolchain and distribution | Driver table, packaging, docs, system-ABI hardening | M3 | 4 to 6 |
 | [M8](#m8-performance) Performance | Benchmarks, atomics, allocas, method splitting, AOT policy | M3 | 4 to 8 |
 | [M9](#m9-workload-gates-and-10) Workload gates and 1.0 | Full suites on the release candidate | all | 4 to 6 |
+| [M10](#m10-native-extensions-proposed) Native extensions (proposed) | Proxied host libraries for portable programs: `dlopen` in the runtime, extension packages, the generator, the `gles` extension | M6, M7 | 6 to 10 |
 
 The effort column is a rough order of magnitude for one experienced engineer and will be wrong in detail; it exists so milestones can be compared and so the total (roughly 45 to 65 engineer-weeks) is visible. M6, M7 and M8 can run in parallel with M4 and M5 once M3 is done.
 
@@ -236,6 +241,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M7 | 0.7 | exit items done; signed packages from a tag need the repository on GitHub (FD-19) | 0 | 2026-10-31 |
 | M8 | 0.7 | exit items done (PF-01, PF-02, benchmark table published); the first GitHub run of the nightly benchmark job needs FD-19. P1: PF-03, 04, 05, 08, 10, 11, 13, 14, 16 done, PF-06, PF-07 and PF-15 in progress | 0 | 2026-11-02 |
 | M9 | 1.0-rc | in progress: WG-02, 03, 04, 05, 09 done, WG-01 at 99.1% portable and 98.8% system (target 99%), WG-06 not run (FD-21); RL-02, 05, 08, 09 done; two nightlies on a release candidate need GitHub (FD-19) | 2 (WG-01, WG-06) | 2026-11-01 |
+| M10 | after 1.0 | proposed (ADR-15, NX); spike done, nothing implemented | 0 | 2026-11-03 |
 
 ### M0: Foundations
 
@@ -277,6 +283,10 @@ Exit: PF-01 and PF-02 done; nightly benchmark table published; no numeric target
 
 Exit: WG-01 through WG-06 at threshold on the release candidate for two consecutive nightlies; every RL item ticked. Details: [09-workload-gates.md](09-workload-gates.md), [10-release.md](10-release.md).
 
+### M10: Native extensions (proposed)
+
+Exit: NX-02 through NX-06 done; a portable program using the `gles` extension renders the native pixels on Linux x64, Windows x64 and macOS ARM64 under the JIT and as NativeAOT executables in CI; programs without extensions are byte-identical to before; the ABI freeze test passes unchanged. Proposed after 1.0 ([ADR-15](decisions.md#adr-15-native-extensions-of-the-portable-abi)). Details: [11-native-extensions.md](11-native-extensions.md).
+
 ## Workstreams
 
 | Prefix | File | Scope |
@@ -292,6 +302,7 @@ Exit: WG-01 through WG-06 at threshold on the release candidate for two consecut
 | PF | [08-performance.md](08-performance.md) | Benchmarks and known hot spots |
 | WG | [09-workload-gates.md](09-workload-gates.md) | Conformance suites, ffmpeg FATE, SPEC |
 | RL | [10-release.md](10-release.md) | Pre-release train and the 1.0 checklist |
+| NX | [11-native-extensions.md](11-native-extensions.md) | Proxied host libraries (EGL/GLES, Vulkan) for portable programs; proposed, M10 |
 
 ## Risks
 

@@ -18,6 +18,7 @@ Each decision is recorded in the style of an architecture decision record: conte
 | ADR-12 | Debug information in 1.0 | M7 | Accepted 2026-10-31 (owner) |
 | ADR-13 | License | M0 | Accepted 2026-10-30 (owner) |
 | ADR-14 | Linux identity of the portable target | M3 | Accepted 2026-10-31 (owner, option 3); parity exclusions extended 2026-10-31 |
+| ADR-15 | Native extensions of the portable ABI | M10 (proposed) | Proposed 2026-11-03 (spike evidence) |
 
 ## ADR-01: Portable C library strategy
 
@@ -172,6 +173,32 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Owner's decision on this evidence (2026-10-31).** Option 3 stays. A program whose platform detection needs `__linux__` builds with a documented per-program flag (for example `-D__linux__` for xalancbmk, LLVM, gem5 and marian in `config/spec/llvmnet.cfg`) rather than a toolchain-wide identity; the flag makes that program, not llvmnet, responsible for the Linux-only interfaces it then uses (LC-31). This also defines SPEC portable parity for the M3, M4 and M5 exits: every entry passes in portable mode where it passes in system mode, with documented per-benchmark portability flags allowed, except listed exclusions. The exclusions are programs that need `fork` or `vfork`, which stay `ENOSYS` permanently because .NET cannot duplicate a process (perlbench rate and speed, cppcheck), and portable ABI restrictions (PALM's four-argument `open`).
 
+## ADR-15: Native extensions of the portable ABI
+
+**Context.** Portable programs (`dotnet64-v2`) are one image for every host and contain no native code, so they cannot link native libraries; system mode can, but only on Linux x86-64, and it ties the image to that host. Some libraries cannot be recompiled into portable bitcode because they are the operating system's or the GPU vendor's: EGL and OpenGL ES, Vulkan, windowing. The library survey ([2026-11-02](../evidence/2026-11-02-library-survey.md)) showed ANGLE running in portable mode up to exactly this point ("Could not dlopen native EGL"), and the owner asked (2026-11-03) for a well-defined way to reference such standardized libraries with clear FFI boundaries without making the whole application depend on a host ABI, especially on Windows and macOS, where no system mode exists: shared neutral code, plus a short list of proxied interfaces, packaged per platform, with runtime detection. The workstream is [11-native-extensions.md](11-native-extensions.md).
+
+**Options.**
+
+1. *Status quo.* Portable programs call native libraries only through a managed application that wraps them by hand; GPU work needs system mode and Linux. Rejected: it leaves Windows and macOS without a path, and every application repeats the wrapping.
+2. *Per-host native bridges, as system mode does.* LLVM generates a bridge library per signature at build time for each target (RID); the image loads the bridge for the host it runs on. Rejected as the primary mechanism: it needs a native toolchain and the host library for every target at build time, produces one bridge per RID to ship and test, and reintroduces the per-target dependency the portable ABI exists to remove. It remains the right answer for ABIs the CLR cannot express (variadic natives, `long double`), which the target APIs do not use.
+3. *A generic foreign-function interpreter* (libffi-style call descriptors in the runtime). Rejected: it needs native code per host anyway, interprets every call, and checks nothing.
+4. *Generated managed proxies, one assembly per API* (recommended). A generator reads the API's registry (Khronos XML) or headers and writes an assembly of `CExport` stubs with llvmnet's CIL signatures, each calling the native entry point through an unmanaged function pointer with the exact C types; a table of managed stub pointers serves `dlsym` and `eglGetProcAddress`; `[UnmanagedCallersOnly]` thunks serve declared callback types; the loader finds the host library by per-OS names at run time. The CLR applies the host's calling convention, so the assembly is platform-neutral and the image stays one file for every host; `--cil-reference`, `CExport` and the NativeAOT project already carry such assemblies. The runtime gains `dlopen` entry points over a registry of extensions. Extensions live in `sysroot/dotnet64-v2/ext/<name>/` with neutral headers and a manifest, versioned apart from the frozen v2 header set.
+5. *Proxies emitted by the compiler from the program's own prototypes.* For a direct call to an undefined function listed by an extension, the compiler could emit the unmanaged call from the LLVM declaration (`zeroext`/`signext` recover the narrow types), with no generated assembly. Not chosen alone: `dlsym`-style loaders need the table of every entry point and callback types need declarations, both of which only the registry or headers provide. Possible later as an optimization of direct calls (NX-11).
+
+**Measurement (2026-11-03).** The spike ([evidence](../evidence/2026-11-03-native-extension-spike.md)) built option 4 for EGL and GL by hand from the Khronos registries (3,458 stubs, an 817 KB assembly) with no compiler or runtime change. A plain GLES 2 program and ANGLE's unmodified GL backend rendered the native pixels from one portable image on Linux x64 (Mesa, JIT and NativeAOT), Windows x64 (ANGLE over Direct3D 11) and macOS ARM64 (ANGLE over Metal); `GL_KHR_debug` callbacks from the drivers reached portable code on all three; `glGetError` costs 8.6 to 8.9 ns under the JIT and 7.4 to 8.4 ns as NativeAOT against 7.3 to 7.6 ns native, about 1 ns per call for the transition.
+
+**Recommendation.** Option 4, with the extension package, driver and runtime support of NX-02 to NX-06, `gles` as the first extension and `vulkan` as the second, and option 2 kept for system mode only. Structures by value (typed CLR structures, NX-07) and callbacks on native threads (NX-08) follow; variadic and C++ interfaces stay outside the mechanism.
+
+**Consequences.**
+
+- The portable ABI contract gains compatible additions only: host entry points for `dlopen` and friends, and an `ext/` directory outside the frozen header set. A program that uses no extension is unchanged, byte for byte.
+- A portable image that uses an extension is still one image for every host, with a conditional dependency on a host library that may be absent; the documentation calls this a *portable program with native extensions*, and availability is a program decision at run time, not a build decision.
+- The managed surface stays within ADR-09: scalar and pointer `CExport` signatures; typed structures are new and unstable until NX-07.
+- Native code runs with the process's rights, as the program does; SECURITY.md says so. An extension loads only the names its manifest lists.
+- The compiler and runtime do not grow a per-API feature: each extension is a generated package, and the list of extensions is a packaging decision.
+
+**Status.** Proposed 2026-11-03.
+
 ## Proposed for the owner (2026-10-31)
 
 Questions that came up while closing M7 and that are the owner's to decide; nothing below has been acted on.
@@ -211,3 +238,14 @@ Questions from the [library survey](../evidence/2026-11-02-library-survey.md), w
 - **Host macros (ADR-14).** The survey's projects needed a setting wherever they choose platform code by host macros: Skia `-DSK_BUILD_FOR_UNIX` (without it Skia builds for macOS), ANGLE, libdrm and googletest `-D__linux__`, brotli `-DBROTLI_BUILD_64_BIT` (without it brotli takes its 32-bit paths, 16% slower), FreeType and libpng `-DUNIX=ON`. Defining `__unix__` alone would have fixed Skia, not the others. Proposed: keep ADR-14 as accepted, remove the x86 macros that are still predefined (TC-22), and list these settings in [troubleshooting.md](../user/troubleshooting.md).
 - **x86 feature macros in system mode (SA-12).** System mode is the native x86-64 ABI, for which Clang predefines `__SSE2__` and related macros, but translated code cannot execute x86 intrinsics, so libraries that test the macros fail at the final link. Options: (a) translate the common SSE2 intrinsics to `Vector128` (large, comparable to PF-09); (b) undefine the SIMD feature macros in system mode as portable mode does, so libraries take their generic paths (the data layout does not change; code that requires SSE then fails to compile, as in portable mode); (c) keep the macros and diagnose an intrinsic at compile time. Proposed: (b), with the diagnostic of (c) for code that includes the intrinsic headers regardless.
 - **What WG-07 runs.** The plan lists zlib, bzip2, xz, sqlite, lua, zstd, libpng, libjpeg-turbo, expat and pcre2. The survey's suites that compare with native bit for bit, and that found the defects above, are libjpeg-turbo's and libpng's ctest, expat's runtests, libxml2's runtest, Little CMS's testcms, HarfBuzz's meson and shaping suites, the Opus and dav1d conformance decodes and brotli's streams. Proposed: WG-07 runs the plan's list plus these, from sources pinned in `scripts/sources.lock`, in the nightly workload job, and Skia's DM and ANGLE's unit tests weekly, because each of their links takes minutes (TC-20).
+
+## Proposed for the owner (2026-11-03, native extensions)
+
+Questions from the [native extension spike](../evidence/2026-11-03-native-extension-spike.md) and the design in [11-native-extensions.md](11-native-extensions.md).
+
+- **ADR-15.** Accept generated managed proxies (option 4) as the mechanism for native libraries in portable mode, with system mode's bridges unchanged.
+- **Milestone.** The workstream is proposed as M10 after 1.0, since 1.0's exit criteria do not need it. NX-02 (the `dlopen` host entry points) and NX-03 (the package layout and `--extension`) are compatible additions to `dotnet64-v2` and could land before the freeze so that 1.0 images can use extensions published later; the alternative is to wait for 1.1, when the first extension ships with the generator. Proposed: after 1.0, unless the owner's own applications (AvaloniaStatic) need it sooner.
+- **First extensions and their priorities.** `gles` (EGL, GLES, desktop GL) as P1 and `vulkan` as P2; windowing libraries (SDL3, GLFW) only through the C-header generator later, because the intended applications own their windows in managed code.
+- **Test dependencies on other hosts.** Windows and macOS have no Mesa; the spike used the ANGLE libraries that Electron ships with Visual Studio Code. Options: (a) the `xp` jobs depend on an ANGLE present on the runner, found through `LLVMNET_EXT_GLES_DIR`, and skip otherwise; (b) llvmnet builds ANGLE natively for the test hosts from a pinned source (the AvaloniaStatic package already does), which is heavy; (c) a pinned prebuilt ANGLE fetched by hash. Proposed: (a) now, (c) when the extension ships.
+- **Names.** `ext/` under the sysroot, `--extension=<name>`, `-l<name>` mapped through the manifest, `LlvmNet.Ext.<Name>.dll`, `<llvmnet/ext.h>` with `llvmnet_ext_available`; and `dlopen(NULL)` left unsupported in NX-02 unless a use case appears.
+
