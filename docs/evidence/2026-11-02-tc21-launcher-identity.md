@@ -1,6 +1,6 @@
 # Evidence: TC-21 argv[0] and /proc/self/exe of launcher programs (2026-11-02)
 
-Build host: Linux x86-64 (Debian 13, kernel 6.12), AMD Ryzen AI MAX+ 395 (16 cores, 32 threads), 124 GB RAM, .NET SDK 10.0.403 with runtime 10.0.14, LLVM/Clang 22.1.8, starting from commit `0f4f108`. Also run on macOS 27.2 ARM64 (`mainmac`, .NET runtime 10.0.14, `/bin/sh` is GNU bash 3.2.57) and Windows 11 x64 (`fluorite`, .NET runtime 10.0.10, Git for Windows bash 5.3.15), with the launcher and payload built on Linux.
+Build host: Linux x86-64 (Debian 13, kernel 6.12), AMD Ryzen AI MAX+ 395 (16 cores, 32 threads), 124 GB RAM, .NET SDK 10.0.403 with runtime 10.0.14, LLVM/Clang 22.1.8, starting from commit `0f4f108`; the change is `1d979cb`. Also run on macOS 27.2 ARM64 (`mainmac`, .NET runtime 10.0.14, `/bin/sh` is GNU bash 3.2.57) and Windows 11 x64 (`fluorite`, .NET runtime 10.0.10, Git for Windows bash 5.3.15), with the launcher and payload built on Linux.
 
 ## The problem
 
