@@ -19,6 +19,7 @@ Each decision is recorded in the style of an architecture decision record: conte
 | ADR-13 | License | M0 | Accepted 2026-10-30 (owner) |
 | ADR-14 | Linux identity of the portable target | M3 | Accepted 2026-10-31 (owner, option 3); parity exclusions extended 2026-10-31 |
 | ADR-15 | Native extensions of the portable ABI | M10 (proposed) | Proposed 2026-11-03 (spike evidence) |
+| ADR-16 | SIMD levels: vector lowering, intrinsic helpers, native kernel packages | M11 (proposed) | Proposed 2026-11-03 (survey evidence) |
 
 ## ADR-01: Portable C library strategy
 
@@ -199,6 +200,33 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Status.** Proposed 2026-11-03.
 
+## ADR-16: SIMD levels
+
+**Context.** ADR-10 keeps scalarization and the opt-in `wasm_simd128.h` path for 1.0 and defers "general lowering of `<N x T>` to `Vector128`/`Vector256`" (BE-32, PF-09) to after 1.0 without a design. The library survey ([2026-11-02](../evidence/2026-11-02-library-survey.md)) put numbers on the gap: the shipped Opus, dav1d and libjxl are 2 to 17 times faster than llvmnet's scalar builds, Skia's 8-lane kernels run at 30 to 80 times native once scalarized, and system mode fails at the link on the SSE paths that `__SSE2__` selects (SA-12). The owner asked (2026-11-03) for a multi-level plan covering LLVM's vector IR and autovectorization, the C and C++ intrinsics and the inline and separate assembly of the popular ecosystems, in both runtime modes, keeping today's single-ISA-per-compile libraries working, with extended options and APIs for runtime detection, bundled per-architecture assembly loaded by the JIT or linked statically by NativeAOT, and a C fallback; emscripten's SIMD over WebAssembly as the reference. The survey of what LLVM, Clang and .NET provide is in [2026-11-03-simd-survey.md](../evidence/2026-11-03-simd-survey.md); the workstream is [12-simd.md](12-simd.md).
+
+**Options.**
+
+1. *Status quo.* Scalarization, the SIMD128 header, rejection of target intrinsics and assembly. Rejected: the survey's 10 to 80 times are the difference between usable and not for codecs and 2D graphics, and the ecosystem's SIMD cannot be configured away everywhere.
+2. *Platform-neutral vector lowering only* (Levels 1 and 2 with `Vector128` compositions and no ISA-specific paths). Simplest and fully portable, but NativeAOT's default instruction set leaves the opportunistic SSSE3 to SSE4.2 instructions unused (a `Vector128.Shuffle` with run-time indices costs 13 ns against 4 ns through an explicit `Ssse3.IsSupported` branch on the same CPU), and the x86 operations without a neutral equivalent (`psadbw`, `pmaddwd`, `pmaddubsw`, `phminposuw`, `pshufb`) stay 3 to 10 instructions. Kept as the fallback inside option 3.
+3. *Vector lowering plus intrinsic helpers with explicit `IsSupported` dispatch* (recommended for Levels 1 and 2). The image stays one platform-neutral file; the JIT folds the checks, ILC compiles them to constants or runtime checks, and every host gets its own instruction where one exists and the exact composition elsewhere. The helpers are what emscripten's SSE and NEON compatibility headers are for WebAssembly, moved from the header into the runtime so that one table serves both the C intrinsics and the `llvm.x86.*` calls the bitcode already contains.
+4. *Native kernel packages* (recommended for assembly, Level 3): the project's build assembles its kernels per runtime identifier; llvmnet generates `DllImport` stubs from the bitcode's declarations, loads the running host's library under the JIT and links one identifier's archive statically under NativeAOT, and provides the CPU detection the library's own dispatch needs (`__cpu_model`, CPUID and XGETBV emulation over `X86Base.CpuId`, `getauxval` bits on ARM64) so that the C fallback is selected exactly where no kernel can run. Translating assembly to CIL is rejected (a lifter, and the libraries' `checkasm` would not trust it); running a kernel through the system-mode argument-record bridge is rejected for leaf kernels because a direct P/Invoke is cheaper and works in both modes.
+5. *Compiler-generated native kernels* (Level 4, experimental): leaf functions compiled by LLVM's backends into the system-mode sidecar, later into per-identifier packages for portable images with the CIL translation as fallback. Not recommended before a spike (SV-17): it reintroduces native code into portable images and needs a data-layout compatibility check per function.
+6. *Make `Vector<T>`-style variable width or scalable vectors the model.* Rejected: `Vector<T>`'s count is fixed at AOT time, SVE is not usable at run time in .NET 10, and LLVM's scalable vectors do not occur for the portable target.
+
+**Measurement (2026-11-03).** The survey evidence file records: the census of the corpus (ffmpeg 185 nasm and 66 AArch64 `.S` files, dav1d 47 and 43, libjpeg-turbo 91 nasm files; intrinsics and vector extensions in libjxl, Opus, libwebp, Skia, brotli, zlib); that Clang lowers 53 of 99 common SSE2 to AVX2 intrinsics to generic IR and 46 to `llvm.x86.*`; LLVM 22's counts (328 x86 intrinsics from SSE to AVX2 and FMA, 723 AVX-512, 209 NEON, 25 WebAssembly SIMD); .NET 10's ISA classes and the NativeAOT instruction-set behavior above; that `scalarizer<min-bits=128>` fragments wide arithmetic; and the timing of hand-written `Vector128`/`Vector256` loops against native scalar and vectorized code for seven kernels, the stand-in for what Level 1 would emit: 3.7 to 5x over today's scalar translation at 128 bits and 7 to 10x at 256 bits on element-wise and widening loops, 2.3 to 3.9x on float dot products, level with native SSE2 and AVX2 except on the `psadbw` and `pmaddwd` idioms (1.4 to 1.6x, closed by the x86 intrinsics behind `IsSupported`), while today's scalarized vectorization costs 1.2 to 2x.
+
+**Recommendation.** Options 3 and 4 as Levels 1 to 3 of [12-simd.md](12-simd.md), in that order, each with a measured exit; option 5 as a spike after Level 3. Autovectorization is a consumer of Level 1 and its default (ADR-11) is decided by measurement in SV-05, not here. The `--isa` option carries the single-ISA-per-compile baseline; multi-ISA bundles and NEON source compatibility are P2.
+
+**Consequences.**
+
+- The data ABI is unchanged at every level: `--isa` changes instructions, macros and vectorizer features only, and the ABI freeze test keeps checking the layouts. Objects of different ISA levels link together.
+- A program built without the new options is byte-identical to today's until SV-05 changes the vectorizer default, which is a separate owner decision.
+- Portable images stay one file for every host through Levels 1 and 2. Level 3 adds native libraries the project's build produced, per identifier, next to the image, and the program's C paths remain the fallback; Level 4 would make llvmnet itself a producer of native code and is decided separately.
+- `LlvmNet.Runtime` grows a helper table (a few hundred small methods) that must be exact to the instruction; the conformance test against the native instruction on x64 is part of the definition of done.
+- System mode's SSE macro question (SA-12 option (b)) stays the owner's; Level 2 makes option (c) real and removes the failure the survey found for the common intrinsics.
+
+**Status.** Proposed 2026-11-03.
+
 ## Proposed for the owner (2026-10-31)
 
 Questions that came up while closing M7 and that are the owner's to decide; nothing below has been acted on.
@@ -249,3 +277,15 @@ Questions from the [native extension spike](../evidence/2026-11-03-native-extens
 - **Test dependencies on other hosts.** Windows and macOS have no Mesa; the spike used the ANGLE libraries that Electron ships with Visual Studio Code. Options: (a) the `xp` jobs depend on an ANGLE present on the runner, found through `LLVMNET_EXT_GLES_DIR`, and skip otherwise; (b) llvmnet builds ANGLE natively for the test hosts from a pinned source (the AvaloniaStatic package already does), which is heavy; (c) a pinned prebuilt ANGLE fetched by hash. Proposed: (a) now, (c) when the extension ships.
 - **Names.** `ext/` under the sysroot, `--extension=<name>`, `-l<name>` mapped through the manifest, `LlvmNet.Ext.<Name>.dll`, `<llvmnet/ext.h>` with `llvmnet_ext_available`; and `dlopen(NULL)` left unsupported in NX-02 unless a use case appears.
 
+## Proposed for the owner (2026-11-03, SIMD)
+
+Questions from the [SIMD survey](../evidence/2026-11-03-simd-survey.md) and the design in [12-simd.md](12-simd.md).
+
+- **ADR-16.** Accept the levels: typed vector lowering (1), intrinsic helpers with explicit `IsSupported` dispatch (2), native kernel packages with compiler-generated stubs and the detection APIs (3), and a spike before any decision on compiler-generated native kernels (4).
+- **Milestone and order.** M11 after 1.0, Level 1 first (SV-02 to SV-07), then Level 2's SSE through SSE4.2 (SV-08) and Level 3 (SV-12, SV-13, SV-15), AVX2 and the P2 items after. Level 3 does not depend on Levels 1 and 2 and could be pulled forward if an application needs ffmpeg's or dav1d's assembly before general vector code; proposed: keep the order, because Level 1 also makes the C fallbacks of those libraries faster.
+- **Autovectorization default.** ADR-11's `-O1` scalar default stands until SV-05 measures the vectorized benchmark set (the kernel measurement bounds the gain at 4 to 10x on loops that vectorize, and shows a 1.2 to 2x loss while the IR is scalarized); the proposal then is either Clang's behavior (`-O2` and above vectorize) or an explicit `-fvectorize`. No change is proposed now.
+- **Option names.** `--isa=<level>` with `baseline`, `x86-64-v2`, `x86-64-v3`, `wasm-simd128` (alias `--simd128`), `neon`; `--vector-width=128|256`; `--native-kernels=<dir>`; `--report-simd`; the `llvmnet.isa` module flag and image metadata.
+- **Portable `-m` flags.** Keep rejecting `-m<...>` in portable mode and route the SIMD feature requests through `--isa`, so that a build cannot change the macros by accident; alternatively accept the x86 SIMD feature flags (`-msse4.2`, `-mavx2`, `-mfma`, `-march=x86-64-v2/v3`) as aliases of `--isa` for build systems that pass them. Proposed: the aliases, documented as having no ABI effect.
+- **SA-12 under Level 2.** The helpers make the predefined `__SSE2__` harmless for the common intrinsics in system mode (option (c)); whether to stop predefining the macros (option (b), recommended by the system-mode survey) is unchanged and still open.
+- **Native code in portable images.** Level 3 ships native libraries next to a portable image when a project opts in; the documentation would call such a program a *portable program with native kernels*, as ADR-15 calls the extension case. Level 4 would have llvmnet generate such libraries; proposed: decide after SV-17.
+- **Test hardware.** The Level 2 conformance test needs x64 runners with AVX2 (the build host has AVX-512) and ARM64 runners for the NEON paths; the `xp` hosts (`fluorite`, `mainmac`) cover Windows x64 and macOS ARM64 as for M6.
