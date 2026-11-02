@@ -24,6 +24,14 @@ internal sealed class CilCompiler(CompilerOptions options)
     private const int FieldsPerType = 32768;
     private readonly List<TypeBuilder> fieldHolders = [];
     private int fieldsInHolder;
+    // The CLR also refuses a type with more than 65,535 methods (Clang has about 146,000 functions), so internal
+    // methods beyond this many (translated functions, thread-local getters, system mode's host wrappers and callback
+    // entry points) go to further internal classes, also named Program (in namespaces LlvmNet.Methods<n>). Exports and
+    // the entry methods stay on Program, whose type initializer every entry into the image runs first; the methods are
+    // internal rather than private so they can call one another across these classes.
+    private const int MethodsPerType = 32768;
+    private readonly List<TypeBuilder> methodHolders = [];
+    private int methodsInHolder;
     internal HostInterop? Host { get; private set; }
     internal bool TrapMissingArguments => options.TrapMissingArguments;
     internal bool CheckIndirectCalls => options.CheckIndirectCalls;
@@ -291,7 +299,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             MethodBuilder method;
             try
             {
-                method = Program.DefineMethod(Llvm.Name(function), (exported ? MethodAttributes.Public : MethodAttributes.Private) | MethodAttributes.Static,
+                method = (exported ? Program : MethodHolder()).DefineMethod(Llvm.Name(function), (exported ? MethodAttributes.Public : MethodAttributes.Assembly) | MethodAttributes.Static,
                     Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
             }
             catch (Exception error) { throw CompilationError.InFunction(error, function); }
@@ -323,7 +331,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             if (threadLocal)
             {
                 Globals[global].SetCustomAttribute(new CustomAttributeBuilder(typeof(ThreadStaticAttribute).GetConstructor(Type.EmptyTypes)!, []));
-                ThreadGlobals[global] = Program.DefineMethod($"__tls{ThreadGlobals.Count}", MethodAttributes.Private | MethodAttributes.Static, typeof(nint), Type.EmptyTypes);
+                ThreadGlobals[global] = MethodHolder().DefineMethod($"__tls{ThreadGlobals.Count}", MethodAttributes.Assembly | MethodAttributes.Static, typeof(nint), Type.EmptyTypes);
             }
         }
         foreach ((nint function, MethodInfo method) in Methods.ToArray())
@@ -337,7 +345,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         if (main is null && !options.Library)
             throw new NotSupportedException("No main function found.");
         MethodBuilder? entry = options.Library ? null : EmitStartup(cilModule, EmitEntry(main!));
-        foreach (TypeBuilder holder in fieldHolders)
+        foreach (TypeBuilder holder in fieldHolders.Concat(methodHolders).Distinct())
             holder.CreateType();
         MetadataBuilder metadata = assembly.GenerateMetadata(out BlobBuilder ilStream, out BlobBuilder fieldData);
         var indirectFixups = FinalizeIndirectSignatures(metadata);
@@ -387,6 +395,19 @@ internal sealed class CilCompiler(CompilerOptions options)
                 File.Copy(reference, destination, true);
         }
         Host?.Build();
+    }
+
+    /// <summary>The class for the next <paramref name="methods"/> internal methods (see <see cref="MethodsPerType"/>).</summary>
+    internal TypeBuilder MethodHolder(int methods = 1)
+    {
+        if (methodHolders.Count == 0) methodHolders.Add(Program);
+        if (methodsInHolder + methods > MethodsPerType)
+        {
+            methodHolders.Add(((ModuleBuilder)Program.Module).DefineType($"LlvmNet.Methods{methodHolders.Count}.Program", TypeAttributes.NotPublic | TypeAttributes.Abstract | TypeAttributes.Sealed));
+            methodsInHolder = 0;
+        }
+        methodsInHolder += methods;
+        return methodHolders[^1];
     }
 
     private TypeBuilder FieldHolder()

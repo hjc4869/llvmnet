@@ -17,6 +17,18 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-11-02, LLVM built with llvmnet)
+
+An experiment outside the repository (`artifacts/selfhost/`, like the library survey) built LLVM, Clang and Flang 22.1.8 with llvmnet in portable mode: every LLVM tool llvmnet runs (`clang-22`, `flang-22`, `opt-22`, `llvm-ar-22`, `llvm-nm-22`) became a .NET program, under the JIT and as a NativeAOT executable. Replaying the build's 3,542 compile commands with the built `clang-22` gave the same IR as native Clang, and llvmnet's sysroots rebuilt by those tools match master's.
+
+- **BE-47 (done).** Programs with more than 65,535 methods (Clang 119,681, Flang 234,651) linked but did not start, because the CLR limits the methods of one class. Internal methods now go to several classes, 32,768 per class ([evidence](../evidence/2026-11-02-method-holders.md)).
+- **Other findings, in progress on their own branches.**
+  - The launcher's `argv[0]` and `/proc/self/exe` (TC-21).
+  - `llvm.frameaddress`.
+  - Precompiled headers.
+  - NativeAOT's 32 MB metadata limit for Flang-sized programs.
+  - Running the compiler's own in-process LLVM as llvmnet-built code.
+
 ## Progress (2026-11-02, library survey fixes)
 
 The fixes for the survey's findings are merged. Measurements are in [link-scaling](../evidence/2026-11-02-link-scaling.md), [configure-probes](../evidence/2026-11-02-configure-probes.md), [musttail-select](../evidence/2026-11-02-musttail-select.md) and [system-mode-survey](../evidence/2026-11-02-system-mode-survey.md); PF-16 has its own entry below.

@@ -91,9 +91,11 @@ internal sealed class HostInterop : IDisposable
         string exportName = "llvmnet_host_" + wrappers.Count;
         Llvm.AddNativeThunk(shim, function, call, exportName);
         Type returnType = compiler.Types.Map(Llvm.LLVMGetReturnType(signature));
-        MethodBuilder wrapper = compiler.Program.DefineMethod("__host_" + wrappers.Count + "_" + (assembly ? "assembly" : symbol),
-            MethodAttributes.Private | MethodAttributes.Static, returnType, parameters.Select(compiler.Types.Map).ToArray());
-        MethodBuilder native = compiler.Program.DefinePInvokeMethod(exportName, LibraryName, exportName,
+        // The wrapper calls its P/Invoke method, which is private to their class.
+        TypeBuilder holder = compiler.MethodHolder(2);
+        MethodBuilder wrapper = holder.DefineMethod("__host_" + wrappers.Count + "_" + (assembly ? "assembly" : symbol),
+            MethodAttributes.Assembly | MethodAttributes.Static, returnType, parameters.Select(compiler.Types.Map).ToArray());
+        MethodBuilder native = holder.DefinePInvokeMethod(exportName, LibraryName, exportName,
             MethodAttributes.Private | MethodAttributes.Static | MethodAttributes.PinvokeImpl, CallingConventions.Standard,
             typeof(void), [typeof(nint), typeof(nint)], CallingConvention.Cdecl, CharSet.Ansi);
         native.SetImplementationFlags(MethodImplAttributes.PreserveSig);
@@ -142,7 +144,7 @@ internal sealed class HostInterop : IDisposable
         bool aggregate = parameters.Any(type => !scalar(type)) || !scalar(result) ||
             Enumerable.Range(0, (int)Llvm.LLVMCountParams(function)).Any(index => Llvm.ParameterAttribute(function, (uint)index, "byval") != 0 || Llvm.ParameterAttribute(function, (uint)index, "sret") != 0);
         bool nativeCallable = !variadic && !aggregate;
-        MethodBuilder callback = compiler.Program.DefineMethod("__callback_" + callbacks.Count, MethodAttributes.Private | MethodAttributes.Static,
+        MethodBuilder callback = compiler.MethodHolder().DefineMethod("__callback_" + callbacks.Count, MethodAttributes.Assembly | MethodAttributes.Static,
             nativeCallable ? result : typeof(void), nativeCallable ? parameters : Type.EmptyTypes);
         callback.SetCustomAttribute(new CustomAttributeBuilder(typeof(UnmanagedCallersOnlyAttribute).GetConstructor(Type.EmptyTypes)!, [],
             [typeof(UnmanagedCallersOnlyAttribute).GetField(nameof(UnmanagedCallersOnlyAttribute.CallConvs))!], [new[] { typeof(CallConvCdecl) }]));
