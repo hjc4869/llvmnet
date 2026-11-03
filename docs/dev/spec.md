@@ -10,7 +10,7 @@ llvmnet is checked against the SPEC CPU 2017 and CPU 2026 suites in both runtime
 - `PASS` means runcpu exited successfully and validated the benchmark's output. `FAIL` covers build errors, run errors and output mismatches. `TIMEOUT` means the build and run did not finish within `SPEC_TIMEOUT`, which says nothing about the cause.
 - Runs are non-reportable (`reportable = 0`) and use the input size given (`test`, `train` or `ref`). They are compatibility checks, not SPEC scores.
 
-`SPEC_VECTORIZE=1` adds `-fvectorize -fslp-vectorize`. The backend scalarizes the resulting vector IR, so this checks vectorized IR, not SIMD code generation.
+`SPEC_VECTORIZE=1` adds `-fvectorize -fslp-vectorize`. The backend lowers the resulting vector IR to `Vector128` code ([ADR-16](../plan/decisions.md#adr-16-simd-levels) Level 1).
 
 ## Scripts
 

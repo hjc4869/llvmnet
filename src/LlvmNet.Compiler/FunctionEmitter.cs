@@ -235,7 +235,10 @@ internal sealed class FunctionEmitter : ValueEmitter
         {
             case 1:
                 if (method.ReturnType != typeof(void))
+                {
                     Load(Llvm.LLVMGetOperand(value, 0));
+                    if (Types.ReturnsBytes(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0)))) Vectors.ToBoundary(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0)));
+                }
                 if (jumpFrame is not null)
                 {
                     if (jumpReturn is not null) Il.Emit(OpCodes.Stloc, jumpReturn);
@@ -346,6 +349,10 @@ internal sealed class FunctionEmitter : ValueEmitter
             case 69:
                 Cast(value, opcode);
                 break;
+            case 42 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null:
+            case 43 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null:
+                Vectors.Compare(value);
+                break;
             case 42:
                 CompareInteger(value);
                 break;
@@ -365,9 +372,20 @@ internal sealed class FunctionEmitter : ValueEmitter
             case 46:
                 Select(value);
                 break;
+            case 50 when Types.Vector(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0))) is not null:
+                Vectors.Extract(value);
+                break;
+            case 51 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null:
+                Vectors.Insert(value);
+                break;
             case 50:
             case 51:
                 VectorElement(value, opcode == 51);
+                break;
+            case 52:
+                if (Types.Vector(Llvm.LLVMTypeOf(value)) is null)
+                    throw new NotSupportedException($"Unsupported vector shuffle: {Llvm.Print(value)}");
+                Vectors.Shuffle(value);
                 break;
             case 53:
             case 54:
@@ -393,6 +411,9 @@ internal sealed class FunctionEmitter : ValueEmitter
                 return;
             case 59:
                 LandingPad(value);
+                break;
+            case 66 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null:
+                Vectors.Negate(value);
                 break;
             case 66:
                 Load(Llvm.LLVMGetOperand(value, 0));
@@ -425,6 +446,11 @@ internal sealed class FunctionEmitter : ValueEmitter
         nint whenTrue = Llvm.LLVMGetOperand(value, 1);
         nint whenFalse = Llvm.LLVMGetOperand(value, 2);
         nint type = Llvm.LLVMTypeOf(value);
+        if (Types.Vector(Llvm.LLVMTypeOf(condition)) is not null)
+        {
+            Vectors.Select(value);
+            return;
+        }
         Type managed = Types.Map(type);
         if (managed == typeof(int) || managed == typeof(long) || managed == typeof(nint))
         {
@@ -1039,6 +1065,11 @@ internal sealed class FunctionEmitter : ValueEmitter
     {
         Type site = Types.Map(Llvm.LLVMTypeOf(instruction));
         if (site == returned) return;
+        if (Types.ReturnsBytes(Llvm.LLVMTypeOf(instruction)) && returned == Types.Return(Llvm.LLVMTypeOf(instruction)))
+        {
+            Vectors.FromBoundary(Llvm.LLVMTypeOf(instruction));
+            return;
+        }
         if (site == typeof(void)) { Il.Emit(OpCodes.Pop); return; }
         if (returned == typeof(void) && Llvm.LLVMGetFirstUse(instruction) == 0)
         {
@@ -1270,7 +1301,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Ldloc, fixedTarget);
             Type[] parameters = Enumerable.Range(0, checked((int)argumentCount))
                 .Select(index => Types.Map(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index)))).ToArray();
-            ManagedCalli(Types.Map(Llvm.LLVMGetReturnType(signature)), parameters);
+            ManagedCalli(Types.Return(Llvm.LLVMGetReturnType(signature)), parameters);
             Il.Emit(OpCodes.Br, legacyComplete.Value);
             Il.MarkLabel(variadicCall);
         }
@@ -1307,7 +1338,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             if (Compiler.Host is not null && variadic)
                 Il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(nameof(SystemAbi.ResolveVariadicCallback))!);
             if (Compiler.Host is null || variadic)
-                ManagedCalli(Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
+                ManagedCalli(Types.Return(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
             else
             {
                 LocalBuilder managedTarget = Il.DeclareLocal(typeof(nint));
@@ -1320,10 +1351,10 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Il.Emit(OpCodes.Brfalse, native);
                 Il.Emit(OpCodes.Pop);
                 Il.Emit(OpCodes.Ldloc, managedTarget);
-                ManagedCalli(Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
+                ManagedCalli(Types.Return(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
                 Il.Emit(OpCodes.Br, complete);
                 Il.MarkLabel(native);
-                Type returnType = Types.Map(Llvm.LLVMGetReturnType(signature));
+                Type returnType = Types.Return(Llvm.LLVMGetReturnType(signature));
                 Type[] parameters = Types.Parameters(signature);
                 bool scalar(Type type) => type == typeof(void) || type == typeof(int) || type == typeof(long) || type == typeof(nint) || type == typeof(float) || type == typeof(double);
                 if (!scalar(returnType) || parameters.Any(type => !scalar(type)))
@@ -1360,6 +1391,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         if (legacyComplete is Label completeLegacy) Il.MarkLabel(completeLegacy);
         if (discardReturn) Il.Emit(OpCodes.Pop);
+        else if (Types.ReturnsBytes(Llvm.LLVMGetReturnType(signature))) Vectors.FromBoundary(Llvm.LLVMGetReturnType(signature));
         if (truncateBooleanReturn) Normalize(Llvm.LLVMTypeOf(instruction));
         if (convertReturn is not null) Il.Emit(convertReturn == typeof(nint) ? OpCodes.Conv_I : OpCodes.Conv_I8);
         if (byteReturn is (nint from, nint to)) ConvertOneByte(from, to);
@@ -1408,7 +1440,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             throw new NotSupportedException($"musttail call to {name} through another prototype: {Llvm.PrintType(signature)} versus {Llvm.PrintType(Llvm.LLVMGlobalGetValueType(target))}");
         nint[] types = [Llvm.LLVMGetReturnType(signature), .. Enumerable.Range(0, checked((int)Llvm.LLVMCountParamTypes(signature)))
             .Select(index => Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index)))];
-        if (Types.Map(types[0]) != method.ReturnType || types.Any(type => !CilCompiler.NativeScalar(Types.Map(type)) && Types.Size(type) > 16))
+        if (Types.Return(types[0]) != method.ReturnType || types.Any(type => !CilCompiler.NativeScalar(Types.Map(type)) && Types.Size(type) > 16))
             throw new NotSupportedException($"musttail call to {name} with type {Llvm.PrintType(signature)}: arguments and results of more than 16 bytes " +
                 "cannot be tail calls, because Windows x64 and ARM64 pass them by reference to a copy in the caller's frame.");
         uint byvalKind = Llvm.LLVMGetEnumAttributeKindForName("byval", 5);
@@ -1435,7 +1467,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         nint signature = Llvm.LLVMGetCalledFunctionType(instruction);
         for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
             Load(Llvm.LLVMGetOperand(instruction, index));
-        Type returnType = Types.Map(Llvm.LLVMGetReturnType(signature));
+        Type returnType = Types.Return(Llvm.LLVMGetReturnType(signature));
         Type[] parameters = Types.Parameters(signature);
         if (Llvm.LLVMIsAFunction(target) != 0)
         {
@@ -1585,6 +1617,8 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     private void Intrinsic(nint instruction, string name)
     {
+        if (Vectors.Intrinsic(instruction, name))
+            return;
         if (name == "llvm.get.rounding")
         {
             Il.Emit(OpCodes.Ldc_I4, Compiler.Host is null ? 0 : 1);

@@ -3,12 +3,14 @@
 # Vectorized code must either run exactly like native or be rejected with an ordinary diagnostic,
 # never miscompile or fail internally. Fixtures are compiled with the same flags natively. The AVX2
 # profile disables FP contraction: llvm.fmuladd may legally fuse natively (FMA) but not in llvmnet.
+# vector-loops, whose loops the vectorizers transform, must run as vector code (ADR-16 Level 1): its
+# images call Vector128.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"
 fixtures=(vector-loops core math intrinsics int128 unaligned)
 profiles=("vectorize:-O3 -fvectorize -fslp-vectorize" "fast-math:-O3 -ffast-math -fvectorize -fslp-vectorize" "avx2:-O3 -march=x86-64-v3 -ffp-contract=off -fvectorize -fslp-vectorize")
-matched=0 rejected=()
+matched=0 rejected=() vector_calls=()
 for profile in "${profiles[@]}"; do
     label="${profile%%:*}"
     read -r -a flags <<<"${profile#*:}"
@@ -35,6 +37,14 @@ for profile in "${profiles[@]}"; do
             fi
             dotnet "$test_output/$name.dll" >"$test_output/$name.txt"
             diff -u "$test_output/$fixture-$label-native.txt" "$test_output/$name.txt"
+            if [[ "$fixture" == vector-loops ]]; then
+                calls="$(dotnet "$checks" vector-calls "$test_output/$name.dll" | sed -E 's/^vector-calls: ([0-9]+).*/\1/')"
+                if (( calls < 100 )); then
+                    printf 'FAIL: %s makes %s Vector128 calls; its vector IR did not run as vector code\n' "$name" "$calls" >&2
+                    exit 1
+                fi
+                vector_calls+=("$name $calls")
+            fi
             matched=$((matched + 1))
         done
     done
@@ -43,4 +53,4 @@ done
 "$test_output/vector-loops-aot" >"$test_output/vector-loops-aot.txt"
 diff -u "$test_output/vector-loops-vectorize-native.txt" "$test_output/vector-loops-aot.txt"
 printf '%s\n' "${rejected[@]}" >"$test_output/rejected.txt"
-printf 'PASS: %d vectorized builds match native; %d rejected with diagnostics (listed in %s)\n' "$matched" "${#rejected[@]}" "$test_output/rejected.txt"
+printf 'PASS: %d vectorized builds match native; %d rejected with diagnostics (listed in %s); Vector128 calls: %s\n' "$matched" "${#rejected[@]}" "$test_output/rejected.txt" "$(IFS=,; echo "${vector_calls[*]}")"
