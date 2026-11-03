@@ -18,8 +18,8 @@ Each decision is recorded in the style of an architecture decision record: conte
 | ADR-12 | Debug information in 1.0 | M7 | Accepted 2026-10-31 (owner) |
 | ADR-13 | License | M0 | Accepted 2026-10-30 (owner) |
 | ADR-14 | Linux identity of the portable target | M3 | Accepted 2026-10-31 (owner, option 3); parity exclusions extended 2026-10-31 |
-| ADR-15 | Native extensions of the portable ABI | M10 (proposed) | Proposed 2026-11-03 (spike evidence) |
-| ADR-16 | SIMD levels: vector lowering, intrinsic helpers, native kernel packages | M11 (proposed) | Proposed 2026-11-03 (survey evidence) |
+| ADR-15 | Native extensions of the portable ABI | M10, before 1.0 | Accepted 2026-11-03 (owner, option 4; work pulled before 1.0) |
+| ADR-16 | SIMD levels: vector lowering, intrinsic helpers, native kernel packages | M11, before 1.0 | Accepted 2026-11-03 (owner; work pulled before 1.0) |
 
 ## ADR-01: Portable C library strategy
 
@@ -134,6 +134,8 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Decision (2026-10-31).** Accepted by the owner as recommended.
 
+**Update (2026-11-03).** ADR-16 breaks the deferred general lowering into levels, and the owner moved that work before 1.0 (workstream SV, M11); scalarization remains the behavior of programs that use none of its options.
+
 ## ADR-11: Driver defaults
 
 **Context.** llvmnet defaults to `-O1` with vectorization disabled; Clang defaults to `-O0`. Build systems pass explicit levels in practice.
@@ -198,7 +200,7 @@ Each decision is recorded in the style of an architecture decision record: conte
 - Native code runs with the process's rights, as the program does; SECURITY.md says so. An extension loads only the names its manifest lists.
 - The compiler and runtime do not grow a per-API feature: each extension is a generated package, and the list of extensions is a packaging decision.
 
-**Status.** Proposed 2026-11-03.
+**Status.** Accepted 2026-11-03 by the owner: option 4 (generated managed proxies), system-mode bridges unchanged. The owner also pulled the whole workstream, including NX-02 and NX-03, before 1.0 (see the 2026-11-03 section below).
 
 ## ADR-16: SIMD levels
 
@@ -225,7 +227,7 @@ Each decision is recorded in the style of an architecture decision record: conte
 - `LlvmNet.Runtime` grows a helper table (a few hundred small methods) that must be exact to the instruction; the conformance test against the native instruction on x64 is part of the definition of done.
 - System mode's SSE macro question (SA-12 option (b)) stays the owner's; Level 2 makes option (c) real and removes the failure the survey found for the common intrinsics.
 
-**Status.** Proposed 2026-11-03.
+**Status.** Accepted 2026-11-03 by the owner: Levels 1 to 3 as proposed, a spike (SV-17) before any decision on Level 4. The owner also pulled the workstream before 1.0 (see the 2026-11-03 section below).
 
 ## Proposed for the owner (2026-10-31)
 
@@ -267,25 +269,25 @@ Questions from the [library survey](../evidence/2026-11-02-library-survey.md), w
 - **x86 feature macros in system mode (SA-12).** System mode is the native x86-64 ABI, for which Clang predefines `__SSE2__` and related macros, but translated code cannot execute x86 intrinsics, so libraries that test the macros fail at the final link. Options: (a) translate the common SSE2 intrinsics to `Vector128` (large, comparable to PF-09); (b) undefine the SIMD feature macros in system mode as portable mode does, so libraries take their generic paths (the data layout does not change; code that requires SSE then fails to compile, as in portable mode); (c) keep the macros and diagnose an intrinsic at compile time. Proposed: (b), with the diagnostic of (c) for code that includes the intrinsic headers regardless.
 - **What WG-07 runs.** The plan lists zlib, bzip2, xz, sqlite, lua, zstd, libpng, libjpeg-turbo, expat and pcre2. The survey's suites that compare with native bit for bit, and that found the defects above, are libjpeg-turbo's and libpng's ctest, expat's runtests, libxml2's runtest, Little CMS's testcms, HarfBuzz's meson and shaping suites, the Opus and dav1d conformance decodes and brotli's streams. Proposed: WG-07 runs the plan's list plus these, from sources pinned in `scripts/sources.lock`, in the nightly workload job, and Skia's DM and ANGLE's unit tests weekly, because each of their links takes minutes (TC-20).
 
-## Proposed for the owner (2026-11-03, native extensions)
+## Decided by the owner (2026-11-03, native extensions)
 
 Questions from the [native extension spike](../evidence/2026-11-03-native-extension-spike.md) and the design in [11-native-extensions.md](11-native-extensions.md).
 
-- **ADR-15.** Accept generated managed proxies (option 4) as the mechanism for native libraries in portable mode, with system mode's bridges unchanged.
-- **Milestone.** The workstream is proposed as M10 after 1.0, since 1.0's exit criteria do not need it. NX-02 (the `dlopen` host entry points) and NX-03 (the package layout and `--extension`) are compatible additions to `dotnet64-v2` and could land before the freeze so that 1.0 images can use extensions published later; the alternative is to wait for 1.1, when the first extension ships with the generator. Proposed: after 1.0, unless the owner's own applications (AvaloniaStatic) need it sooner.
-- **First extensions and their priorities.** `gles` (EGL, GLES, desktop GL) as P1 and `vulkan` as P2; windowing libraries (SDL3, GLFW) only through the C-header generator later, because the intended applications own their windows in managed code.
-- **Test dependencies on other hosts.** Windows and macOS have no Mesa; the spike used the ANGLE libraries that Electron ships with Visual Studio Code. Options: (a) the `xp` jobs depend on an ANGLE present on the runner, found through `LLVMNET_EXT_GLES_DIR`, and skip otherwise; (b) llvmnet builds ANGLE natively for the test hosts from a pinned source (the AvaloniaStatic package already does), which is heavy; (c) a pinned prebuilt ANGLE fetched by hash. Proposed: (a) now, (c) when the extension ships.
-- **Names.** `ext/` under the sysroot, `--extension=<name>`, `-l<name>` mapped through the manifest, `LlvmNet.Ext.<Name>.dll`, `<llvmnet/ext.h>` with `llvmnet_ext_available`; and `dlopen(NULL)` left unsupported in NX-02 unless a use case appears.
+- **ADR-15.** Accepted: generated managed proxies (option 4) are the mechanism for native libraries in portable mode, with system mode's bridges unchanged.
+- **Milestone.** Decided: all native-extension work, NX-02 and NX-03 included, lands before 1.0 instead of as a post-1.0 M10. The plan's milestone table and 1.0 exit criteria still need to be updated to match.
+- **First extensions and their priorities.** Accepted: `gles` (EGL, GLES, desktop GL) as P1 and `vulkan` as P2; windowing libraries (SDL3, GLFW) only through the C-header generator later.
+- **Test dependencies on other hosts.** Accepted: (a) now, the `xp` jobs use an ANGLE present on the runner, found through `LLVMNET_EXT_GLES_DIR`, and skip otherwise; (c), a pinned prebuilt ANGLE fetched by hash, when the extension ships.
+- **Names.** Still proposed, not yet reviewed: `ext/` under the sysroot, `--extension=<name>`, `-l<name>` mapped through the manifest, `LlvmNet.Ext.<Name>.dll`, `<llvmnet/ext.h>` with `llvmnet_ext_available`; and `dlopen(NULL)` left unsupported in NX-02 unless a use case appears.
 
-## Proposed for the owner (2026-11-03, SIMD)
+## Decided by the owner (2026-11-03, SIMD)
 
 Questions from the [SIMD survey](../evidence/2026-11-03-simd-survey.md) and the design in [12-simd.md](12-simd.md).
 
-- **ADR-16.** Accept the levels: typed vector lowering (1), intrinsic helpers with explicit `IsSupported` dispatch (2), native kernel packages with compiler-generated stubs and the detection APIs (3), and a spike before any decision on compiler-generated native kernels (4).
-- **Milestone and order.** M11 after 1.0, Level 1 first (SV-02 to SV-07), then Level 2's SSE through SSE4.2 (SV-08) and Level 3 (SV-12, SV-13, SV-15), AVX2 and the P2 items after. Level 3 does not depend on Levels 1 and 2 and could be pulled forward if an application needs ffmpeg's or dav1d's assembly before general vector code; proposed: keep the order, because Level 1 also makes the C fallbacks of those libraries faster.
-- **Autovectorization default.** ADR-11's `-O1` scalar default stands until SV-05 measures the vectorized benchmark set (the kernel measurement bounds the gain at 4 to 10x on loops that vectorize, and shows a 1.2 to 2x loss while the IR is scalarized); the proposal then is either Clang's behavior (`-O2` and above vectorize) or an explicit `-fvectorize`. No change is proposed now.
-- **Option names.** `--isa=<level>` with `baseline`, `x86-64-v2`, `x86-64-v3`, `wasm-simd128` (alias `--simd128`), `neon`; `--vector-width=128|256`; `--native-kernels=<dir>`; `--report-simd`; the `llvmnet.isa` module flag and image metadata.
-- **Portable `-m` flags.** Keep rejecting `-m<...>` in portable mode and route the SIMD feature requests through `--isa`, so that a build cannot change the macros by accident; alternatively accept the x86 SIMD feature flags (`-msse4.2`, `-mavx2`, `-mfma`, `-march=x86-64-v2/v3`) as aliases of `--isa` for build systems that pass them. Proposed: the aliases, documented as having no ABI effect.
-- **SA-12 under Level 2.** The helpers make the predefined `__SSE2__` harmless for the common intrinsics in system mode (option (c)); whether to stop predefining the macros (option (b), recommended by the system-mode survey) is unchanged and still open.
-- **Native code in portable images.** Level 3 ships native libraries next to a portable image when a project opts in; the documentation would call such a program a *portable program with native kernels*, as ADR-15 calls the extension case. Level 4 would have llvmnet generate such libraries; proposed: decide after SV-17.
-- **Test hardware.** The Level 2 conformance test needs x64 runners with AVX2 (the build host has AVX-512) and ARM64 runners for the NEON paths; the `xp` hosts (`fluorite`, `mainmac`) cover Windows x64 and macOS ARM64 as for M6.
+- **ADR-16.** Accepted: typed vector lowering (1), intrinsic helpers with explicit `IsSupported` dispatch (2), native kernel packages with compiler-generated stubs and the detection APIs (3), and a spike before any decision on compiler-generated native kernels (4).
+- **Milestone and order.** Decided: the workstream lands before 1.0 (not as a post-1.0 M11), in the proposed order: Level 1 first (SV-02 to SV-07), then Level 2's SSE through SSE4.2 (SV-08) and Level 3 (SV-12, SV-13, SV-15), AVX2 and the P2 items after. The plan's milestone table and 1.0 exit criteria still need to be updated to match.
+- **Autovectorization default.** Decided: ADR-11's `-O1` scalar default stands until SV-05 measures the vectorized benchmark set; the choice between Clang's behavior (`-O2` and above vectorize) and an explicit `-fvectorize` is made then.
+- **Option names.** Accepted: `--isa=<level>` with `baseline`, `x86-64-v2`, `x86-64-v3`, `wasm-simd128` (alias `--simd128`), `neon`; `--vector-width=128|256`; `--native-kernels=<dir>`; `--report-simd`; the `llvmnet.isa` module flag and image metadata.
+- **Portable `-m` flags.** Accepted: the x86 SIMD feature flags (`-msse4.2`, `-mavx2`, `-mfma`, `-march=x86-64-v2/v3`) are aliases of `--isa`, documented as having no ABI effect; other `-m<...>` flags stay rejected.
+- **SA-12 under Level 2.** Left open: the helpers make the predefined `__SSE2__` harmless for the common intrinsics in system mode (option (c)); whether to stop predefining the macros (option (b)) is decided after Level 2 results.
+- **Native code in portable images.** Accepted: Level 3 ships native libraries next to a portable image when a project opts in (a *portable program with native kernels*). Whether llvmnet itself generates such libraries (Level 4) is decided after SV-17.
+- **Test hardware.** Accepted: the build host (AVX-512) covers x64, the `xp` hosts (`fluorite`, `mainmac`) cover Windows x64 and macOS ARM64, and an ARM64 Linux runner is added for the NEON paths.
