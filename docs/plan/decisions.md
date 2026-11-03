@@ -20,6 +20,7 @@ Each decision is recorded in the style of an architecture decision record: conte
 | ADR-14 | Linux identity of the portable target | M3 | Accepted 2026-10-31 (owner, option 3); parity exclusions extended 2026-10-31 |
 | ADR-15 | Native extensions of the portable ABI | M10, before 1.0 | Accepted 2026-11-03 (owner, option 4; work pulled before 1.0) |
 | ADR-16 | SIMD levels: vector lowering, intrinsic helpers, native kernel packages | M11, before 1.0 | Accepted 2026-11-03 (owner; work pulled before 1.0) |
+| ADR-17 | ReadyToRun for JIT deployments | M12 (proposed) | Proposed 2026-11-04 |
 
 ## ADR-01: Portable C library strategy
 
@@ -229,6 +230,29 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Status.** Accepted 2026-11-03 by the owner: Levels 1 to 3 as proposed, a spike (SV-17) before any decision on Level 4. The owner also pulled the workstream before 1.0 (see the 2026-11-03 section below).
 
+## ADR-17: ReadyToRun for JIT deployments
+
+**Context.** Under the JIT, a translated function too large for RyuJIT's limits runs as MinOpts code. The limits are 60,000 bytes of IL, 20,000 IL instructions, 2,000 blocks, 2,000 locals and 8,000 local references, and they are constants in release builds. Large C functions reach them: 49 of ffmpeg's decoder methods, including H.264's CABAC decoder and deblocking filters, so H.264 runs at 2.0 times native under the JIT against 1.46 as NativeAOT. Short programs pay for compilation instead: jpeg, lame and tramp3d run at 5 to 36 times native under the JIT (PF-06, PF-10). AOT compilation never falls back to MinOpts. A ReadyToRun image keeps the IL, adds code compiled by crossgen2 with RyuJIT, and still tiers hot methods up to Tier1 at run time. For an over-limit method the Tier1 recompilation falls back to MinOpts, and the runtime discards it and keeps the precompiled code. Measured 2026-11-04 ([evidence](../evidence/2026-11-04-jit-patterns.md#readytorun)): the ffmpeg decodes take 27% (H.264) and 15% (HEVC) less time with a ReadyToRun image, at the same hashes. Over 22 benchmarks of the set it takes 0.847 of the JIT's time, from 0.28 (tramp3d) to 1.22 (dhrystone), and it adds up with the tiering setting JP-02 proposes (bullet on 4 cores: 2.63 s by default, 1.89 s without the delay, 1.78 s with both). A linux-x64 ReadyToRun image fails with `BadImageFormatException` on macOS ARM64 and on Windows x64, where the IL-only image runs.
+
+**Options.**
+
+1. *Status quo.* IL-only images under the JIT; NativeAOT where speed matters; outlining (BE-26) for over-limit functions. Outlining is still needed for NativeAOT's code size and the JIT's other limits, but it is large work and does not address compile time.
+2. *ReadyToRun in the portable image* for the build host's identifier. Rejected: the image then fails to load on every other host (measured), which breaks R4.
+3. *A ReadyToRun output for one runtime identifier* (`--readytorun <rid>`, beside `--nativeaot`), recommended. The portable image is unchanged; a deployment that knows its host gets precompiled code and keeps everything the JIT offers (tiering, reflection, loading extensions). Builds take seconds, against minutes for NativeAOT.
+4. *One portable folder with precompiled copies per identifier*, which the host selects through `deps.json` runtime targets with the IL image as fallback. This keeps one deployment for every host but multiplies its size. Whether the host applies runtime targets to the application's own assembly has not been checked; it needs a spike before it can be chosen.
+5. *Partial ReadyToRun* (JP-10): only the methods over the JIT's limits are precompiled, so the rest keeps Tier0, on-stack replacement and Tier1's knowledge of initialized classes. It is also specific to one identifier, so it refines option 3 or 4.
+
+**Recommendation.** Option 3 as JP-06, opt-in; option 5 measured as its refinement; option 4 only after a spike.
+
+**Consequences.**
+
+- The toolchain or the offline feed (TC-12) carries the crossgen2 package for each host identifier it supports, as it does ILCompiler for NativeAOT.
+- Images grow: ffmpeg's decoder goes from 27 to 45 MB.
+- ReadyToRun is not always faster. Precompiled code knows nothing about class initialization, and a loop that never leaves precompiled code is not replaced by on-stack replacement: dhrystone takes 22% longer. The option stays opt-in, and the evidence lists where it loses.
+- The data ABI and the portable image are unaffected; the ABI freeze test does not change.
+
+**Status.** Proposed 2026-11-04.
+
 ## Proposed for the owner (2026-10-31)
 
 Questions that came up while closing M7 and that are the owner's to decide; nothing below has been acted on.
@@ -299,3 +323,15 @@ Questions from the typed vector lowering ([evidence](../evidence/2026-11-03-vect
 
 - **"Byte-identical without the new options" (M11 exit criterion, ADR-16 consequences).** The criterion assumed that only the vectorizers produce vector IR. The portable sysroot does too: musl's `float complex` functions (`<2 x float>` is their ABI type), libc++'s `locale.o`, libomp's `kmp_atomic.o`, flang-rt's complex `matmul`, `dot-product` and reductions, compiler-rt's `mulsc3` and `divsc3`; and so do Clang's vector extensions, SROA and the x86-64 ABI's coercion of small float structures. Level 1 lowers that vector IR without any option, so every C++ program using iostreams gets different bytes. Measured on the benchmark set: 49 of 54 images and the ffmpeg decoder byte-identical, the other five within noise. Accepted: reword the criterion as "a program whose IR has no vector operations is byte-identical to today's; no program of the benchmark set is slower", and ADR-16's consequence to match.
 - **The hidden `--vector-lowering=auto|typed|scalar`.** For comparisons and tests: `typed` keeps every function the lowering translates as vector code (the default `auto` scalarizes those that move more lanes than they compute on), `scalar` scalarizes everything as before SV-02. Accepted: keep it hidden, as `-fslp-vectorize` and the other alias options are, and list it in [dev/architecture.md](../dev/architecture.md) only.
+
+## Proposed for the owner (2026-11-04, JIT patterns)
+
+Questions from the RyuJIT review ([13-jit-patterns.md](13-jit-patterns.md), [evidence](../evidence/2026-11-04-jit-patterns.md)); nothing below has been acted on, and `src/` is unchanged.
+
+- **ADR-17.** Accept ReadyToRun as an opt-in output for one runtime identifier (option 3), with partial images (option 5) measured as its refinement. The alternative is to keep IL-only images and rely on NativeAOT and outlining (BE-26).
+- **M12's placement.** Before or after 1.0. JP-02 to JP-05 change only what the backend emits (`runtimeconfig.json` and the CIL). They are small, measured in this review, and independent of ADR-17.
+- **The order.** Recommended:
+  1. The tiering delay (JP-02): the largest gain for the least change, after the full set is measured on 4 cores.
+  2. Switch lowering (JP-03) and `initonly` fields (JP-04).
+  3. The per-method budget (JP-05).
+  4. ReadyToRun, as ADR-17 decides.
