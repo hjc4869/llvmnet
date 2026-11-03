@@ -481,11 +481,12 @@ internal static class Driver
                 if (Llvm.LLVMWriteBitcodeToFile(prepared.Handle, linked) != 0)
                     throw new IOException("Cannot write the legalized module.");
             }
-            // The typed vector lowering keeps vector code whole and scalarizes only the functions it does not translate
-            // (VectorEmitter.Legalize); --simd128 keeps 128-bit loads and stores whole, and without either every vector
-            // operation becomes scalar code.
+            // The typed vector lowering keeps vector code whole, reductions included, and expands and scalarizes only the
+            // functions it does not translate (VectorEmitter.Legalize); --simd128 keeps 128-bit loads and stores whole,
+            // and without either every vector operation becomes scalar code.
             string scalarizer = options.Simd128 ? ",scalarizer" : options.TypedVectors ? "" : ",scalarizer<load-store>";
-            string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,expand-reductions,scalarize-masked-mem-intrin{scalarizer}),globaldce,verify";
+            string reductions = options.TypedVectors ? "" : "expand-reductions,";
+            string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,{reductions}scalarize-masked-mem-intrin{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
             if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (options.Runtime == "portable" ? ",__llvmnet_libc_main,__llvmnet_register_finalizer,__llvmnet_cxx_can_catch" : "") +
                 (options.Extensions.Count != 0 && options.Runtime == "portable" ? ",__llvmnet_attach_thread,__llvmnet_detach_thread" : ""));

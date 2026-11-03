@@ -5,7 +5,7 @@
 # with hardware intrinsics disabled (the software paths of Vector128) and as NativeAOT, and run as vector code: Vector128
 # calls in the image. The hidden --vector-lowering=typed builds keep every function the lowering translates as vector
 # code, which the default leaves to the scalarizer where lanes move more than they compute (most of this fixture's
-# printing); there only the function whose operations have no lowering (popcount, __int128 lanes) is scalarized.
+# printing); there only the function whose operations have no lowering (__int128 lanes) is scalarized.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"

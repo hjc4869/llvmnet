@@ -1,6 +1,6 @@
 /* Clang vector extensions over every shape the typed vector lowering handles (ADR-16 Level 1): 128-bit vectors of
  * each lane type, 64-, 32- and 96-bit vectors widened to 128 bits, 256- and 512-bit vectors in fragments, odd lane
- * counts, i1 masks as bool vectors, and the fallback (vectors of __int128 and popcount, which are scalarized).
+ * counts, i1 masks as bool vectors, and the fallback (vectors of __int128, which are scalarized).
  * Output is printed lane by lane; native clang with the same flags is the oracle. Nothing prints an undefined lane,
  * a NaN payload of an arithmetic result or a value LLVM leaves unspecified (the sign of a zero from maxnum). */
 #include <stdint.h>
@@ -277,14 +277,27 @@ __attribute__((noinline)) static void elementwise(void)
     u16x8 usub16 = __builtin_elementwise_sub_sat((u16x8)c, (u16x8)d); SHOW(usub16);
     i32x4 sadd32 = __builtin_elementwise_add_sat(e, f); SHOW(sadd32);
     u32x4 usub32 = __builtin_elementwise_sub_sat((u32x4)e, (u32x4)f); SHOW(usub32);
+    /* Bit counts and reversals of every lane width; a zero lane takes the second operand of clzg and ctzg. */
+    u8x16 pop8 = __builtin_elementwise_popcount((u8x16)a), rev8 = __builtin_elementwise_bitreverse((u8x16)a); SHOW(pop8); SHOW(rev8);
+    u16x8 zeros16 = (u16x8)c & (u16x8){0xffff, 0, 0xff00, 0x00ff, 0xffff, 0x8000, 1, 0};
+    u16x8 clz16 = __builtin_elementwise_clzg(zeros16, ((u16x8){0} + 16)), ctz16 = __builtin_elementwise_ctzg(zeros16, ((u16x8){0} + 16)); SHOW(clz16); SHOW(ctz16);
+    u32x4 pop32 = __builtin_elementwise_popcount((u32x4)e), clz32 = __builtin_elementwise_clzg((u32x4)e | 1), ctz32 = __builtin_elementwise_ctzg((u32x4)e | 0x80000000u);
+    SHOW(pop32); SHOW(clz32); SHOW(ctz32);
+    typedef uint64_t u64x2e __attribute__((vector_size(16)));
+    u64x2e pop64 = __builtin_elementwise_popcount((u64x2e)g), rev64 = __builtin_elementwise_bitreverse((u64x2e)g), clz64 = __builtin_elementwise_clzg((u64x2e)g >> 7, ((u64x2e){0} + 64));
+    SHOW(pop64); SHOW(rev64); SHOW(clz64);
+    /* Funnel shifts by one count for all lanes (rotations included) and by a count per lane. */
+    u32x4 rotl = __builtin_elementwise_fshl((u32x4)e, (u32x4)e, ((u32x4){0} + 7)), funl = __builtin_elementwise_fshl((u32x4)e, (u32x4)f, ((u32x4){0} + 32));
+    u32x4 funr = __builtin_elementwise_fshr((u32x4)e, (u32x4)f, (u32x4){0, 1, 31, 45}); SHOW(rotl); SHOW(funl); SHOW(funr);
+    u16x8 funr16 = __builtin_elementwise_fshr((u16x8)c, (u16x8)d, ((u16x8){0} + 3)); SHOW(funr16);
+    u64x2e funl64 = __builtin_elementwise_fshl((u64x2e)g, (u64x2e)g * 3, ((u64x2e){0} + 13)); SHOW(funl64);
 }
 
-/* No lowering for these: their functions are scalarized by LLVM, as all vector code was before. */
-__attribute__((noinline)) static void fallback(void)
+/* No CIL vector has __int128 lanes: the function is scalarized by LLVM, as all vector code was before. */
+__attribute__((noinline)) static void fallback(const i32x8 *x)
 {
-    RANDOM(i32x4, e); RANDOM(i32x8, a); RANDOM(i32x8, b);
-    i32x4 bits = __builtin_elementwise_popcount(e); SHOW(bits);
-    i128x2 wide = {(__int128)a[0] << 70, (__int128)b[1] * 12345}; wide = wide * 3 + (wide >> 5);
+    i128x2 wide = {(__int128)(*x)[0] << 70, (__int128)(*x)[1] * 12345};
+    wide = wide * 3 + (wide >> 5) - (wide << 9);
     unsigned long long halves[4]; memcpy(halves, &wide, 32); printf("i128 %llx %llx %llx %llx\n", halves[0], halves[1], halves[2], halves[3]); mix(halves[1]);
 }
 
@@ -356,7 +369,7 @@ int main(void)
     masks();
     memory();
     boundaries();
-    fallback();
+    RANDOM(i32x8, x); fallback(&x);
     printf("digest %016llx\n", (unsigned long long)digest);
     return 0;
 }

@@ -71,7 +71,8 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             42 or 43 or >= 30 and <= 40 or 60 or 69 => Lanes(Llvm.LLVMGetOperand(instruction, 0)),
             46 => Lanes(Llvm.LLVMGetOperand(instruction, 0)),
             45 when Llvm.LLVMGetCalledValue(instruction) is nint target && Llvm.LLVMIsAFunction(target) != 0 &&
-                Llvm.Name(target).StartsWith("llvm.", StringComparison.Ordinal) =>
+                Llvm.Name(target).StartsWith("llvm.", StringComparison.Ordinal) &&
+                Llvm.Name(target).Split('.') is not [_, "vector", "reverse" or "insert" or "extract", ..] =>
                 Math.Max(Lanes(instruction), Llvm.LLVMGetNumArgOperands(instruction) == 0 ? 0 : Lanes(Llvm.LLVMGetOperand(instruction, 0))),
             _ => 0
         };
@@ -120,9 +121,14 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             return name.Split('.')[3] is "add" or "mul" or "and" or "or" or "xor" or "smax" or "smin" or "umax" or "umin" or
                 "fadd" or "fmul" or "fmax" or "fmin" or "fmaximum" or "fminimum";
         bool floating = TypeSystem.Kind(result) == 13 && TypeSystem.Kind(Llvm.LLVMGetElementType(result)) is 2 or 3;
+        int bits = TypeSystem.Kind(result) == 13 ? TypeSystem.Width(Llvm.LLVMGetElementType(result)) : 0;
         return operation switch
         {
             "smin" or "smax" or "umin" or "umax" or "abs" => true,
+            "ctpop" or "ctlz" or "cttz" or "bitreverse" or "fshl" or "fshr" => bits >= 8,
+            "bswap" => bits >= 16,
+            "fptosi" or "fptoui" => bits >= 8 && name.Contains(".sat.", StringComparison.Ordinal),
+            "vector" => name.Split('.')[2] is "reverse" or "insert" or "extract",
             "fabs" or "sqrt" or "fma" or "fmuladd" or "minnum" or "maxnum" or "minimum" or "maximum" or "copysign" or
                 "floor" or "ceil" or "trunc" or "roundeven" or "rint" or "nearbyint" or "round" => floating,
             "sadd" or "uadd" or "ssub" or "usub" => name.Contains(".sat.", StringComparison.Ordinal),
@@ -507,8 +513,9 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// Pushes fragment <paramref name="index"/> of shape <paramref name="to"/> from the fragments <paramref name="source"/>
     /// pushes in shape <paramref name="from"/>, which has the same lanes at another width: integers are truncated or
     /// extended (with their sign when <paramref name="signed"/>), floats widened to doubles or doubles narrowed to floats.
+    /// With <paramref name="saturate"/>, integers narrow to the nearest value of the narrower type, signed or unsigned.
     /// </summary>
-    private void Resize(VectorShape from, VectorShape to, Action<int> source, int index, bool signed)
+    private void Resize(VectorShape from, VectorShape to, Action<int> source, int index, bool signed, bool saturate = false)
     {
         bool floating = from.Lane == typeof(float) || from.Lane == typeof(double);
         if (from.LaneBits == to.LaneBits)
@@ -540,7 +547,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 Type lane = Lane(from.LaneBits >> (level - 1));
                 Narrow(level - 1, 2 * fragment);
                 Narrow(level - 1, 2 * fragment + 1);
-                il.Emit(OpCodes.Call, Api("Narrow", null, V(lane), V(lane)));
+                il.Emit(OpCodes.Call, Api(saturate ? "NarrowWithSaturation" : "Narrow", null, V(lane), V(lane)));
             }
         }
         else
@@ -862,10 +869,13 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// <summary>fptosi and fptoui: converted at the source's width (Vector128's conversions saturate, and an out-of-range
     /// input is poison in LLVM, as for scalars, BE-12), float widened to double first for 64-bit results, then truncated
     /// or extended to the result's width.</summary>
-    private void FloatToInteger(nint source, VectorShape from, VectorShape to, bool signed)
+    private void FloatToInteger(nint source, VectorShape from, VectorShape to, bool signed, bool saturate = false)
     {
+        // llvm.fptosi.sat and fptoui.sat saturate at the result's width: the conversion saturates at its own width (NaN
+        // to zero, as LLVM defines), the narrowing at the result's, both unsigned for fptoui.sat.
         VectorShape wide = to.LaneBits == 64 && from.Lane == typeof(float) ? types.Shape(from.Lanes, typeof(double), mask: false) : from;
-        Type converted = wide.Lane == typeof(float) ? signed || to.LaneBits < 32 ? typeof(int) : typeof(uint) : signed || to.LaneBits < 64 ? typeof(long) : typeof(ulong);
+        bool unsignedConversion = !signed && (saturate || to.LaneBits >= wide.LaneBits);
+        Type converted = wide.Lane == typeof(float) ? unsignedConversion ? typeof(uint) : typeof(int) : unsignedConversion ? typeof(ulong) : typeof(long);
         string conversion = converted == typeof(int) ? "ConvertToInt32" : converted == typeof(uint) ? "ConvertToUInt32" : converted == typeof(long) ? "ConvertToInt64" : "ConvertToUInt64";
         VectorShape integers = types.Shape(from.Lanes, Signed(wide.LaneBits), mask: false);
         Build(to, index => Resize(integers, to, fragment =>
@@ -873,7 +883,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             Resize(from, wide, part => Fragment(source, part), fragment, signed: true);
             il.Emit(OpCodes.Call, Api(conversion, null, V(wide.Lane)));
             As(converted, integers.Lane);
-        }, index, signed));
+        }, index, signed, saturate));
     }
 
     /// <summary>sitofp and uitofp: integers extended to the result's width and converted, which is exact; 64-bit integers
@@ -1066,16 +1076,24 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     internal void Shuffle(nint value)
     {
         nint first = Llvm.LLVMGetOperand(value, 0), second = Llvm.LLVMGetOperand(value, 1);
-        VectorShape result = Shape(value), input = Shape(first);
-        if (result.Mask)
-            input = types.Shape(input.Lanes, result.Lane, mask: true);
-        int sourceLanes = input.Lanes, per = result.PerFragment;
-        int[] mask = Enumerable.Range(0, result.Lanes).Select(lane => Llvm.LLVMGetMaskValue(value, (uint)lane)).ToArray();
+        int lanes = Shape(first).Lanes;
+        Gather(Shape(value), [first, second], Enumerable.Range(0, Shape(value).Lanes).Select(lane =>
+            Llvm.LLVMGetMaskValue(value, (uint)lane) is int element and >= 0 ? element < lanes ? (0, element) : (1, element - lanes) : ((int, int)?)null).ToArray());
+    }
+
+    /// <summary>
+    /// Builds <paramref name="result"/> from lanes of <paramref name="operands"/>, <paramref name="map"/> naming the
+    /// operand and lane of each result lane (null where it is undefined), for shufflevector and llvm.vector.reverse,
+    /// insert and extract.
+    /// </summary>
+    private void Gather(VectorShape result, nint[] operands, (int Operand, int Lane)?[] map)
+    {
+        VectorShape[] inputs = operands.Select(operand => result.Mask ? types.Shape(Shape(operand).Lanes, result.Lane, mask: true) : Shape(operand)).ToArray();
+        int per = result.PerFragment;
         void Source(int operand, int fragment)
         {
-            nint vector = operand == 0 ? first : second;
-            if (result.Mask) LoadMask(vector, input, fragment);
-            else Fragment(vector, fragment);
+            if (result.Mask) LoadMask(operands[operand], inputs[operand], fragment);
+            else Fragment(operands[operand], fragment);
         }
         Build(result, index =>
         {
@@ -1084,8 +1102,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             for (int lane = 0; lane < per; lane++)
             {
                 int global = index * per + lane;
-                if (global >= result.Lanes || mask[global] < 0) continue;
-                int operand = mask[global] < sourceLanes ? 0 : 1, element = mask[global] % sourceLanes;
+                if (global >= result.Lanes || map[global] is not (int operand, int element)) continue;
                 var key = (operand, element / per);
                 if (!sources.TryGetValue(key, out int[]? pattern)) sources.Add(key, pattern = Enumerable.Repeat(-1, per).ToArray());
                 pattern[lane] = element % per;
@@ -1173,15 +1190,15 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     // ---- Reductions ----
 
     /// <summary>
-    /// llvm.vector.reduce.*, which expand-reductions leaves in optnone (-O0) functions: integer reductions fold whole
-    /// fragments first and then the lanes; fadd and fmul are ordered from the start value unless they may reassociate,
-    /// in which case they halve the vector as expand-reductions and LLVM's backends do, so the result is the same; an i1
-    /// vector is reduced as its bits.
+    /// llvm.vector.reduce.*, which the backend lowers itself (expand-reductions runs only on the functions the
+    /// scalarizer takes): lanes of a power-of-two vector combine pairwise as expand-reductions and LLVM's backends do,
+    /// an integer sum through Vector128.Sum, other vectors lane by lane; fadd and fmul are ordered from the start value
+    /// unless they may reassociate; an i1 vector is reduced as its bits.
     /// </summary>
     private void Reduce(nint instruction, string kind)
     {
-        bool floating = kind is "fadd" or "fmul";
-        nint vector = Llvm.LLVMGetOperand(instruction, floating ? 1u : 0u);
+        bool ordered = kind is "fadd" or "fmul";
+        nint vector = Llvm.LLVMGetOperand(instruction, ordered ? 1u : 0u);
         nint type = Llvm.LLVMTypeOf(instruction);
         VectorShape shape = Shape(vector);
         if (shape.Mask)
@@ -1205,80 +1222,102 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             il.Emit(OpCodes.And);
             return;
         }
-        if (floating)
+        if (ordered)
         {
             ReduceFloating(instruction, kind, vector, shape);
             return;
         }
-        Type lane = kind is "umax" or "umin" || shape.LaneBits < 32 && kind is not ("smax" or "smin") ? Unsigned(shape.Lane) : shape.Lane;
-        string vectorOperation = kind switch
+        bool floating = shape.Lane == typeof(float) || shape.Lane == typeof(double);
+        Type lane = !floating && (kind is "umax" or "umin" || shape.LaneBits < 32 && kind is not ("smax" or "smin")) ? Unsigned(shape.Lane) : shape.Lane;
+        string operation = kind switch
         {
             "add" => "Add",
             "mul" => "Multiply",
             "and" => "BitwiseAnd",
             "or" => "BitwiseOr",
             "xor" => "Xor",
-            "smax" or "umax" => "Max",
-            _ => "Min"
+            "smax" or "umax" or "fmaximum" => "Max",
+            "smin" or "umin" or "fminimum" => "Min",
+            "fmax" => "MaxNumber",
+            _ => "MinNumber"
         };
-        void Combine()
+        if (kind == "add" && shape.Lanes == shape.PerFragment * shape.Fragments && System.Numerics.BitOperations.IsPow2(shape.Fragments))
         {
-            switch (kind)
+            Fold(vector, shape, lane, operation);
+            il.Emit(OpCodes.Call, Api("Sum", lane, V(lane)));
+        }
+        else if (System.Numerics.BitOperations.IsPow2(shape.Lanes))
+            ReduceTree(vector, shape, lane, operation);
+        else
+        {
+            MethodInfo? combine = floating ? shape.Lane.GetMethod(operation, [shape.Lane, shape.Lane]) : null;
+            for (int element = 0; element < shape.Lanes; element++)
             {
-                case "add": il.Emit(OpCodes.Add); break;
-                case "mul": il.Emit(OpCodes.Mul); break;
-                case "and": il.Emit(OpCodes.And); break;
-                case "or": il.Emit(OpCodes.Or); break;
-                case "xor": il.Emit(OpCodes.Xor); break;
-                default:
-                    // Narrow lanes are extended by GetElement as their view says, so int comparisons order them.
-                    Type compared = shape.LaneBits < 32 ? typeof(int) : lane;
-                    il.Emit(OpCodes.Call, typeof(Math).GetMethod(kind.EndsWith("max", StringComparison.Ordinal) ? "Max" : "Min", [compared, compared])!);
-                    break;
+                Fragment(vector, element / shape.PerFragment);
+                As(shape.Lane, lane);
+                il.Emit(OpCodes.Ldc_I4, element % shape.PerFragment);
+                il.Emit(OpCodes.Call, Api("GetElement", lane, V(lane), typeof(int)));
+                if (element == 0) continue;
+                if (combine is not null) il.Emit(OpCodes.Call, combine);
+                else
+                    switch (kind)
+                    {
+                        case "add": il.Emit(OpCodes.Add); break;
+                        case "mul": il.Emit(OpCodes.Mul); break;
+                        case "and": il.Emit(OpCodes.And); break;
+                        case "or": il.Emit(OpCodes.Or); break;
+                        case "xor": il.Emit(OpCodes.Xor); break;
+                        default:
+                            // Narrow lanes are extended by GetElement as their view says, so int comparisons order them.
+                            Type compared = shape.LaneBits < 32 ? typeof(int) : lane;
+                            il.Emit(OpCodes.Call, typeof(Math).GetMethod(operation, [compared, compared])!);
+                            break;
+                    }
             }
         }
-        int lanes = shape.Lanes;
-        LocalBuilder? folded = null;
-        if (shape.Fragments > 1 && lanes == shape.PerFragment * shape.Fragments)
+        if (!floating) values.Normalize(type);
+    }
+
+    /// <summary>Pushes the fragments of a vector combined lane by lane, fragment j with fragment j + count / 2 while there
+    /// are several, as LLVM halves a vector; the fragment count is a power of two.</summary>
+    private void Fold(nint vector, VectorShape shape, Type lane, string operation)
+    {
+        void Pair(int count, int index)
         {
-            // Whole fragments combine lane for lane; only the lanes of one fragment remain.
-            Fragment(vector, 0);
-            As(shape.Lane, lane);
-            for (int index = 1; index < shape.Fragments; index++)
+            if (count == shape.Fragments)
             {
                 Fragment(vector, index);
                 As(shape.Lane, lane);
-                Call(vectorOperation, lane, 2);
+                return;
             }
-            folded = Rent(V(lane));
-            il.Emit(OpCodes.Stloc, folded);
-            lanes = shape.PerFragment;
+            Pair(count * 2, index);
+            Pair(count * 2, index + count);
+            Call(operation, lane, 2);
         }
-        if (kind == "add" && lanes == shape.PerFragment)
+        Pair(1, 0);
+    }
+
+    /// <summary>Pushes lane 0 of a power-of-two vector after combining its upper half with its lower half until one lane
+    /// is left: the fragments first, then the lanes of the last one by shuffles.</summary>
+    private void ReduceTree(nint vector, VectorShape shape, Type lane, string operation)
+    {
+        Fold(vector, shape, lane, operation);
+        LocalBuilder folded = Rent(V(lane));
+        il.Emit(OpCodes.Stloc, folded);
+        Type indices = IntegerLane(lane);
+        for (int width = Math.Min(shape.Lanes, shape.PerFragment) / 2; width >= 1; width /= 2)
         {
-            if (folded is not null) il.Emit(OpCodes.Ldloc, folded);
-            else
-            {
-                Fragment(vector, 0);
-                As(shape.Lane, lane);
-            }
-            il.Emit(OpCodes.Call, Api("Sum", lane, V(lane)));
+            il.Emit(OpCodes.Ldloc, folded);
+            il.Emit(OpCodes.Ldloc, folded);
+            for (int element = 0; element < shape.PerFragment; element++) Scalar(indices, element < width ? element + width : element);
+            il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(indices, shape.PerFragment).ToArray()));
+            il.Emit(OpCodes.Call, Api("Shuffle", null, V(lane), V(indices)));
+            Call(operation, lane, 2);
+            il.Emit(OpCodes.Stloc, folded);
         }
-        else
-            for (int element = 0; element < lanes; element++)
-            {
-                if (folded is not null) il.Emit(OpCodes.Ldloc, folded);
-                else
-                {
-                    Fragment(vector, element / shape.PerFragment);
-                    As(shape.Lane, lane);
-                }
-                il.Emit(OpCodes.Ldc_I4, element % shape.PerFragment);
-                il.Emit(OpCodes.Call, Api("GetElement", lane, V(lane), typeof(int)));
-                if (element > 0) Combine();
-            }
-        if (folded is not null) Release(folded);
-        values.Normalize(type);
+        il.Emit(OpCodes.Ldloc, folded);
+        il.Emit(OpCodes.Call, Api("ToScalar", lane, V(lane)));
+        Release(folded);
     }
 
     private void ReduceFloating(nint instruction, string kind, nint vector, VectorShape shape)
@@ -1286,69 +1325,135 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         OpCode operation = kind == "fadd" ? OpCodes.Add : OpCodes.Mul;
         OpCode round = shape.Lane == typeof(float) ? OpCodes.Conv_R4 : OpCodes.Conv_R8;
         values.Load(Llvm.LLVMGetOperand(instruction, 0));
-        bool reassociate = (Llvm.LLVMGetFastMathFlags(instruction) & 1) != 0 && System.Numerics.BitOperations.IsPow2(shape.Lanes);
-        if (!reassociate)
+        if ((Llvm.LLVMGetFastMathFlags(instruction) & 1) != 0 && System.Numerics.BitOperations.IsPow2(shape.Lanes))
         {
-            for (int element = 0; element < shape.Lanes; element++)
-            {
-                Fragment(vector, element / shape.PerFragment);
-                il.Emit(OpCodes.Ldc_I4, element % shape.PerFragment);
-                il.Emit(OpCodes.Call, Api("GetElement", shape.Lane, V(shape.Lane), typeof(int)));
-                il.Emit(operation);
-                il.Emit(round);
-            }
+            ReduceTree(vector, shape, shape.Lane, kind == "fadd" ? "Add" : "Multiply");
+            il.Emit(operation);
+            il.Emit(round);
             return;
         }
-        // The upper half combined with the lower half until one lane is left: fragment j with fragment j + count / 2
-        // while there are several, then the lanes of the last one by shuffles.
-        string combine = kind == "fadd" ? "Add" : "Multiply";
-        void Fold(int count, int index)
+        for (int element = 0; element < shape.Lanes; element++)
         {
-            if (count == shape.Fragments)
-            {
-                Fragment(vector, index);
-                return;
-            }
-            Fold(count * 2, index);
-            Fold(count * 2, index + count);
-            Call(combine, shape.Lane, 2);
+            Fragment(vector, element / shape.PerFragment);
+            il.Emit(OpCodes.Ldc_I4, element % shape.PerFragment);
+            il.Emit(OpCodes.Call, Api("GetElement", shape.Lane, V(shape.Lane), typeof(int)));
+            il.Emit(operation);
+            il.Emit(round);
         }
-        Fold(1, 0);
-        LocalBuilder folded = Rent(shape.Fragment);
-        il.Emit(OpCodes.Stloc, folded);
-        Type indices = IntegerLane(shape.Lane);
-        for (int width = Math.Min(shape.Lanes, shape.PerFragment) / 2; width >= 1; width /= 2)
-        {
-            il.Emit(OpCodes.Ldloc, folded);
-            il.Emit(OpCodes.Ldloc, folded);
-            for (int lane = 0; lane < shape.PerFragment; lane++) Scalar(indices, lane < width ? lane + width : lane);
-            il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(indices, shape.PerFragment).ToArray()));
-            il.Emit(OpCodes.Call, Api("Shuffle", null, V(shape.Lane), V(indices)));
-            Call(combine, shape.Lane, 2);
-            il.Emit(OpCodes.Stloc, folded);
-        }
-        il.Emit(OpCodes.Ldloc, folded);
-        il.Emit(OpCodes.Call, Api("ToScalar", shape.Lane, V(shape.Lane)));
-        Release(folded);
-        il.Emit(operation);
-        il.Emit(round);
     }
 
     // ---- Intrinsics ----
+
+    /// <summary>
+    /// llvm.fshl and llvm.fshr: with one count for every lane, s = count mod width and fshl = high &lt;&lt; s | (low
+    /// &gt;&gt;&gt; 1) &gt;&gt;&gt; (width - 1 - s), which never shifts by the whole width, and fshr its mirror; a
+    /// count per lane goes lane by lane.
+    /// </summary>
+    private void FunnelShift(VectorShape shape, nint high, nint low, nint count, bool right)
+    {
+        Type lane = Unsigned(shape.Lane);
+        if (SplatScalar(count) is not nint scalar)
+        {
+            MethodInfo helper = typeof(Vectors).GetMethod(nameof(Vectors.FunnelShift))!.MakeGenericMethod(lane);
+            Build(shape, index =>
+            {
+                foreach (nint operand in new[] { high, low, count })
+                {
+                    Fragment(operand, index);
+                    As(shape.Lane, lane);
+                }
+                il.Emit(right ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+                il.Emit(OpCodes.Call, helper);
+                As(lane, shape.Lane);
+            });
+            return;
+        }
+        LocalBuilder amount = Rent(typeof(int));
+        LoadLaneScalar(scalar);
+        if (shape.LaneBits == 64) il.Emit(OpCodes.Conv_I4);
+        il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1);
+        il.Emit(OpCodes.And);
+        il.Emit(OpCodes.Stloc, amount);
+        MethodInfo near = Api(right ? "ShiftRightLogical" : "ShiftLeft", null, V(lane), typeof(int));
+        MethodInfo far = Api(right ? "ShiftLeft" : "ShiftRightLogical", null, V(lane), typeof(int));
+        Build(shape, index =>
+        {
+            Fragment(right ? low : high, index);
+            As(shape.Lane, lane);
+            il.Emit(OpCodes.Ldloc, amount);
+            il.Emit(OpCodes.Call, near);
+            Fragment(right ? high : low, index);
+            As(shape.Lane, lane);
+            il.Emit(OpCodes.Ldc_I4_1);
+            il.Emit(OpCodes.Call, far);
+            il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1);
+            il.Emit(OpCodes.Ldloc, amount);
+            il.Emit(OpCodes.Sub);
+            il.Emit(OpCodes.Call, far);
+            Call("BitwiseOr", lane, 2);
+            As(lane, shape.Lane);
+        });
+        Release(amount);
+    }
 
     /// <summary>Translates a generic vector intrinsic (<see cref="Intrinsics"/>); false for any other call.</summary>
     internal bool Intrinsic(nint instruction, string name)
     {
         nint type = Llvm.LLVMTypeOf(instruction);
-        if (name.StartsWith("llvm.vector.reduce.", StringComparison.Ordinal) && name.Split('.')[3] is string kind &&
-            kind is not ("fmax" or "fmin" or "fmaximum" or "fminimum") && Intrinsics(name, type))
+        if (name.StartsWith("llvm.vector.reduce.", StringComparison.Ordinal) && Intrinsics(name, type))
         {
-            Reduce(instruction, kind);
+            Reduce(instruction, name.Split('.')[3]);
             return true;
         }
         if (types.Vector(type) is not VectorShape shape || !Intrinsics(name, type)) return false;
         string operation = name.Split('.')[1];
         nint Operand(uint index) => Llvm.LLVMGetOperand(instruction, index);
+        if (operation == "vector")
+        {
+            // reverse, extract (a subvector at a constant lane) and insert (one at a constant lane).
+            nint vector = Operand(0);
+            int count = Shape(vector).Lanes;
+            string kind = name.Split('.')[2];
+            long position = kind == "reverse" ? 0 : Llvm.LLVMConstIntGetSExtValue(Operand(kind == "insert" ? 2u : 1u));
+            int inserted = kind == "insert" ? Shape(Operand(1)).Lanes : 0;
+            Gather(shape, kind == "insert" ? [vector, Operand(1)] : [vector], Enumerable.Range(0, shape.Lanes).Select(lane => kind switch
+            {
+                "reverse" => (0, count - 1 - lane),
+                "extract" => (0, (int)position + lane),
+                _ => lane >= position && lane < position + inserted ? (1, lane - (int)position) : ((int, int)?)(0, lane)
+            }).ToArray());
+            return true;
+        }
+        if (operation is "fptosi" or "fptoui")
+        {
+            FloatToInteger(Operand(0), Shape(Operand(0)), shape, signed: operation == "fptosi", saturate: true);
+            return true;
+        }
+        if (operation is "ctpop" or "ctlz" or "cttz" or "bswap" or "bitreverse")
+        {
+            Type lane = Unsigned(shape.Lane);
+            MethodInfo helper = typeof(Vectors).GetMethod(operation switch
+            {
+                "ctpop" => nameof(Vectors.PopCount),
+                "ctlz" => nameof(Vectors.LeadingZeroCount),
+                "cttz" => nameof(Vectors.TrailingZeroCount),
+                "bswap" => nameof(Vectors.ByteSwap),
+                _ => nameof(Vectors.ReverseBits)
+            }, [V(lane)])!;
+            Build(shape, index =>
+            {
+                Fragment(Operand(0), index);
+                As(shape.Lane, lane);
+                il.Emit(OpCodes.Call, helper);
+                As(lane, shape.Lane);
+            });
+            return true;
+        }
+        if (operation is "fshl" or "fshr")
+        {
+            FunnelShift(shape, Operand(0), Operand(1), Operand(2), operation == "fshr");
+            return true;
+        }
         if (operation is "smin" or "smax" or "umin" or "umax")
         {
             Type lane = operation[0] == 'u' ? Unsigned(shape.Lane) : shape.Lane;

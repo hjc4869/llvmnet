@@ -85,6 +85,18 @@ The x86-64 ABI passes and returns small structures of floats as `<2 x float>` pa
 
 `llvm-dis` over the portable sysroot archives finds vector types in 23 musl members (the `float complex` functions, whose ABI type is `<2 x float>`), libc++'s `locale.o` (`<32 x i8>`), libomp's `kmp_atomic.o` (`<32 x i1>`, `<32 x i32>`), eight flang-rt members (complex `<2 x float>` in `matmul`, `dot-product` and the reductions) and compiler-rt's `mulsc3` and `divsc3`. A program that links one of them gets different bytes from SV-02 on, without any option of this workstream: every C++ program that uses iostreams does. M11's exit criterion and ADR-16's consequence say such programs stay byte-identical; that holds for programs whose lowered IR has no vector types, and the benchmark set shows the speed unchanged for the others. The owner reworded it ([decisions](../plan/decisions.md#decided-by-the-owner-2026-11-03-sv-02)): programs whose IR has no vector operations stay byte-identical, and no program of the benchmark set may be slower.
 
+## SV-03: the generic intrinsics
+
+SV-03 lowers the remaining integer intrinsics and moves the reductions into the backend:
+
+- `ctpop`, `ctlz`, `cttz` and `bitreverse` per lane width are compositions of shifts, masks and adds in `LlvmNet.Runtime.Vectors` (.NET has no vector population count, and no x86 ISA below AVX-512 BITALG does), `bswap` a constant byte `Shuffle`; a zero lane counts as the lane width, the defined result when the zero-is-poison flag is clear.
+- `fshl`/`fshr` by a count shared by all lanes compute `high << s | (low >>> 1) >>> (width - 1 - s)` with `s = count mod width`, which never shifts by the whole width (.NET masks shift counts, so a shift by the width would be a shift by zero); a count per lane goes lane by lane.
+- `fptosi.sat` and `fptoui.sat` use Vector128's saturating conversions, which map NaN to zero as LLVM defines (checked: `ConvertToInt32` of NaN, 3e9 and -3e9 gives 0, `int.MaxValue`, `int.MinValue`), then `NarrowWithSaturation`, unsigned for `fptoui.sat`.
+- `vector.reverse`, `vector.insert` and `vector.extract` go through the shuffle lowering, which now builds a result from any lane map.
+- Every `llvm.vector.reduce.*` is lowered by the backend: a power-of-two vector combines fragment j with j + count / 2 and then the halves of the last fragment by shuffles, the order `expand-reductions` and LLVM's x86 backend use, so reassociating floating-point reductions round as natively; integer sums of whole fragments use `Vector128.Sum`; other lane counts fold lane by lane. `expand-reductions` now runs only on the functions the scalarizer takes.
+
+`tests/c/vector-extensions.c` gained the bit counts and reversals of every lane width (with zero lanes) and funnel shifts by shared, wrapping and per-lane counts; `tests/ir/vector-lowering.ll` gained `bswap`, the three `vector.*` intrinsics, both saturating conversions at narrower widths with NaN and out-of-range inputs, `ctlz`/`cttz` of zero, and reductions of three and two lanes and with NaN. Both match native at every level, typed and by default, with hardware intrinsics off and as NativeAOT. `tests/support-matrix.sh` regenerated the matrix: `llvm.vector.reverse` moves from rejected to translated, ten rows are new, and `llvm.vp.add` is rejected with its name, as `llvm.get.active.lane.mask` is.
+
 ## What it does not show
 
 - Speedups on real programs: the vectorizers stay off by default (ADR-11), and measuring the benchmark set and the survey's libraries with them on is SV-05. The kernels of the survey were not rerun.

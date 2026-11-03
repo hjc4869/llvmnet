@@ -258,6 +258,78 @@ entry:
   ret i32 %result
 }
 
+define i32 @intrinsics(<4 x i32> %words, <4 x float> %floats, <2 x double> %doubles) {
+entry:
+  ; %words = <0x01020304, 1, -1, 0x00010000>, %floats = <300.0, -300.0, NaN, 5.7>, %doubles = <-5.0, 1.0e6>
+  %swapped = call <4 x i32> @llvm.bswap.v4i32(<4 x i32> %words)
+  %s0 = extractelement <4 x i32> %swapped, i32 0
+  %c0 = icmp ne i32 %s0, 67305985
+  %reversed = call <4 x i32> @llvm.vector.reverse.v4i32(<4 x i32> %words)
+  %r0 = extractelement <4 x i32> %reversed, i32 0
+  %c1 = icmp ne i32 %r0, 65536
+  %upper = call <2 x i32> @llvm.vector.extract.v2i32.v4i32(<4 x i32> %words, i64 2)
+  %u1 = extractelement <2 x i32> %upper, i32 1
+  %c2 = icmp ne i32 %u1, 65536
+  %wide = call <8 x i32> @llvm.vector.insert.v8i32.v4i32(<8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>, <4 x i32> %words, i64 4)
+  %w5 = extractelement <8 x i32> %wide, i32 5
+  %w3 = extractelement <8 x i32> %wide, i32 3
+  %c3a = icmp ne i32 %w5, 1
+  %c3b = icmp ne i32 %w3, 3
+  %c3 = or i1 %c3a, %c3b
+  ; Saturating conversions at the result's width: <127, -128, 0, 5> and <0, 65535>.
+  %bytes = call <4 x i8> @llvm.fptosi.sat.v4i8.v4f32(<4 x float> %floats)
+  %bytebits = bitcast <4 x i8> %bytes to i32
+  %c4 = icmp ne i32 %bytebits, 83919999
+  %halves = call <2 x i16> @llvm.fptoui.sat.v2i16.v2f64(<2 x double> %doubles)
+  %halfbits = bitcast <2 x i16> %halves to i32
+  %c5 = icmp ne i32 %halfbits, -65536
+  ; A funnel shift with a count per lane: <2, 0x80000001, 2, 0xA0000000>.
+  %funnel = call <4 x i32> @llvm.fshl.v4i32(<4 x i32> <i32 -2147483647, i32 -2147483647, i32 -2147483647, i32 -2147483647>, <4 x i32> <i32 1073741824, i32 1073741824, i32 1073741824, i32 1073741824>, <4 x i32> <i32 1, i32 0, i32 33, i32 31>)
+  %f0 = extractelement <4 x i32> %funnel, i32 0
+  %f1 = extractelement <4 x i32> %funnel, i32 1
+  %f3 = extractelement <4 x i32> %funnel, i32 3
+  %c6a = icmp ne i32 %f0, 2
+  %c6b = icmp ne i32 %f1, -2147483647
+  %c6c = icmp ne i32 %f3, -1610612736
+  %c6ab = or i1 %c6a, %c6b
+  %c6 = or i1 %c6ab, %c6c
+  ; Bit counts of zero lanes are the width: ctlz <32, 31, 0, 15>, cttz <64, 3>.
+  %leading = call <4 x i32> @llvm.ctlz.v4i32(<4 x i32> <i32 0, i32 1, i32 -1, i32 65536>, i1 false)
+  %leadingsum = call i32 @llvm.vector.reduce.add.v4i32(<4 x i32> %leading)
+  %c7 = icmp ne i32 %leadingsum, 78
+  %trailing = call <2 x i64> @llvm.cttz.v2i64(<2 x i64> <i64 0, i64 8>, i1 false)
+  %t0 = extractelement <2 x i64> %trailing, i32 0
+  %t1 = extractelement <2 x i64> %trailing, i32 1
+  %c8a = icmp ne i64 %t0, 64
+  %c8b = icmp ne i64 %t1, 3
+  %c8 = or i1 %c8a, %c8b
+  ; Reductions of three lanes (lane by lane), of two (shuffled), and NaN in maxnum and maximum.
+  %three = shufflevector <4 x i32> %words, <4 x i32> poison, <3 x i32> <i32 1, i32 2, i32 3>
+  %umax = call i32 @llvm.vector.reduce.umax.v3i32(<3 x i32> %three)
+  %c9 = icmp ne i32 %umax, -1
+  %pair = shufflevector <4 x i32> %words, <4 x i32> poison, <2 x i32> <i32 1, i32 3>
+  %pairsum = call i32 @llvm.vector.reduce.add.v2i32(<2 x i32> %pair)
+  %c10 = icmp ne i32 %pairsum, 65537
+  %largest = call float @llvm.vector.reduce.fmax.v4f32(<4 x float> %floats)
+  %c11 = fcmp une float %largest, 300.0
+  %maximum = call float @llvm.vector.reduce.fmaximum.v4f32(<4 x float> %floats)
+  %c12 = fcmp ord float %maximum, 0.0
+  %o1 = or i1 %c0, %c1
+  %o2 = or i1 %o1, %c2
+  %o3 = or i1 %o2, %c3
+  %o4 = or i1 %o3, %c4
+  %o5 = or i1 %o4, %c5
+  %o6 = or i1 %o5, %c6
+  %o7 = or i1 %o6, %c7
+  %o8 = or i1 %o7, %c8
+  %o9 = or i1 %o8, %c9
+  %o10 = or i1 %o9, %c10
+  %o11 = or i1 %o10, %c11
+  %o12 = or i1 %o11, %c12
+  %result = zext i1 %o12 to i32
+  ret i32 %result
+}
+
 define i32 @fallback(<4 x float> %floats, <4 x i24> %odd) {
 entry:
   ; Neither has a typed lowering: the function is scalarized before translation.
@@ -300,7 +372,10 @@ entry:
   %s1 = shl i32 %s, 12
   %r1 = shl i32 %r, 13
   %f1 = shl i32 %f, 14
-  %a = or i32 %p, %q1
+  %i = call i32 @intrinsics(<4 x i32> <i32 16909060, i32 1, i32 -1, i32 65536>, <4 x float> <float 300.0, float -300.0, float 0x7FF8000000000000, float 0x4016CCCCC0000000>, <2 x double> <double -5.0, double 1.0e6>)
+  %i1 = shl i32 %i, 15
+  %a0 = or i32 %p, %i1
+  %a = or i32 %a0, %q1
   %b = or i32 %a, %m1
   %c = or i32 %b, %s1
   %d = or i32 %c, %r1
@@ -316,3 +391,17 @@ declare float @llvm.vector.reduce.fadd.v4f32(float, <4 x float>)
 declare i1 @llvm.vector.reduce.or.v8i1(<8 x i1>)
 declare i1 @llvm.vector.reduce.and.v8i1(<8 x i1>)
 declare <4 x i32> @llvm.fptosi.sat.v4i32.v4f32(<4 x float>)
+declare <4 x i32> @llvm.bswap.v4i32(<4 x i32>)
+declare <4 x i32> @llvm.vector.reverse.v4i32(<4 x i32>)
+declare <2 x i32> @llvm.vector.extract.v2i32.v4i32(<4 x i32>, i64)
+declare <8 x i32> @llvm.vector.insert.v8i32.v4i32(<8 x i32>, <4 x i32>, i64)
+declare <4 x i8> @llvm.fptosi.sat.v4i8.v4f32(<4 x float>)
+declare <2 x i16> @llvm.fptoui.sat.v2i16.v2f64(<2 x double>)
+declare <4 x i32> @llvm.fshl.v4i32(<4 x i32>, <4 x i32>, <4 x i32>)
+declare <4 x i32> @llvm.ctlz.v4i32(<4 x i32>, i1)
+declare <2 x i64> @llvm.cttz.v2i64(<2 x i64>, i1)
+declare i32 @llvm.vector.reduce.add.v4i32(<4 x i32>)
+declare i32 @llvm.vector.reduce.umax.v3i32(<3 x i32>)
+declare i32 @llvm.vector.reduce.add.v2i32(<2 x i32>)
+declare float @llvm.vector.reduce.fmax.v4f32(<4 x float>)
+declare float @llvm.vector.reduce.fmaximum.v4f32(<4 x float>)
