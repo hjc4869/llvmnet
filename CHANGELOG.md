@@ -59,6 +59,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - Native extensions of the portable ABI (ADR-15): portable programs call host libraries such as EGL through a generated, platform-neutral managed assembly that loads the host's library at run time. `dlopen`, `dlsym`, `dlclose`, `dlerror` and `dladdr` serve the libraries of the extensions an image links (NX-02); an extension is a package under the sysroot's `ext/`, linked with `--extension=<name>` or `-l<name>` and listed by `--list-extensions` and `LlvmNet.Checks inspect` (NX-03); `scripts/ext-gen.py` generates one from a Khronos registry and `scripts/build-extensions.sh` builds, checks every stub against the C prototypes and installs it; `<llvmnet/ext.h>` declares `llvmnet_ext_available` and `llvmnet_ext_library` in both modes (NX-04).
 - The `gles` native extension: EGL 1.5, OpenGL ES 2.0 to 3.2 and desktop OpenGL from the Khronos registries, for Mesa on Linux and ANGLE on Windows and macOS (`-lEGL -lGLESv2`; `scripts/build-extensions.sh gles` installs it); `tests/ext-gles.sh` and the `gles` fixture of the `tests/xp/` bundle check it (NX-05).
 - `docs/user/extensions.md` (using a native extension) and `docs/dev/extensions.md` (writing one) (NX-06).
+- `LLVMNET_EXT_<NAME>_NON_BLOCKING=1` lets the entry points an extension marks non-blocking skip the GC transition: `glGetError` costs 2.2 ns instead of 3.8 (NativeAOT) or 5.1 (JIT) on Mesa (NX-11).
 
 ### Changed
 

@@ -42,6 +42,9 @@ mkdir -p "$test_output/aot"
 "$llvmnet" -O1 --nativeaot "$fixtures/gles.c" -lEGL -lGLESv2 -o "$test_output/aot/gles" >"$test_output/aot.log" 2>&1 ||
     { cat "$test_output/aot.log" >&2; exit 1; }
 run aot-llvmpipe env LIBGL_ALWAYS_SOFTWARE=1 "$test_output/aot/gles"
+# glGetError and eglGetError without the GC transition, which Mesa allows (NX-11).
+run jit-non-blocking env LIBGL_ALWAYS_SOFTWARE=1 LLVMNET_EXT_GLES_NON_BLOCKING=1 dotnet "$test_output/jit/gles.dll"
+run aot-non-blocking env LIBGL_ALWAYS_SOFTWARE=1 LLVMNET_EXT_GLES_NON_BLOCKING=1 "$test_output/aot/gles"
 # System mode links the host's libraries directly; the extension supplies only the library names.
 "$llvmnet" --runtime=system -O1 -I"$include" "$fixtures/gles.c" --extension=gles -o "$test_output/system/gles.dll"
 run system-llvmpipe env LIBGL_ALWAYS_SOFTWARE=1 dotnet "$test_output/system/gles.dll"

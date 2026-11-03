@@ -28,6 +28,7 @@ The registries and the headers they come with are pinned sources ([scripts/sourc
 | `callbacks` | The callback types that get reverse thunks, each with its pool size: the number of distinct portable functions that can be passed as such a callback |
 | `defaults` | The value an entry point returns when the host does not provide it, instead of ending the program (`eglGetDisplay`: `0`, which is `EGL_NO_DISPLAY`) |
 | `required` | The entry points `llvmnet_ext_available` requires the host to provide |
+| `non-blocking` | Entry points that may skip the GC transition when a run sets `LLVMNET_EXT_<NAME>_NON_BLOCKING=1`: only functions that, in every host library the extension may load, take no lock, never block and never call back (`glGetError` in Mesa; ANGLE takes a lock in it, which is why the switch is the user's) |
 | `headers` | The public headers: `from` (a pinned source's directory or the extension's own) and the `files` to copy, by their include names |
 | `licenses` | The notices to install under `share/licenses/<name>/`: `from` and the name to install it `as` |
 | `checks` | The C files of the signature check: each `name`, the `apis` whose entry points it declares, the `defines` and the `includes` (a set of headers that can be included together; GLES and desktop GL headers cannot) |
@@ -44,6 +45,7 @@ The assembly holds:
 
 - **A stub per entry point**, a public static method with `[CExport("<name>")]` whose CIL signature is llvmnet's mapping of the C prototype (integers of up to 32 bits `int`, 64-bit integers `long`, pointers `nint`, `float`, `double`). On its first call it binds to the host's function, the export of its library or else what the lookup function returns, and keeps the address in a static field. It calls the function through `delegate* unmanaged<...>` with the exact C types, so the CLR applies the host's calling convention: on Apple ARM64 the caller extends narrow integers, on SysV and Win64 the rules differ again, and the stub states only the C types. Narrow results are returned zero-extended, as translated code keeps them.
 - **The table**, every entry point's stub by name, which `dlsym` and the lookup function's stub return. A lookup returns a stub only when the host provides the function, so extension and version checks behave as natively.
+- **Non-blocking calls.** A stub of a `non-blocking` entry point calls through a second slot with `delegate* unmanaged[SuppressGCTransition]`, which binding fills only when the switch is on; the ordinary call is a method of its own, because the JIT sets up the transition frame in the prologue of any method that contains one, and NativeAOT's compiler merged two calls of one pointer that differed only in the transition.
 - **Reverse thunks** for each callback type in `callbacks`: a pool of `[UnmanagedCallersOnly]` methods that call the portable function stored in their slot, converting the C arguments back to llvmnet's forms. The same portable function always gets the same thunk.
 - **The registration class**, the one public `NativeExtension` subclass the image initializer registers, which tells `dlopen`, `dlsym` and `<llvmnet/ext.h>` about the host libraries.
 

@@ -57,6 +57,7 @@
     "eglGetCurrentSurface": "0",
     "eglReleaseThread": "1"
   },
+  "non-blocking": ["glGetError", "eglGetError"],
   "required": [
     "eglGetProcAddress", "eglGetDisplay", "eglInitialize", "eglChooseConfig", "eglCreateContext", "eglMakeCurrent",
     "eglGetError", "glGetString", "glGetError"

@@ -29,6 +29,7 @@
   "callbacks": { "GENcallback": 2, "GENlogproc": 2 },
   "defaults": { "genStatus": "0x77" },
   "required": ["genAdd", "genAuxValue"],
+  "non-blocking": ["genAdd", "genSwap"],
   "headers": [{ "from": "include", "files": ["llvmnet-gen.h"] }],
   "checks": [{ "name": "gen", "apis": ["gen", "genaux"], "includes": ["llvmnet-gen.h"] }]
 }

@@ -85,3 +85,21 @@ Not done in this item: the weekly job that rebuilds ANGLE and runs its smoke pro
 | Programs without extensions are byte-identical to before | the 51 portable fixtures of `tests/xp/fixtures.tsv` (C, C++ and Fortran) compiled by master's compiler (`941987e`) and by this branch's, both against this branch's sysroot with `gles` installed, are identical byte for byte once both compilers carry the same version stamp (`llvmnet.version` names the commit, so images from any two commits differ in it and in the image identity derived from the contents); the sysroot archives of both builds, 1,518 members, are identical after normalizing the build directory, except the five members NX-02 replaced (`dlopen`, `__dlsym`, `dlclose`, `dlerror`, `dladdr`) |
 | The ABI freeze test passes unchanged | yes; the header stamp is unchanged, because `<llvmnet/ext.h>` and the extensions' headers are outside the frozen set |
 | Core and toolchain gate | 103 of 103 tests pass (`tests/run.sh --tag core --tag toolchain --exclude-tag slow`, 291 s), with the two new tests `ext-gen` and `ext-gles` |
+
+## NX-11: the cost of a call
+
+`tests/extensions/gles.c bench <n>` times `glGetError` on Mesa (radeonsi), called directly and through the pointer `eglGetProcAddress` returns, and the first and second calls of 26 entry points the program has not called before. The runs below were pinned to one core (`taskset -c 4`; unpinned runs on this CPU vary by 2x) and interleaved, five rounds of 20 million calls each, minimum shown; JIT runs set `DOTNET_TC_CallCountingDelayMs=0`, because a 60 ms loop otherwise ends before the stub is recompiled at tier 1, and the default 100 ms delay is a start-up effect, not a steady-state one.
+
+| Build | `glGetError`, direct | through the pointer |
+| --- | --- | --- |
+| native clang-22 | 1.8 ns | 1.4 ns |
+| JIT, before NX-11 | 4.8 ns | 5.0 ns |
+| JIT | 5.1 ns | 5.2 ns |
+| JIT, `LLVMNET_EXT_GLES_NON_BLOCKING=1` | 2.2 ns | 2.4 ns |
+| NativeAOT, before NX-11 | 3.8 ns | 3.8 ns |
+| NativeAOT | 3.8 ns | 4.0 ns |
+| NativeAOT, `LLVMNET_EXT_GLES_NON_BLOCKING=1` | 2.2 ns | 2.4 ns |
+
+- **The GC transition is most of the overhead**: skipping it (`SuppressGCTransition`) leaves 0.4 to 0.8 ns over native. It is safe only for functions that never take a lock or call back, so the description marks them (`non-blocking`: `glGetError` and `eglGetError` in `gles`) and a run opts in: ANGLE's `glGetError` takes its share-context lock (`SCOPED_SHARE_CONTEXT_LOCK`), and a thread blocked on that lock without a transition can deadlock with a garbage collection that another thread, holding the lock in a debug callback, waits for.
+- **Two compiler behaviors shaped the stub.** The first version tested the switch and made one of two calls through the same pointer, with and without the transition; NativeAOT's compiler merged the two calls into the one without the transition and dropped the test, so the default path skipped the transition too (seen in the disassembly: no `RhpPInvoke` and no load of the switch). The fast call now goes through a slot of its own, filled at binding only when the switch is on. Under the JIT the fast path then gained nothing, because the JIT initializes the transition frame in the prologue of any method that contains an ordinary unmanaged call; that call is now a method of its own, which costs 0.3 ns in the default mode for the marked functions only.
+- **First calls.** Natively, the 26 first calls take 17 to 22 µs (lazy binding through libglvnd's dispatch), 0.4 µs the second time; from the NativeAOT executable 33 to 40 µs and 0.6 to 0.7 µs (binding costs about 0.6 µs more per function than the native loader's lazy binding); under the JIT 1.07 to 1.14 ms and 1.6 to 1.9 µs, which is the JIT compiling each stub. Binding every entry point at image start would cost about 4 ms under NativeAOT for `gles`'s 3,349 entry points, load the host libraries in programs that never draw, and change nothing about the JIT's compile cost, so binding stays lazy. A ReadyToRun build of the extension assembly would remove the JIT's share for one platform at a time; it is not done.

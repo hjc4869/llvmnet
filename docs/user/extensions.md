@@ -54,6 +54,10 @@ A program can also probe the way it would natively. Some functions have a defaul
 llvmnet: glClear: the host library GLESv2 of the native extension gles is not available (tried /app/libGLESv2.so.2, libGLESv2.so.2; LLVMNET_EXT_GLES_DIR names another directory): libGLESv2.so.2: cannot open shared object file: No such file or directory
 ```
 
+### The cost of a call
+
+A call through an extension costs about what the host's function costs plus the CLR's transition to native code: `glGetError` on Mesa measured 1.4 to 1.8 ns natively, 3.8 ns from a NativeAOT executable and 5.1 ns under the JIT ([evidence](../evidence/2026-11-03-native-extensions.md#nx-11-the-cost-of-a-call)). Setting `LLVMNET_EXT_GLES_NON_BLOCKING=1` lets the entry points an extension marks non-blocking (`glGetError` and `eglGetError` in `gles`) skip the transition, 2.2 ns in both modes. Set it only when the host library never takes a lock in them: Mesa's do not, but ANGLE's take a lock, and a thread blocked on it while the garbage collector waits for that thread would deadlock a program that calls GL from several threads. The first call of an entry point binds it, about 1.3 µs under NativeAOT; under the JIT it also compiles the stub, about 40 µs.
+
 ### dlopen and dlsym
 
 A program, or a library inside it such as ANGLE or Skia, that loads the API itself finds it through `dlopen`, under the Linux names on every host (portable programs see Linux, [modes.md](modes.md)): for `gles`, `libEGL.so.1`, `libEGL.so`, `libGLESv2.so.2` and `libGLESv2.so`. `dlopen` fails with the reason in `dlerror` when the host library is missing. `dlsym` and `eglGetProcAddress` return a pointer for a function the host provides and null for one it does not, so extension and version checks behave as natively; portable code calls the pointer as any function pointer. One difference: for a name the extension does not know, `eglGetProcAddress` returns null, where libglvnd's returns a dispatch stub for any name that starts with `gl`. A name no extension serves fails as before ([dev/host-abi.md](../dev/host-abi.md#dynamic-loading)).

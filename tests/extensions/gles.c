@@ -113,6 +113,17 @@ static void draw_and_read(const char *label) {
     glDeleteProgram(program);
 }
 
+/* Calls of entry points the program has not called before, with arguments that change no state that matters. */
+#define STATE_CALLS 26
+static void state_calls(void) {
+    glLineWidth(1.0f); glDepthMask(GL_TRUE); glColorMask(1, 1, 1, 1); glStencilMask(0xffffffffu); glPolygonOffset(0, 0);
+    glSampleCoverage(1.0f, GL_FALSE); glBlendColor(0, 0, 0, 0); glClearDepthf(1.0f); glClearStencil(0); glFrontFace(GL_CCW);
+    glCullFace(GL_BACK); glHint(GL_GENERATE_MIPMAP_HINT, GL_DONT_CARE); glDepthFunc(GL_LESS); glDepthRangef(0, 1);
+    glBlendEquation(GL_FUNC_ADD); glBlendFunc(GL_ONE, GL_ZERO); glPixelStorei(GL_PACK_ALIGNMENT, 4); glActiveTexture(GL_TEXTURE0);
+    glStencilFunc(GL_ALWAYS, 0, 0xff); glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); glIsTexture(0); glIsBuffer(0); glIsProgram(0);
+    glIsShader(0); glIsFramebuffer(0); glIsRenderbuffer(0);
+}
+
 static double now(void) {
     struct timespec time;
     clock_gettime(CLOCK_MONOTONIC, &time);
@@ -147,6 +158,14 @@ int main(int argc, char **argv) {
         for (long i = 0; i < count; i++) get_error();
         double pointer = (now() - start) / count;
         printf("glGetError: %.1f ns per direct call, %.1f ns through eglGetProcAddress's pointer\n", direct, pointer);
+        /* The first call of an entry point binds it (and, under the JIT, compiles its stub); later calls do not. */
+        double first = now();
+        state_calls();
+        first = now() - first;
+        double again = now();
+        state_calls();
+        again = now() - again;
+        printf("first calls: %.1f us for %d entry points, %.2f us for the same calls again\n", first / 1e3, STATE_CALLS, again / 1e3);
         return 0;
     }
     draw_and_read("GLES 2 pixels");

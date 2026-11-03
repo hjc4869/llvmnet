@@ -431,6 +431,7 @@ class Emitter:
         self.required = description.get('required', [])
         self.excluded = set(description.get('exclude', []))
         self.pools = description.get('callbacks', {})
+        self.non_blocking = set(description.get('non-blocking', []))
         self.commands = []          # (Command, library name), proxied
         self.unsupported = []       # (Command, library name, reason): stubs that fail
         self.skipped = []           # (name, reason): no stub at all
@@ -471,9 +472,12 @@ class Emitter:
                         if callback.problem:
                             raise GenerationError(f'the callback type {t[1]} cannot have reverse thunks: {callback.problem}')
                         self.thunked.add(t[1])
-        for name in list(self.defaults) + self.required:
+        for name in list(self.defaults) + self.required + sorted(self.non_blocking):
             if not any(command.name == name for command, _ in self.commands):
-                raise GenerationError(f'"{name}" in "defaults" or "required" is not a proxied entry point')
+                raise GenerationError(f'"{name}" in "defaults", "required" or "non-blocking" is not a proxied entry point')
+        for command, _ in self.commands:
+            if command.name in self.non_blocking and any(t[0] == 'callback' for t in command.types):
+                raise GenerationError(f'{command.name} takes a callback, so it cannot be "non-blocking"')
         for name in self.pools:
             if name not in self.model.callbacks:
                 raise GenerationError(f'"callbacks" names {name}, which no proxied entry point takes')
@@ -506,6 +510,9 @@ class Emitter:
         self.emit_stubs(w)
         w('')
         self.emit_table(w)
+        if self.non_blocking:
+            w('')
+            self.emit_non_blocking(w)
         if self.thunked:
             w('')
             self.emit_callbacks(w)
@@ -602,26 +609,52 @@ class Emitter:
             return
         slot = f'__{command.name}'
         field = self.library_field(library)
+        non_blocking = command.name in self.non_blocking
         w(f'    public static {ret} {command.name}({params})')
         w('    {')
-        w(f'        nint __f = {slot};')
-        if command.name in self.defaults:
-            default = self.defaults[command.name]
-            value = '' if ret == 'void' else f' {default}'
-            w(f'        if (__f == 0 && (__f = {self.type_name}.Host.TryBind(ref {slot}, {self.type_name}.{field}, {literal(command.name)})) == 0) return{value};')
-        else:
-            w(f'        if (__f == 0) __f = {self.type_name}.Host.Bind(ref {slot}, {self.type_name}.{field}, {literal(command.name)});')
         args = []
         for name, t in zip(names, command.types):
             if t[0] == 'callback':
                 if t[1] in self.thunked:
                     args.append(f'Callbacks.{t[1]}.Thunk({name})')
                 else:
-                    w(f'        if ({name} != 0) {self.type_name}.Unsupported({literal(command.name + ": the native extension " + self.name + " has no reverse thunks for " + t[1] + " callbacks, so it can pass only a null one")});')
                     args.append(name)
             else:
                 args.append(to_native(t, name))
         signature = ', '.join([native_type(t) for t in command.types] + [native_type(command.ret)])
+        if non_blocking:
+            # With LLVMNET_EXT_<NAME>_NON_BLOCKING=1, an entry point the description marks non-blocking skips the GC
+            # transition, which is safe only when the host's implementation takes no lock and never calls back. The
+            # address sits in a slot of its own, filled at binding only then, and the ordinary call is a method of its
+            # own: the JIT sets up a transition frame in the prologue of any method with an ordinary unmanaged call,
+            # and the NativeAOT compiler can merge two calls of one pointer that differ only in the transition.
+            fast = f'((delegate* unmanaged[SuppressGCTransition]<{signature}>)__g)({", ".join(args)})'
+            forward = ', '.join(names)
+            w(f'        nint __g = {slot}_non_blocking;')
+            w(f'        if (__g != 0) {"{ " + fast + "; return; }" if ret == "void" else "return " + to_managed(command.ret, fast) + ";"}')
+            w(f'        {"" if ret == "void" else "return "}{command.name}_transition({forward});')
+            w('    }')
+            w(f'    private static nint {slot}_non_blocking;')
+            w('')
+            w('    [MethodImpl(MethodImplOptions.NoInlining)]')
+            w(f'    private static {ret} {command.name}_transition({params})')
+            w('    {')
+        w(f'        nint __f = {slot};')
+        bind_suffix = f' if (NonBlocking.Enabled) {slot}_non_blocking = __f;' if non_blocking else ''
+        if command.name in self.defaults:
+            default = self.defaults[command.name]
+            value = '' if ret == 'void' else f' {default}'
+            w(f'        if (__f == 0 && (__f = {self.type_name}.Host.TryBind(ref {slot}, {self.type_name}.{field}, {literal(command.name)})) == 0) return{value};')
+            if non_blocking:
+                w(f'       {bind_suffix}')
+        else:
+            if non_blocking:
+                w(f'        if (__f == 0) {{ __f = {self.type_name}.Host.Bind(ref {slot}, {self.type_name}.{field}, {literal(command.name)});{bind_suffix} }}')
+            else:
+                w(f'        if (__f == 0) __f = {self.type_name}.Host.Bind(ref {slot}, {self.type_name}.{field}, {literal(command.name)});')
+        for name, t in zip(names, command.types):
+            if t[0] == 'callback' and t[1] not in self.thunked:
+                w(f'        if ({name} != 0) {self.type_name}.Unsupported({literal(command.name + ": the native extension " + self.name + " has no reverse thunks for " + t[1] + " callbacks, so it can pass only a null one")});')
         call = f'((delegate* unmanaged<{signature}>)__f)({", ".join(args)})'
         if ret == 'void':
             w(f'        {call};')
@@ -630,6 +663,14 @@ class Emitter:
         w('    }')
         w(f'    private static nint {slot};')
         w('')
+
+    def emit_non_blocking(self, w):
+        variable = f'LLVMNET_EXT_{self.name.upper().replace("-", "_")}_NON_BLOCKING'
+        w(f'/// <summary>Whether the non-blocking entry points skip the GC transition: {variable}=1 (docs/user/extensions.md).</summary>')
+        w('internal static class NonBlocking')
+        w('{')
+        w(f'    internal static readonly bool Enabled = System.Environment.GetEnvironmentVariable({literal(variable)}) == "1";')
+        w('}')
 
     def emit_table(self, w):
         w('/// <summary>Every proxied entry point by name, with its stub and the host library it belongs to.</summary>')

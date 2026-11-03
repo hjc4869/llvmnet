@@ -49,6 +49,9 @@ mkdir -p "$test_output/aot"
 "$llvmnet" -O1 --nativeaot "$fixtures/generated.c" -lllvmnet-gen -o "$test_output/aot/generated" >"$test_output/aot.log" 2>&1 ||
     { cat "$test_output/aot.log" >&2; exit 1; }
 LLVMNET_EXT_GENERATED_DIR="$native" "$test_output/aot/generated" | diff -u "$test_output/native.txt" -
+# The non-blocking entry points (genAdd, genSwap) skip the GC transition when the run asks for it (NX-11).
+LLVMNET_EXT_GENERATED_DIR="$native" LLVMNET_EXT_GENERATED_NON_BLOCKING=1 dotnet "$test_output/jit/generated.dll" | diff -u "$test_output/native.txt" -
+LLVMNET_EXT_GENERATED_DIR="$native" LLVMNET_EXT_GENERATED_NON_BLOCKING=1 "$test_output/aot/generated" | diff -u "$test_output/native.txt" -
 LIBRARY_PATH="$native" LD_LIBRARY_PATH="$native" "$llvmnet" --runtime=system -O1 -DLLVMNET_SYSTEM_TEST -I"$include" \
     "$fixtures/generated.c" --extension=generated -o "$test_output/system/generated.dll"
 LD_LIBRARY_PATH="$native" dotnet "$test_output/system/generated.dll" | diff -u "$test_output/native.txt" -
@@ -57,7 +60,7 @@ diff -u - "$test_output/system.txt" <<'EOF'
 available: 1
 library: generated: linked in system mode with libllvmnet-gen-aux.so.1 libllvmnet-gen.so.1
 EOF
-printf 'PASS: the generated extension prints what native prints under the JIT, NativeAOT and system mode\n'
+printf 'PASS: the generated extension prints what native prints under the JIT, NativeAOT (also with the non-blocking calls) and system mode\n'
 
 # expect_failure <expected stderr line> <command...>: the command must exit with 127 and print exactly that line last.
 expect_failure() {
