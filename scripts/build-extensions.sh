@@ -79,7 +79,11 @@ build_extension() {
     # The check files compile against the package's headers alone, as a program would see them once it is installed.
     mkdir -p "$check"
     local file ir=() objects=()
-    for file in "$generated"/check/*.c; do
+    # The wrappers of the entry points that pass structures by value are part of the package, compiled for the portable
+    # target, and checked with the rest (NX-07).
+    local wrappers=()
+    [[ -f "$generated/wrappers.c" ]] && wrappers=("$generated/wrappers.c")
+    for file in "$generated"/check/*.c "${wrappers[@]}"; do
         local stem
         stem="$(basename "$file" .c)"
         if [[ "$stem" != main ]]; then
@@ -98,6 +102,7 @@ build_extension() {
     mkdir -p "$stage/lib"
     cp -a "$generated/package/." "$stage/"
     cp "$build/bin/$assembly.dll" "$stage/lib/"
+    if [[ ${#wrappers[@]} -ne 0 ]]; then cp "$check/wrappers.o" "$stage/lib/wrappers.o"; fi
     printf '%s\n' "$inputs" >"$stage/.llvmnet-inputs"
     rm -rf "${package:?}.old"
     [[ -d "$package" ]] && mv "$package" "$package.old"

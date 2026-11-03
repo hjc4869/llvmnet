@@ -145,3 +145,16 @@ The generator reads C headers through the JSON AST of llvmnet's Clang for the po
 | A header with a variadic function and a structure passed by value | the variadic function is left out with the reason; the structure stops the generation (`var_point in variadic.h: struct point is passed by value`) until `exclude` names the function |
 
 A setter's returned callback goes back to the program's function through the thunk pool (`NativeCallbacks.Target`); a host function pointer that is not one of the thunks ends the program with a message.
+
+## NX-07: structures by value
+
+A command that passes or returns a structure by value gets an internal stub that takes the structures by address and a C wrapper with the command's own prototype, compiled into the package as `lib/wrappers.o` and linked into every portable program that uses the extension; the stub hands the host typed CLR structures, so the CLR applies each host's classification. `tests/extensions/structs/` describes, by its header, an API with a pair of floats (8 bytes), an int with a double (16), 17 bytes, four doubles (32), a nested structure (12) and a 3-byte one, as parameters and results; `tests/extensions/structs.c` calls all eleven entry points and two through `dlsym`.
+
+| Host, convention | Native library built with | Builds that print the native output |
+| --- | --- | --- |
+| Linux x64, System V | clang-22 | native, portable JIT, NativeAOT, system mode (without the calls through `dlsym`, which system mode does not make with structures by value) |
+| Linux ARM64, AAPCS64 (Docker with qemu) | clang-22 cross-compiling with Debian's `gcc-aarch64-linux-gnu` | the bundle's portable JIT image; a NativeAOT executable cross-published from Linux x64 |
+| macOS ARM64, Apple's AAPCS64 variant | Apple clang 21 on the host | the bundle's portable JIT image and the NativeAOT executable published on the host |
+| Windows x64, Microsoft x64 | Visual Studio 2026's `cl` on the host | the bundle's portable JIT image and the NativeAOT executable published on the host |
+
+The four shapes cover the conventions' cases: on x86-64 System V the pair of floats is one SSE register and the int with a double an integer and an SSE register, both of which Windows passes by reference; on ARM64 the pair and the four doubles are homogeneous floating-point aggregates in floating-point registers; 17 bytes go in memory or by reference everywhere. A union by value is rejected (`tests/ext-headers.sh`), as are bit-fields, arrays of structures and function pointers inside a structure passed by value.

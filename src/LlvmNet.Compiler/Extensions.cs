@@ -19,6 +19,10 @@ internal sealed record ExtensionPackage(string Name, string Version, string Dire
     internal string Assembly => Path.Combine(Directory, "lib", "LlvmNet.Ext." + string.Concat(Name.Split('-', StringSplitOptions.RemoveEmptyEntries).Select(part => char.ToUpperInvariant(part[0]) + part[1..])) + ".dll");
 
     internal string Tag => $"{Name}/{Version}";
+
+    /// <summary>lib/wrappers.o: the bitcode wrappers of the entry points that pass structures by value (NX-07), linked into
+    /// every portable image that uses the extension; absent when it has none.</summary>
+    internal string Wrappers => Path.Combine(Directory, "lib", "wrappers.o");
 }
 
 internal static partial class Extensions

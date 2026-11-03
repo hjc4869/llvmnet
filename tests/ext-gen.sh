@@ -132,6 +132,6 @@ reject() { # <C parameter text> <expected message>
 reject 'long' 'genAdd in registry.xml: long: long is 64 bits in the portable ABI but 32 bits on Windows'
 reject 'unsigned long' 'genAdd in registry.xml: unsigned long: unsigned long is 64 bits in the portable ABI but 32 bits on Windows'
 reject 'long double' 'genAdd in registry.xml: long double: long double is 80-bit extended precision'
-reject 'struct GENobject_T' 'genAdd in registry.xml: struct GENobject_T is passed by value; structures by value are not supported yet (NX-07)'
+reject 'struct GENobject_T' 'genAdd in registry.xml: struct GENobject_T is passed by value, and its members are not in the registries'
 reject 'GENunknown' "genAdd in registry.xml: unknown C type 'GENunknown'"
-printf 'PASS: long, long double, structures by value and unknown types are rejected with the entry point and the reason\n'
+printf 'PASS: long, long double, incomplete structures by value and unknown types are rejected with the entry point and the reason\n'

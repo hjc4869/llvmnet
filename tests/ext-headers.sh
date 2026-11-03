@@ -40,15 +40,15 @@ LIBRARY_PATH="$native" LD_LIBRARY_PATH="$native" "$llvmnet" --runtime=system -O1
 LD_LIBRARY_PATH="$native" dotnet "$test_output/system/glfw.dll" | diff -u "$expected" -
 printf 'PASS: an extension generated from glfw3.h prints what native GLFW prints (JIT, NativeAOT, system mode)\n'
 
-# A header's variadic functions are left out with the reason; a structure passed by value stops the generation with the
-# function and the reason, until the description excludes it (structures by value are NX-07).
+# A header's variadic functions are left out with the reason; a union passed by value stops the generation with the
+# function and the reason, until the description excludes it.
 case="$test_output/variadic"
 mkdir -p "$case/include"
 cat >"$case/include/variadic.h" <<'HEADER'
-typedef struct { int x, y; } point;
+typedef union { int i; float f; } number;
 int var_print(const char *format, ...);
 int var_add(int a, int b);
-int var_point(point p);
+int var_point(number n);
 HEADER
 cat >"$case/extension.json" <<'JSON'
 { "name": "variadic", "version": "1.0.0",
@@ -69,9 +69,9 @@ JSON
 status=0
 python3 -I "$root/scripts/ext-gen.py" generate "$case/including.json" --output "$case/out2" --llvmnet-version 0.0.0 --compiler "$llvmnet" \
     >/dev/null 2>"$case/error.txt" || status=$?
-if [[ "$status" -ne 1 ]] || ! grep -q 'var_point in variadic.h: .* is passed by value' "$case/error.txt"; then
+if [[ "$status" -ne 1 ]] || ! grep -q 'var_point in variadic.h: the union number is passed by value; unions by value are not supported' "$case/error.txt"; then
     printf 'FAIL: var_point was not rejected:\n' >&2
     cat "$case/error.txt" >&2
     exit 1
 fi
-printf 'PASS: variadic functions are left out and structures by value rejected, with the reason\n'
+printf 'PASS: variadic functions are left out and unions by value rejected, with the reason\n'

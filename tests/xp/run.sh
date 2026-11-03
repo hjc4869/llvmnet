@@ -81,6 +81,10 @@ unavailable() {
             if [[ -n "${LLVMNET_EXT_GLES_DIR:-}" ]] || grep -q 'libEGL\.so\.1 ' <<<"$libraries"; then return 1; fi
             printf 'no EGL and GLES libraries (set LLVMNET_EXT_GLES_DIR to a directory with ANGLE'"'"'s libEGL and libGLESv2)'
             return 0 ;;
+        native:*)
+            native_library "${1#native:}" >/dev/null && return 1
+            printf 'no compiler for the native test library %s (clang on macOS, Visual Studio'"'"'s cl on Windows)' "${1#native:}"
+            return 0 ;;
         extension:vulkan)
             if [[ -n "${LLVMNET_EXT_VULKAN_DIR:-}" ]] || grep -q 'libvulkan\.so\.1 ' <<<"$libraries" ||
                 [[ "$system" == windows && -f "${WINDIR:-C:/Windows}/System32/vulkan-1.dll" ]]; then return 1; fi
@@ -88,6 +92,42 @@ unavailable() {
             return 0 ;;
     esac
     return 1
+}
+# The directory of a native test library the bundle carries as source (native-src/<name>), built here with the host's
+# compiler, or cross-compiled by build.sh for Linux; prints it, or fails when the host has no compiler (NX-07).
+native_library() {
+    local name="$1" directory="$results/native-lib/$name" prebuilt
+    prebuilt="$bundle/native-lib/$system-$(uname -m)"
+    if [[ -f "$directory/.built" ]]; then printf '%s\n' "$directory"; return 0; fi
+    mkdir -p "$directory"
+    if [[ "$system" == linux && -d "$prebuilt" ]]; then
+        cp "$prebuilt"/* "$directory/"
+    elif [[ "$system" == macos ]] && command -v clang >/dev/null 2>&1; then
+        clang -dynamiclib -O1 -I"$bundle/native-src/$name/include" "$bundle/native-src/$name/native.c" \
+            -o "$directory/libllvmnet-$name.dylib" >"$directory/build.log" 2>&1 || return 1
+    elif [[ "$system" == windows ]]; then
+        local vcvars
+        vcvars="$(ls "/c/Program Files/Microsoft Visual Studio"/*/*/VC/Auxiliary/Build/vcvars64.bat 2>/dev/null | tail -1)"
+        [[ -n "$vcvars" ]] || return 1
+        printf '@call "%s" >nul\r\n@cl /nologo /LD /O1 /I include native.c /Fe:llvmnet-%s.dll\r\n' "$(cygpath -w "$vcvars")" "$name" \
+            >"$bundle/native-src/$name/build.bat"
+        (cd "$bundle/native-src/$name" && cmd //c build.bat >"$directory/build.log" 2>&1) || return 1
+        cp "$bundle/native-src/$name/llvmnet-$name.dll" "$directory/"
+    else
+        return 1
+    fi
+    touch "$directory/.built"
+    printf '%s\n' "$directory"
+}
+# The fixture's environment, with LLVMNET_EXT_<NAME>_DIR naming its native test library when it needs one.
+fixture_environment() {
+    local environment="$1" requires="$2" directory variable
+    if [[ "$requires" == native:* ]] && directory="$(native_library "${requires#native:}")"; then
+        if [[ "$system" == windows ]]; then directory="$(cygpath -w "$directory")"; fi
+        variable="LLVMNET_EXT_$(tr '[:lower:]-' '[:upper:]_' <<<"${requires#native:}")_DIR=$directory"
+        if [[ "$environment" == - ]]; then environment="$variable"; else environment="$environment;$variable"; fi
+    fi
+    printf '%s' "$environment"
 }
 # Runs one image or executable in a fresh directory and compares stdout and the exit status with the native record.
 check() {
@@ -137,7 +177,7 @@ while IFS=$'\t' read -r name aot_flag arguments environment requires; do
         continue
     fi
     if [[ $jit -eq 1 ]]; then
-        check "$name" jit "$arguments" "$environment" "$dotnet" "$bundle/images/$name.dll" || true
+        check "$name" jit "$arguments" "$(fixture_environment "$environment" "$requires")" "$dotnet" "$bundle/images/$name.dll" || true
     fi
 done <"$bundle/manifest.tsv"
 if [[ $aot -eq 1 ]]; then
@@ -166,7 +206,7 @@ if [[ $aot -eq 1 ]]; then
             tail -20 "$results/$name-publish/publish.log"
             continue
         fi
-        check "$name" aot "$arguments" "$environment" "$executable" || true
+        check "$name" aot "$arguments" "$(fixture_environment "$environment" "$(tr -d '\r' <<<"${requires:-}")")" "$executable" || true
     done <"$bundle/manifest.tsv"
 fi
 printf '%s: %d passed, %d failed, %d skipped (%s)\n' "$host" "$passed" "$failed" "$skipped" "$results/results.tsv" | tee -a "$results/host.txt"

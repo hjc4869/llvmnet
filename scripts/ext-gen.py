@@ -105,7 +105,8 @@ def csharp_name(name):
 
 
 def cil_type(ctype):
-    """llvmnet's CIL type for a C type (TypeSystem.Map): i1 to i32 int, i64 long, pointers nint."""
+    """llvmnet's CIL type for a C type (TypeSystem.Map): i1 to i32 int, i64 long, pointers nint; a structure passed by
+    value reaches its stub as a pointer (NX-07)."""
     kind = ctype[0]
     if kind == 'void':
         return 'void'
@@ -119,6 +120,8 @@ def cil_type(ctype):
 def native_type(ctype):
     """The exact C# type of the host's C type, so that the CLR passes it as the host's calling convention requires."""
     kind = ctype[0]
+    if kind == 'struct':
+        return f'Structs.{ctype[1]}'
     if kind == 'int':
         bits, signed, pointer_sized = ctype[1:]
         if pointer_sized:
@@ -130,6 +133,8 @@ def native_type(ctype):
 def llvm_type(ctype):
     """How Clang declares the C type for the portable target: the LLVM type and the extension attribute of a narrow integer."""
     kind = ctype[0]
+    if kind == 'struct':
+        return 'ptr'
     if kind == 'int':
         bits, signed = ctype[1], ctype[2]
         return f'i{bits}' + ((' signext' if signed else ' zeroext') if bits < 32 else '')
@@ -140,6 +145,8 @@ def llvm_type(ctype):
 
 def to_native(ctype, value):
     """Converts a stub's CIL argument to the host's C type."""
+    if ctype[0] == 'struct':
+        return f'*(Structs.{ctype[1]}*){value}'
     managed, native = cil_type(ctype), native_type(ctype)
     return value if managed == native else f'({native}){value}'
 
@@ -519,15 +526,23 @@ class HeaderRegistry:
         self.commands = {}
         self.variadic = []
         include, exclude = spec.get('include', ['*']), spec.get('exclude', [])
+        anonymous = {}
         for node in ast.get('inner', []):
             kind, name = node.get('kind'), node.get('name')
+            if kind == 'RecordDecl' and not name and node.get('completeDefinition'):
+                anonymous[node.get('id')] = node
+                continue
             if not name:
                 continue
             if kind == 'TypedefDecl':
                 text = node['type']['qualType']
                 pointer = function_pointer(text)
+                # typedef struct { ... } point;: the typedef names the anonymous record it owns.
+                owned = [decl for decl in self._references(node) if decl in anonymous]
                 if pointer:
                     self.callbacks[name] = pointer
+                elif owned:
+                    self.structs[name] = HeaderStructure(name, anonymous[owned[0]])
                 else:
                     self.typedefs[name] = text
             elif kind == 'RecordDecl':
@@ -548,6 +563,21 @@ class HeaderRegistry:
                 params = [Param(param.get('name') or f'p{index}', param['type']['qualType'])
                           for index, param in enumerate(child for child in node.get('inner', []) if child.get('kind') == 'ParmVarDecl')]
                 self.commands[name] = Command(name, return_text(node['type']['qualType']), params, self)
+
+    @staticmethod
+    def _references(node):
+        """The ids of the declarations a node's subtree refers to (ownedTagDecl, decl)."""
+        stack, ids = [node], []
+        while stack:
+            current = stack.pop()
+            if isinstance(current, dict):
+                for key in ('ownedTagDecl', 'decl'):
+                    if isinstance(current.get(key), dict) and current[key].get('id'):
+                        ids.append(current[key]['id'])
+                stack.extend(value for value in current.values() if isinstance(value, (dict, list)))
+            elif isinstance(current, list):
+                stack.extend(current)
+        return ids
 
     def selected(self, apis, kind='command'):
         return list(self.commands) if kind == 'command' else set()
@@ -618,8 +648,8 @@ class Model:
         stripped = spaced(QUALIFIERS.sub(' ', text))
         if '*' in stripped or '[' in stripped:
             return POINTER
-        if stripped.startswith('struct '):
-            raise GenerationError(f'{stripped} is passed by value; structures by value are not supported yet (NX-07)')
+        if stripped.startswith('struct ') or stripped.startswith('union '):
+            return self.by_value(stripped)
         if stripped in self.excluded_types:
             raise ExcludedType(stripped)
         if stripped in self.overrides:
@@ -644,8 +674,32 @@ class Model:
         if kind == 'enum':
             return BASE_TYPES['int32_t']
         if kind == 'struct':
-            raise GenerationError(f'struct {stripped} is passed by value; structures by value are not supported yet (NX-07)')
+            return self.by_value(stripped)
         raise GenerationError(f'{stripped} is {value}; give it a meaning in "types" or exclude it with "exclude-types"')
+
+    def by_value(self, text):
+        """('struct', name) for a structure passed by value (NX-07), whose members the stub can lay out as a typed CLR
+        structure: integers, floating point, pointers, arrays of those and nested structures."""
+        name = re.sub(r'^(struct|union) ', '', text)
+        structure = self.structure(name)
+        if structure is None or not structure.members:
+            raise GenerationError(f'{text} is passed by value, and its members are not in the registries')
+        if structure.union:
+            raise GenerationError(f'the union {name} is passed by value; unions by value are not supported')
+        if structure.bitfields:
+            raise GenerationError(f'{name} is passed by value and has bit-fields, whose layout differs between compilers')
+        for member in structure.members:
+            member_text = spaced(QUALIFIERS.sub(' ', member.text))
+            base = re.sub(r'\[[^\]]*\]', '', member_text).strip()
+            if '*' in base:
+                continue
+            resolved = self.resolve(base)
+            if resolved[0] == 'callback':
+                raise GenerationError(f'{name} is passed by value and holds the function pointer {member.name}')
+            if resolved[0] == 'struct' and '[' in member_text:
+                raise GenerationError(f'{name} is passed by value and holds an array of structures ({member.name})')
+        self.layout(name)
+        return ('struct', structure.name)
 
     def callback(self, name, signature):
         if name in self.callbacks:
@@ -801,6 +855,8 @@ class Emitter:
         self.wraps = {}             # command name -> [(parameter index, 'copy' or 'chain', struct name)]
         self.patched = {}           # struct name -> (size, {member: offset}, [(member, offset, callback type)], sType value)
         self.chains = {}            # struct name -> [struct names whose nodes its pNext chain may carry with callbacks]
+        self.wrapped = {}           # command name -> the internal CExport name of a command with structures by value
+        self.by_value = []          # the structures passed by value, nested ones included, for the Structs class
         self.commands = []          # (Command, library name), proxied
         self.unsupported = []       # (Command, library name, reason): stubs that fail
         self.skipped = []           # (name, reason): no stub at all
@@ -834,6 +890,17 @@ class Emitter:
                 if name in self.replace:
                     self.commands.append((command, library))
                     continue
+                if command.ret[0] == 'struct' or any(t[0] == 'struct' for t in command.types):
+                    # A C wrapper linked into the program takes the structures by value and calls an internal stub with
+                    # pointers; the stub passes them to the host as typed CLR structures (NX-07).
+                    if name in self.non_blocking or name in self.defaults:
+                        raise GenerationError(f'{name} passes a structure by value, so it cannot be "non-blocking" or have a default')
+                    if any('(*' in param.text for param in command.params):
+                        raise GenerationError(f'{name} passes a structure by value and takes an unnamed function pointer type')
+                    self.wrapped[name] = f'__llvmnet_ext_{re.sub(r"\W", "_", self.name)}_{name}'
+                    for t in [command.ret] + command.types:
+                        if t[0] == 'struct':
+                            self.add_by_value(t[1])
                 if command.ret[0] == 'callback' and command.ret[1] not in self.pools:
                     self.unsupported.append((command, library, f'it returns a host function pointer ({command.ret[1]}), which a portable program cannot call'))
                     continue
@@ -933,6 +1000,98 @@ class Emitter:
                     self.chains[base] = extenders[base]
                     self.wraps.setdefault(command.name, []).append((index, 'chain', base))
 
+    def add_by_value(self, name):
+        if name in self.by_value:
+            return
+        for member in self.model.structure(name).members:
+            base = re.sub(r'\[[^\]]*\]', '', spaced(QUALIFIERS.sub(' ', member.text))).strip()
+            if '*' not in base:
+                resolved = self.model.resolve(base)
+                if resolved[0] == 'struct':
+                    self.add_by_value(resolved[1])
+        self.by_value.append(name)
+
+    def export_name(self, command):
+        return self.wrapped.get(command.name, command.name)
+
+    def signature(self, command):
+        """The LLVM declaration of the stub's C symbol: a wrapped command's internal stub takes its structures as pointers
+        and a structure result through a first pointer."""
+        if command.ret[0] == 'struct':
+            return ['void', 'ptr'] + [llvm_type(t) for t in command.types]
+        return [llvm_type(command.ret)] + [llvm_type(t) for t in command.types]
+
+    def emit_structs(self, w):
+        w('/// <summary>Structures passed by value, laid out as C lays them out for these member types on every 64-bit host.</summary>')
+        w('internal static unsafe class Structs')
+        w('{')
+        fixed_types = {'sbyte', 'byte', 'short', 'ushort', 'int', 'uint', 'long', 'ulong', 'float', 'double'}
+        for name in self.by_value:
+            structure = self.model.structure(name)
+            size = self.model.layout(name)[0]
+            w(f'    /// <summary>{name} ({size} bytes).</summary>')
+            w('    [StructLayout(LayoutKind.Sequential)]')
+            w(f'    public unsafe struct {csharp_name(name)}')
+            w('    {')
+            for member in structure.members:
+                text = spaced(QUALIFIERS.sub(' ', member.text))
+                dimensions = re.findall(r'\[\s*([^\]]+?)\s*\]', text)
+                base = re.sub(r'\[[^\]]*\]', '', text).strip()
+                field = csharp_name(member.name) + ('_' if member.name == name else '')
+                kind = 'nint' if '*' in base else native_type(self.model.resolve(base))
+                if dimensions:
+                    count = 1
+                    for dimension in dimensions:
+                        count *= int(dimension, 0) if re.match(r'^\d+$', dimension) else self.model.value(dimension)
+                    element = {'nint': 'long', 'nuint': 'ulong'}.get(kind, kind)
+                    if element not in fixed_types:
+                        raise GenerationError(f'{name}.{member.name} is an array of {kind}, which a CLR structure cannot hold in place')
+                    w(f'        public fixed {element} {field}[{count}];')
+                else:
+                    w(f'        public {kind} {field};')
+            w('    }')
+        w('}')
+
+    def wrappers(self):
+        """The C wrappers of the commands with structures by value, compiled to bitcode into the package
+        (lib/wrappers.o) and linked into every portable program that uses the extension."""
+        lines = [f'/* Generated by scripts/ext-gen.py: the {self.name} native extension\'s wrappers for structures passed by value (NX-07). */']
+        for spec, registry in self.registries:
+            if isinstance(registry, HeaderRegistry):
+                lines += [f'#define {define} 1' for define in spec.get('defines', [])]
+                lines.append(f'#include <{spec["header"]}>')
+        lines.append('void __llvmnet_ext_register(const char *extension, const char *name, void *function);')
+        for command, _ in self.commands:
+            internal = self.wrapped.get(command.name)
+            if internal is None:
+                continue
+            ret_text = ' '.join(command.ret_text.split())
+            stub_params, call = [], []
+            if command.ret[0] == 'struct':
+                stub_params.append(f'{QUALIFIERS.sub(" ", ret_text).strip()} *__result')
+                call.append('&__result')
+            for param, t in zip(command.params, command.types):
+                if t[0] == 'struct':
+                    stub_params.append(f'const {spaced(QUALIFIERS.sub(" ", param.text))} *{param.name}')
+                    call.append(f'&{param.name}')
+                else:
+                    stub_params.append(param.declaration)
+                    call.append(param.name)
+            declarations = ', '.join(param.declaration for param in command.params) or 'void'
+            lines.append(f'{"void" if command.ret[0] == "struct" else ret_text} {internal}({", ".join(stub_params) or "void"});')
+            if command.ret[0] == 'struct':
+                lines.append(f'{ret_text} {command.name}({declarations}) {{ {QUALIFIERS.sub(" ", ret_text).strip()} __result; {internal}({", ".join(call)}); return __result; }}')
+            else:
+                lines.append(f'{ret_text} {command.name}({declarations}) {{ {"" if command.ret[0] == "void" else "return "}{internal}({", ".join(call)}); }}')
+        # dlsym and the lookup function hand out the wrappers, whose addresses only the program knows.
+        lines.append(f'__attribute__((constructor)) static void llvmnet_ext_register_wrappers(void)')
+        lines.append('{')
+        for command, _ in self.commands:
+            if command.name in self.wrapped:
+                lines.append(f'    __llvmnet_ext_register("{self.name}", "{command.name}", (void *){command.name});')
+        lines.append('}')
+        return '\n'.join(lines) + '\n'
+
     def library_field(self, name):
         return 'Library' + re.sub(r'\W', '_', name)
 
@@ -961,6 +1120,9 @@ class Emitter:
         self.emit_stubs(w)
         w('')
         self.emit_table(w)
+        if self.by_value:
+            w('')
+            self.emit_structs(w)
         if self.non_blocking:
             w('')
             self.emit_non_blocking(w)
@@ -1001,7 +1163,7 @@ class Emitter:
             w('    {')
             w('        if (name == 0) return 0;')
             w('        string text = Marshal.PtrToStringUTF8(name)!;')
-            w('        return Commands.Table.TryGetValue(text, out Commands.Entry entry) && Host.Find(entry.Library, text) != 0 ? entry.Stub : 0;')
+            w('        return Commands.Table.TryGetValue(text, out Commands.Entry entry) && Host.Find(entry.Library, text) != 0 ? StubOf(text, entry) : 0;')
             w('    }')
             w('')
         w('    private static HostLibrary Serving(string library) => library switch')
@@ -1019,7 +1181,10 @@ class Emitter:
         w('    /// searches the library\'s dependencies too, on Windows only the library), or 0, as natively.')
         w('    /// </summary>')
         w('    public override nint Resolve(string library, string symbol) =>')
-        w('        Commands.Table.TryGetValue(symbol, out Commands.Entry entry) && Serving(library).Export(symbol) != 0 ? entry.Stub : 0;')
+        w('        Commands.Table.TryGetValue(symbol, out Commands.Entry entry) && Serving(library).Export(symbol) != 0 ? StubOf(symbol, entry) : 0;')
+        w('')
+        w('    /// <summary>What the program calls for an entry point: its stub, or the wrapper the program registered for it.</summary>')
+        w(f'    internal static nint StubOf(string name, Commands.Entry entry) => entry.Stub != 0 ? entry.Stub : NativeExtensions.Wrapper({literal(self.name)}, name);')
         w('')
         required = ', '.join(f'({self.library_field(self.library_of(name))}, {literal(name)})' for name in self.required)
         w(f'    public override string? Unavailable() => Host.Unavailable({required});')
@@ -1054,8 +1219,13 @@ class Emitter:
         names = [csharp_name(param.name) for param in command.params]
         params = ', '.join(f'{cil_type(t)} {n}' for n, t in zip(names, command.types))
         ret = cil_type(command.ret)
+        struct_result = command.ret[0] == 'struct'
+        if struct_result:
+            # The wrapper passes the result's storage first; the stub writes the host's structure there.
+            params = ', '.join(['nint __return'] + ([params] if params else []))
+            ret = 'void'
         forward = ', '.join(names)
-        w(f'    [CExport({literal(command.name)})]')
+        w(f'    [CExport({literal(self.export_name(command))})]')
         if self.lookup and command.name == self.lookup['command']:
             target = self.lookup.get('stub') or f'{self.type_name}.ProcAddress'
             w(f'    public static {ret} {command.name}({params}) => {target}({forward});')
@@ -1125,6 +1295,8 @@ class Emitter:
             else:
                 w(f'        Callbacks.Chain_{structure}({names[index]}, ref __patch);')
         call = f'((delegate* unmanaged<{signature}>)__f)({", ".join(args)})'
+        if struct_result:
+            call = f'*(Structs.{command.ret[1]}*)__return = {call}'
         hook = self.after.get(command.name)
         if ret == 'void':
             w(f'        {call};')
@@ -1176,6 +1348,10 @@ class Emitter:
             w(f'    private static void Add{index}(Dictionary<string, Entry> table)')
             w('    {')
             for command, library in chunk:
+                if command.name in self.wrapped:
+                    # Its wrapper in the program registers itself (NativeExtensions.Wrapper).
+                    w(f'        table.Add({literal(command.name)}, new(0, {self.type_name}.{self.library_field(library)}));')
+                    continue
                 types = ', '.join([cil_type(t) for t in command.types] + [cil_type(command.ret)])
                 w(f'        table.Add({literal(command.name)}, new((nint)(delegate*<{types}>)&Api.{command.name}, {self.type_name}.{self.library_field(library)}));')
             w('    }')
@@ -1414,7 +1590,9 @@ def generate(arguments):
     if missing:
         raise GenerationError(f'no check group declares {", ".join(missing[:5])}{" and others" if len(missing) > 5 else ""}')
     write(os.path.join(check, 'main.c'), 'int main(void) { return 0; }\n')
-    signatures = {command.name: signature_of(command) for command, _ in emitter.commands + [(c, l) for c, l, _ in emitter.unsupported]}
+    signatures = {emitter.export_name(command): emitter.signature(command) for command, _ in emitter.commands + [(c, l) for c, l, _ in emitter.unsupported]}
+    if emitter.wrapped:
+        write(os.path.join(output, 'wrappers.c'), emitter.wrappers())
     write(os.path.join(output, 'signatures.json'), json.dumps(signatures, indent=1, sort_keys=True) + '\n')
     print(f'{description["name"]} {description["version"]}: {len(emitter.commands)} entry points, '
           f'{len(emitter.unsupported)} that fail when called, {len(emitter.skipped)} left out, '

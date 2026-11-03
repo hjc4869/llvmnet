@@ -401,6 +401,7 @@ internal static class Driver
                 }
                 options.CilReferences.Add(extension.Assembly);
                 options.Extensions.Add(extension);
+                if (File.Exists(extension.Wrappers)) bitcode.Add((extension.Wrappers, false));
             }
             // Portable executables link musl's start object and the sysroot archives, in dependency order. Libraries do
             // not: musl keeps per-process state (thread pointer, heap, stdio) that one image per process must own. Nor

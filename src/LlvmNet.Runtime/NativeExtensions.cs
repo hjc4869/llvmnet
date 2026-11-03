@@ -131,6 +131,24 @@ public static class NativeExtensions
     }
 
     private static readonly Dictionary<string, nint> reports = new(StringComparer.Ordinal);
+    private static readonly Dictionary<(string Extension, string Name), nint> wrappers = [];
+
+    /// <summary>
+    /// void __llvmnet_ext_register(const char *extension, const char *name, void *function): the C wrapper of an entry point
+    /// that passes structures by value (NX-07), which the extension's lib/wrappers.o defines in the program and registers
+    /// from a constructor, so that dlsym and the API's lookup function can hand it out.
+    /// </summary>
+    [CExport("__llvmnet_ext_register")]
+    public static void RegisterWrapper(nint extension, nint name, nint function)
+    {
+        lock (wrappers) wrappers[(Marshal.PtrToStringUTF8(extension)!, Marshal.PtrToStringUTF8(name)!)] = function;
+    }
+
+    /// <summary>The wrapper the program registered for an extension's entry point, or 0.</summary>
+    public static nint Wrapper(string extension, string name)
+    {
+        lock (wrappers) return wrappers.TryGetValue((extension, name), out nint function) ? function : 0;
+    }
 
     /// <summary>
     /// int llvmnet_ext_available(const char *name) (&lt;llvmnet/ext.h&gt;): 1 when the program is linked with the native
