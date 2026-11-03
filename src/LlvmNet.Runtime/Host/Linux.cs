@@ -181,4 +181,12 @@ internal static class Linux
         internal short Events;
         internal short ReturnedEvents;
     }
+
+    /// <summary>struct iovec, which readv, writev, preadv and pwritev take arrays of.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct IoVector
+    {
+        internal nint Base;
+        internal long Length;
+    }
 }

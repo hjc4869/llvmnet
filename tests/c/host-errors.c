@@ -24,6 +24,7 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -203,6 +204,108 @@ static void pipes(void)
     CHECK("pipe2 O_NONBLOCK", pipe2(ends, O_NONBLOCK));
     CHECK("read empty non-blocking pipe", read(ends[0], buffer, 1));
     close(ends[0]);
+    close(ends[1]);
+}
+
+static char pattern(long index) { return (char)('a' + index % 23); }
+
+struct record_writer { int descriptor; char letter; };
+
+/* Writes 100 records of 1000 bytes, each as a 1-byte header and a 999-byte body in one writev. */
+static void *write_records(void *argument)
+{
+    struct record_writer *writer = argument;
+    char header = writer->letter, body[999];
+    memset(body, writer->letter, sizeof body);
+    struct iovec parts[2] = {{&header, 1}, {body, sizeof body}};
+    for (int index = 0; index < 100; index++)
+        if (writev(writer->descriptor, parts, 2) != 1000) return (void *)1;
+    return 0;
+}
+
+/* readv, writev, preadv and pwritev make one transfer whatever the number of vectors: a pipe write of at most PIPE_BUF
+ * bytes is atomic, counts are partial where one write's would be, and a read returns what a pipe holds. Linux counts
+ * pipe space in pages, so the pipe checks fill whole pages or leave room in the last one. */
+static void vectors(void)
+{
+    static char data[160000], back[160000], records[200000];
+    for (long index = 0; index < (long)sizeof data; index++) data[index] = pattern(index);
+    int file = open("vectors", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    struct iovec three[3] = {{data, 3}, {data + 3, 70000}, {data + 70003, 5}};
+    CHECK("writev 3, 70000 and 5 bytes", writev(file, three, 3));
+    struct iovec small[40];
+    for (int index = 0; index < 40; index++) small[index] = (struct iovec){data + 70008 + index * 2000, 2000};
+    CHECK("writev 40 vectors of 2000 bytes", writev(file, small, 40));
+    CHECK("position after writev", lseek(file, 0, SEEK_CUR));
+    CHECK("pread the vectors back", pread(file, back, sizeof back, 0));
+    FACT("file holds the vectors in order", memcmp(back, data, 150008) == 0);
+    lseek(file, 0, SEEK_SET);
+    memset(back, 0, sizeof back);
+    struct iovec refill[2] = {{back, 65535}, {back + 65535, 4096}};
+    CHECK("readv 65535 and 4096 bytes", readv(file, refill, 2));
+    struct iovec pieces[3] = {{back + 69631, 10}, {back + 69641, 100}, {back + 69741, 1000}};
+    CHECK("readv 10, 100 and 1000 bytes", readv(file, pieces, 3));
+    FACT("readv fills the vectors in order", memcmp(back, data, 70741) == 0);
+    CHECK("position after readv", lseek(file, 0, SEEK_CUR));
+    struct iovec tail[2] = {{back, 5}, {back + 5, 100}};
+    CHECK("preadv 7 bytes before the end", preadv(file, tail, 2, 150001));
+    FACT("preadv data", memcmp(back, data + 150001, 7) == 0);
+    CHECK("position unchanged by preadv", lseek(file, 0, SEEK_CUR));
+    struct iovec patch[2] = {{(void *)"XY", 2}, {(void *)"Z", 1}};
+    CHECK("pwritev 3 bytes at 1", pwritev(file, patch, 2, 1));
+    CHECK("pread the patch", pread(file, back, 5, 0));
+    printf("%-44s %.5s\n", "patched contents", back);
+    CHECK("readv no vectors", readv(file, pieces, 0));
+    CHECK("readv no vectors, bad descriptor", readv(99, pieces, 0));
+    CHECK("writev 1025 vectors", writev(file, small, 1025));
+    struct iovec huge = {data, (size_t)-1};
+    CHECK("writev a vector of SIZE_MAX bytes", writev(file, &huge, 1));
+    close(file);
+    unlink("vectors");
+    int zero = open("/dev/zero", O_RDONLY);
+    struct iovec zeros[2] = {{back, 70000}, {back + 70000, 1000}};
+    CHECK("readv 70000 and 1000 bytes from /dev/zero", readv(zero, zeros, 2));
+    close(zero);
+
+    int ends[2];
+    pipe2(ends, O_NONBLOCK);
+    CHECK("fill a pipe but 100 bytes", write(ends[1], data, 65436));
+    struct iovec two[2] = {{data, 100}, {data + 100, 100}};
+    CHECK("writev 200 bytes into 100 free", writev(ends[1], two, 2));
+    struct iovec halves[2] = {{data, 50}, {data + 50, 50}};
+    CHECK("writev 100 bytes into 100 free", writev(ends[1], halves, 2));
+    while (read(ends[0], back, sizeof back) > 0) {}
+    CHECK("fill a pipe but one page", write(ends[1], data, 61440));
+    struct iovec pages[3] = {{data, 4000}, {data + 4000, 4000}, {data + 8000, 4000}};
+    CHECK("writev 12000 bytes into 4096 free", writev(ends[1], pages, 3));
+    close(ends[0]);
+    close(ends[1]);
+
+    pipe(ends);
+    write(ends[1], "abcdefghij", 10);
+    char first[4], second[100];
+    struct iovec split[2] = {{first, sizeof first}, {second, sizeof second}};
+    CHECK("readv 10 bytes into 4 and 100", readv(ends[0], split, 2));
+    FACT("readv splits the bytes in order", memcmp(first, "abcd", 4) == 0 && memcmp(second, "efghij", 6) == 0);
+    write(ends[1], "wxyz", 4);
+    CHECK("readv returns what the pipe holds", readv(ends[0], split, 2));
+    CHECK("preadv on a pipe", preadv(ends[0], split, 2, 0));
+    pthread_t threads[2];
+    struct record_writer writers[2] = {{ends[1], 'A'}, {ends[1], 'B'}};
+    for (int index = 0; index < 2; index++) pthread_create(&threads[index], 0, write_records, &writers[index]);
+    long received = 0, got;
+    while (received < (long)sizeof records && (got = read(ends[0], records + received, sizeof records - received)) > 0) received += got;
+    void *failed[2];
+    for (int index = 0; index < 2; index++) pthread_join(threads[index], &failed[index]);
+    int whole = received == (long)sizeof records && !failed[0] && !failed[1], letters[2] = {0, 0};
+    for (long record = 0; whole && record < (long)sizeof records / 1000; record++) {
+        const char *start = records + record * 1000;
+        whole = (*start == 'A' || *start == 'B') && memchr(start, *start == 'A' ? 'B' : 'A', 1000) == 0;
+        letters[*start == 'B']++;
+    }
+    FACT("concurrent writev records stay whole", whole && letters[0] == 100 && letters[1] == 100);
+    close(ends[0]);
+    CHECK("writev without a reader", writev(ends[1], two, 2));
     close(ends[1]);
 }
 
@@ -486,6 +589,7 @@ int main(void)
     setvbuf(stdout, 0, _IONBF, 0);
     files();
     pipes();
+    vectors();
     filesystem();
     memory();
     process();
