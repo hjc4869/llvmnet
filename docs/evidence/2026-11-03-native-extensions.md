@@ -158,3 +158,17 @@ A command that passes or returns a structure by value gets an internal stub that
 | Windows x64, Microsoft x64 | Visual Studio 2026's `cl` on the host | the bundle's portable JIT image and the NativeAOT executable published on the host |
 
 The four shapes cover the conventions' cases: on x86-64 System V the pair of floats is one SSE register and the int with a double an integer and an SSE register, both of which Windows passes by reference; on ARM64 the pair and the four doubles are homogeneous floating-point aggregates in floating-point registers; 17 bytes go in memory or by reference everywhere. A union by value is rejected (`tests/ext-headers.sh`), as are bit-fields, arrays of structures and function pointers inside a structure passed by value.
+
+## NX-12: installation and distribution
+
+`llvmnet --install-extension <dir>` checks a built package and copies it into the portable sysroot's `ext/`: the manifest, the assembly's `llvmnet.abi`, `llvmnet.version` (by the compatibility rule of managed references) and `llvmnet.extension` (the manifest's name and version), the headers it lists, and names that clash with the sysroot or another installed extension. The copy is staged beside the installed version and renamed over it. `scripts/build-extensions.sh` installs through it and learned to run from an installed toolchain, asking the driver for the version, the runtime assembly, the sysroot and its own location (`llvmnet --print-extension-kit`). Both packages ship `gles` and `vulkan`, `<llvmnet/ext.h>`, the kit (`build-extensions.sh`, `ext-gen.py`) and `templates/native-extension/`.
+
+| What | Result |
+| --- | --- |
+| `tests/ext-install.sh`: the template (a header with a callback type and a structure passed by value, its library, an example) built with the repository's script | 4 entry points and 1 callback type, 4 stubs verified, `lib/wrappers.o` packaged; the example prints its native output under the JIT, as NativeAOT and in system mode; without the library it prints the names tried and exits 1 |
+| `--install-extension` refusals | no manifest (exit 2), an assembly built for llvmnet 0.1.0, an assembly that declares `hello/1.0.0` under a `hello/2.0.0` manifest, a version with a header that shadows `<stdio.h>` and `-lm` (the installed version stays, nothing is left behind); a second `vulkan` that answers `-lGLESv2` beside `gles` |
+| `tests/toolchain.sh`: a packaged toolchain, relocated to a path with a space | `--list-extensions` shows `gles` and `vulkan` without problems; the template builds with the package's kit, outside the repository, installs into the relocated sysroot and its example prints the expected output |
+| The dotnet tool, packed and installed with `--tool-path` | `gles` and `vulkan` listed, `ext.h` and the kit in the package; the template builds with the tool's kit (`--llvmnet` naming the tool) and its example runs |
+| The `xp` bundle's `hello` fixture, the library built by each host's compiler | passed under the JIT and as NativeAOT on Windows x64 (`cl`) and macOS ARM64 (Apple clang), and under the JIT on Linux ARM64 (Docker with qemu) |
+
+The tool package first failed to pack: NuGet refuses the build stamp `ext/<name>/.llvmnet-inputs` (NU5119), which only appears once the release builds the extensions, so the tool's items exclude it. The `xp` runner read its manifest on standard input, and `cmd` building the first native library on Windows consumed the fixtures after it; earlier runs passed because `structs` was the last fixture. The manifest is now read on its own descriptor.

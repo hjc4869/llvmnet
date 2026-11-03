@@ -7,7 +7,7 @@ A portable program is one image for every host, so it cannot link native librari
 | `gles`: EGL 1.5, OpenGL ES 2.0 to 3.2, desktop OpenGL and their registered extensions | `libEGL.so.1` and `libGLESv2.so.2` (Linux: Mesa or a vendor driver), `libEGL.dll` and `libGLESv2.dll` (Windows: ANGLE), `libEGL.dylib` and `libGLESv2.dylib` (macOS: ANGLE) | `-lEGL -lGLESv2` or `--extension=gles` | Linux x64 with Mesa (radeonsi and llvmpipe), Windows x64 with ANGLE over Direct3D 11, macOS ARM64 with ANGLE over Metal |
 | `vulkan`: Vulkan 1.0 to 1.4 and its registered extensions, except the window-system and provisional ones | `libvulkan.so.1` (Linux: the Khronos loader), `vulkan-1.dll` (Windows: the loader) or `vk_swiftshader.dll`, `libvulkan.1.dylib`, `libMoltenVK.dylib` or `libvk_swiftshader.dylib` (macOS) | `-lvulkan` or `--extension=vulkan` | Linux x64 with Mesa's RADV and lavapipe, Windows x64 with the Intel Arc driver through the loader and with SwiftShader, macOS ARM64 with SwiftShader |
 
-`llvmnet --list-extensions` prints the extensions installed in the toolchain, with their `-l` names, host libraries and headers. `scripts/build-extensions.sh` builds the extensions of a source checkout into `sysroot/dotnet64-v2/ext/`.
+The toolchain package and the dotnet tool ship both, in the portable sysroot's `ext/` directory. `llvmnet --list-extensions` prints the extensions installed in the toolchain, with their `-l` names, host libraries and headers, and any problem that stops one from being used. `llvmnet --install-extension <dir>` installs a built extension package, such as one made from the template below, and `llvmnet --uninstall-extension <name>` removes one. In a source checkout, `scripts/build-extensions.sh` builds the extensions of `extensions/` into `sysroot/dotnet64-v2/ext/`.
 
 ## Building a program
 
@@ -86,4 +86,14 @@ The host library runs as native code with the process's rights, like the program
 
 ## Writing an extension
 
-An extension is generated from the API's registry or headers by `scripts/ext-gen.py` and checked against the C prototypes before it is installed; [dev/extensions.md](../dev/extensions.md) describes the description file, the generated assembly and the checks.
+An extension is generated from the API's registry or C headers by `ext-gen.py` and checked against the C prototypes before it is installed; [dev/extensions.md](../dev/extensions.md) describes the description file, the generated assembly and the checks.
+
+An extension for another library starts from the template that ships with the toolchain, in `share/llvmnet/templates/native-extension/`. The template is a small library with its header, its native source and an example program; its README says what to replace. The kit beside it, `share/llvmnet/extensions/build-extensions.sh`, builds an extension with the installed toolchain, checks it and installs it. It needs `python3` and the .NET 10 SDK. `llvmnet --print-extension-kit` prints where the kit and the template are, which helps with the dotnet tool:
+
+```sh
+kit="$(llvmnet --print-extension-kit | sed -n 's/^kit //p')"
+cp -r "$(llvmnet --print-extension-kit | sed -n 's/^template //p')" my-extension
+bash "$kit/build-extensions.sh" my-extension
+```
+
+The package it builds, `<build-dir>/<name>/package/`, serves every host, because its assembly and its wrappers are portable. Copy that directory to another toolchain and install it there with `llvmnet --install-extension`. The host library is not part of it. An extension built for one llvmnet release is refused by a release that cannot load its assembly ([versioning.md](../dev/versioning.md#native-extensions)).

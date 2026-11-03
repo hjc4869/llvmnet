@@ -124,6 +124,9 @@ Every option falls into one of four classes, per runtime mode:
 | `--help` | This list; docs/user/driver.md is the full reference |
 | `--version` | llvmnet's version, the LLVM version and the ABI tags, then the frontend's own version |
 | `--list-extensions` | List the native extensions installed in the sysroot's ext/ directory, with their -l names, host libraries and headers |
+| `--install-extension=<dir>` | Install a built native extension package (a directory with manifest.json, include/ and lib/) in the sysroot's ext/ directory, after checking its assembly, its llvmnet version and its names |
+| `--uninstall-extension=<name>` | Remove an installed native extension from the sysroot's ext/ directory |
+| `--print-extension-kit` | Print what building a native extension uses: llvmnet's version, its LlvmNet.Runtime.dll, the portable sysroot, the directory of build-extensions.sh and the template |
 | `--driver-mode=<mode>` | Frontend to use: gcc or clang (C), g++ or clang++ (C++), flang (Fortran), as the llvmnet-clang, llvmnet-clang++ and llvmnet-flang names do |
 | `-dumpmachine` | Frontend queries, answered by the selected frontend for the mode's target (x86_64-unknown-none in portable mode; also -dumpversion, -print-search-dirs, -print-resource-dir, -print-file-name=, -print-prog-name=, -print-target-triple, -print-libgcc-file-name) |
 

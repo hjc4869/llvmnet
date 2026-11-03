@@ -62,6 +62,10 @@ internal sealed class Invocation
     /// <summary>--extension names, in order.</summary>
     internal List<string> ExtensionNames { get; } = [];
     internal bool ListExtensions { get; private set; }
+    /// <summary>--install-extension: a built extension package to install in the sysroot's ext/ directory.</summary>
+    internal string? InstallExtension { get; private set; }
+    /// <summary>--uninstall-extension: the name of an installed extension to remove.</summary>
+    internal string? UninstallExtension { get; private set; }
     /// <summary>Queries the frontend answers (--version, -dumpmachine, -print-...), run instead of a compilation.</summary>
     internal List<string> Queries { get; } = [];
 
@@ -137,6 +141,8 @@ internal sealed class Invocation
                 case "--system-library": Options.SystemLibraries.Add(value); break;
                 case "--extension": ExtensionNames.Add(value); break;
                 case "--list-extensions": ListExtensions = true; break;
+                case "--install-extension": InstallExtension = Path.GetFullPath(value); break;
+                case "--uninstall-extension": UninstallExtension = value; break;
                 case "--nativeaot": Options.NativeAot = true; break;
                 case "--runtime-id": RuntimeId = value; break;
                 case "--aot-project": AotProject = Path.GetFullPath(value); Options.NativeAot = true; break;
@@ -249,9 +255,24 @@ internal static class Driver
             foreach (string line in HostSyscalls.DescribeUnavailable()) Console.WriteLine(line);
             return 0;
         }
+        if (parsed.Any(argument => argument.Is("--print-extension-kit")))
+        {
+            // What build-extensions.sh needs from the toolchain it runs with, in the repository, the toolchain package or
+            // the dotnet tool (NX-12): the version stamped into an extension assembly, the runtime assembly it compiles
+            // against, the default portable sysroot, and where the script itself and the template are.
+            string kit = Path.Combine(Toolchain.Root, "share", "llvmnet", "extensions");
+            if (!System.IO.Directory.Exists(kit)) kit = Path.Combine(Toolchain.Root, "scripts");
+            string template = Path.Combine(Toolchain.Root, "share", "llvmnet", "templates", "native-extension");
+            if (!System.IO.Directory.Exists(template)) template = Path.Combine(Toolchain.Root, "templates", "native-extension");
+            Console.Write($"version {BuildInfo.Version}\nruntime {typeof(BuildInfo).Assembly.Location}\nsysroot {PortableAbi.Sysroot}\n" +
+                $"kit {kit}\ntemplate {template}\n");
+            return 0;
+        }
         var invocation = new Invocation(parsed, driver);
         driver = invocation.Driver;
         if (invocation.ListExtensions) { Console.Write(Extensions.Listing()); return 0; }
+        if (invocation.InstallExtension is not null) { Console.WriteLine(Extensions.Install(invocation.InstallExtension)); return 0; }
+        if (invocation.UninstallExtension is not null) { Console.WriteLine(Extensions.Uninstall(invocation.UninstallExtension)); return 0; }
         CompilerOptions options = invocation.Options;
         if (!invocation.Frontend.Contains("-w")) options.Warnings = new Diagnostics(arguments);
         string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");

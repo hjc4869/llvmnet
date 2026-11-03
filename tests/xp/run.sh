@@ -111,7 +111,7 @@ native_library() {
         [[ -n "$vcvars" ]] || return 1
         printf '@call "%s" >nul\r\n@cl /nologo /LD /O1 /I include native.c /Fe:llvmnet-%s.dll\r\n' "$(cygpath -w "$vcvars")" "$name" \
             >"$bundle/native-src/$name/build.bat"
-        (cd "$bundle/native-src/$name" && cmd //c build.bat >"$directory/build.log" 2>&1) || return 1
+        (cd "$bundle/native-src/$name" && cmd //c build.bat </dev/null >"$directory/build.log" 2>&1) || return 1
         cp "$bundle/native-src/$name/llvmnet-$name.dll" "$directory/"
     else
         return 1
@@ -166,7 +166,9 @@ publish() {
     "$dotnet" publish "$bundle/aot/$name/NativeHost.csproj" -c Release -r "$rid" -o "$directory/out" --nologo -v quiet \
         >"$directory/publish.log" 2>&1
 }
-while IFS=$'\t' read -r name aot_flag arguments environment requires; do
+# The manifest is read on descriptor 3, so that a fixture or a native build that reads standard input (cmd on
+# Windows does) cannot consume the fixtures after it.
+while IFS=$'\t' read -r name aot_flag arguments environment requires <&3; do
     [[ -z "$name" || "$name" == \#* ]] && continue
     name="$(tr -d '\r' <<<"$name")"
     selected "$name" || continue
@@ -179,14 +181,14 @@ while IFS=$'\t' read -r name aot_flag arguments environment requires; do
     if [[ $jit -eq 1 ]]; then
         check "$name" jit "$arguments" "$(fixture_environment "$environment" "$requires")" "$dotnet" "$bundle/images/$name.dll" || true
     fi
-done <"$bundle/manifest.tsv"
+done 3<"$bundle/manifest.tsv"
 if [[ $aot -eq 1 ]]; then
     names=()
-    while IFS=$'\t' read -r name aot_flag arguments environment requires; do
+    while IFS=$'\t' read -r name aot_flag arguments environment requires <&3; do
         [[ -z "$name" || "$name" == \#* ]] && continue
         name="$(tr -d '\r' <<<"$name")"
         if [[ "$aot_flag" == aot ]] && selected "$name" && ! unavailable "$(tr -d '\r' <<<"${requires:-}")" >/dev/null; then names+=("$name"); fi
-    done <"$bundle/manifest.tsv"
+    done 3<"$bundle/manifest.tsv"
     printf 'Publishing %d NativeAOT projects for %s (%d at once)\n' "${#names[@]}" "$rid" "$jobs"
     pids=()
     for name in ${names[@]+"${names[@]}"}; do
@@ -195,7 +197,7 @@ if [[ $aot -eq 1 ]]; then
         if [[ ${#pids[@]} -ge $jobs ]]; then wait "${pids[0]}" || true; pids=(${pids[@]:1}); fi
     done
     wait
-    while IFS=$'\t' read -r name aot_flag arguments environment requires; do
+    while IFS=$'\t' read -r name aot_flag arguments environment requires <&3; do
         [[ -z "$name" || "$name" == \#* ]] && continue
         name="$(tr -d '\r' <<<"$name")"
         [[ "$aot_flag" == aot ]] && selected "$name" || continue
@@ -207,7 +209,7 @@ if [[ $aot -eq 1 ]]; then
             continue
         fi
         check "$name" aot "$arguments" "$(fixture_environment "$environment" "$(tr -d '\r' <<<"${requires:-}")")" "$executable" || true
-    done <"$bundle/manifest.tsv"
+    done 3<"$bundle/manifest.tsv"
 fi
 printf '%s: %d passed, %d failed, %d skipped (%s)\n' "$host" "$passed" "$failed" "$skipped" "$results/results.tsv" | tee -a "$results/host.txt"
 [[ $failed -eq 0 ]]

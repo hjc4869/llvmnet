@@ -40,6 +40,10 @@ if [[ "$variants" == *tool* ]]; then
     dotnet tool-core.dll
     ./tool/llvmnet --driver-mode=g++ "$root/tests/cpp/core.cpp" -o tool-cpp.dll
     dotnet tool-cpp.dll
+    # The tool carries the shipped native extensions, <llvmnet/ext.h> and the kit that builds more (NX-12).
+    ./tool/llvmnet --list-extensions | grep -q '^gles 1\.0\.0$'
+    kit="$(./tool/llvmnet --print-extension-kit | sed -n 's/^kit //p')"
+    [[ -f "$kit/build-extensions.sh" && -f "$kit/ext-gen.py" && -f "$kit/../../../sysroot/extensions/include/llvmnet/ext.h" ]]
 fi
 du -h first/*.tar.xz first/*.nupkg 2>/dev/null | tee sizes.txt
 printf 'PASS: release artifacts are reproducible (%s)\n' "$variants"

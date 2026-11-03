@@ -95,7 +95,23 @@ scripts/build-extensions.sh gles                     # into sysroot/dotnet64-v2/
 scripts/build-extensions.sh --sysroot <dir> <path/to/extension.json>
 ```
 
-The script rebuilds an extension only when an input changes: its directory, the generator, the script, the pinned sources, `LlvmNet.Runtime` and llvmnet's version. `tests/ext-gen.sh` builds the synthetic registry in `tests/extensions/generated/` and runs a program natively, in portable mode (JIT and NativeAOT) and in system mode against host libraries it compiles with clang, and checks the generator's rejections. `tests/ext-gles.sh` runs the `gles` extension against the host's Mesa.
+The script rebuilds an extension only when an input changes: its directory, the generator, the script, the sources, `LlvmNet.Runtime` and llvmnet's version. It installs the package it checked with `llvmnet --install-extension`, which refuses an assembly built for an incompatible llvmnet, an assembly whose `llvmnet.extension` metadata does not match the manifest, and names that clash with the sysroot or with another installed extension. A refused package leaves the installed version in place; an accepted one replaces it in one rename.
+
+The same script runs from an installed toolchain. The toolchain package ships it in `share/llvmnet/extensions/`, with `ext-gen.py` beside it, and the dotnet tool ships it in the same place inside its package. Outside the repository the script does not build llvmnet or fetch pinned sources. It asks the toolchain's `bin/llvmnet`, or the one `--llvmnet` or `PATH` names, for what it needs with `llvmnet --print-extension-kit`:
+
+```text
+version 0.3.0+<commit>                 the llvmnet.version stamped into the extension's assembly
+runtime <dir>/LlvmNet.Runtime.dll      the runtime assembly the extension compiles against
+sysroot <dir>/sysroot/dotnet64-v2      where ext/ is, unless --sysroot names another
+kit <dir>/share/llvmnet/extensions     build-extensions.sh and ext-gen.py
+template <dir>/share/llvmnet/templates/native-extension
+```
+
+A description names its sources as `<name>:<path>`. `--source <name>=<dir>` gives each one's directory there, and in the repository the pinned ones come from `scripts/fetch-sources.sh`; a path without a name is relative to the description's directory, as in the template. The build trees go to `--build-dir`, by default `artifacts/ext-build` in the repository and `$XDG_CACHE_HOME/llvmnet/ext-build` elsewhere. The repository stamps its extensions with `VersionPrefix`, so that a package stays up to date across commits; an installed toolchain stamps its own full version. `tests/ext-gen.sh` builds the synthetic registry in `tests/extensions/generated/` and runs a program natively, in portable mode (JIT and NativeAOT) and in system mode against host libraries it compiles with clang, and checks the generator's rejections. `tests/ext-gles.sh` runs the `gles` extension against the host's Mesa.
+
+## Third-party extensions
+
+[templates/native-extension/](../../templates/native-extension/) is the starting point for an extension of a library llvmnet does not ship. It is laid out as a repository of its own: `extension.json` describes the library `libllvmnet-hello` by its header `include/hello.h`, `native/hello.c` is that library, and `example/main.c` calls it, with a callback and a structure passed by value, natively and in portable mode. `tests/ext-install.sh` builds it with the repository's script and runs the example under the JIT, as NativeAOT and in system mode; `tests/toolchain.sh` builds it with the kit of a packaged, relocated toolchain.
 
 ## Adding an extension
 

@@ -63,6 +63,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - The `vulkan` native extension: Vulkan 1.0 to 1.4 and its extensions without the window-system ones, through the Khronos loader, MoltenVK or SwiftShader (`-lvulkan`), with application allocation callbacks and debug messengers, also in `pNext` chains; `tests/ext-vulkan.sh` and the `vulkan` fixture of the `tests/xp/` bundle check it (NX-10).
 - Native extensions pass and return structures by value with each host's convention, through C wrappers linked into the program (NX-07).
 - `scripts/ext-gen.py` reads C headers through Clang's JSON AST for APIs without a registry (validated on GLFW 3.4), and a callback the host returns becomes the program's function again (NX-09).
+- `llvmnet --install-extension <dir>` and `--uninstall-extension <name>` install and remove native extension packages after checking their assembly, llvmnet version and names; the toolchain package and the dotnet tool ship `gles` and `vulkan`, the kit that builds more from an installed toolchain (`share/llvmnet/extensions/build-extensions.sh`, located by `llvmnet --print-extension-kit`) and a template for third-party extensions (NX-12).
 - A host library can call a portable program back on a thread it started itself: the first callback there gives the thread musl's thread state (`errno`, stdio, `malloc`, thread-local variables, `pthread_self`), released after the thread ends (NX-08).
 
 ### Changed

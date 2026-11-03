@@ -100,13 +100,15 @@ internal static partial class Extensions
     /// <summary>
     /// Why an installed extension cannot be used: a manifest that does not match its directory, missing parts, and names
     /// that clash with the sysroot (a header it would shadow or be shadowed by, an -l name the sysroot answers) or with
-    /// another installed extension. Empty when it can be used.
+    /// another installed extension. Empty when it can be used. --install-extension checks its staged copy with the name of
+    /// the directory it will be moved to.
     /// </summary>
-    internal static List<string> Problems(ExtensionPackage package)
+    internal static List<string> Problems(ExtensionPackage package, string? installedAs = null)
     {
         List<string> problems = [];
-        if (package.Name != Path.GetFileName(package.Directory) || !NamePattern().IsMatch(package.Name))
-            problems.Add($"its manifest names it '{package.Name}', but it is installed as {Path.GetFileName(package.Directory)} (names are lowercase letters, digits and dashes)");
+        installedAs ??= Path.GetFileName(package.Directory);
+        if (package.Name != installedAs || !NamePattern().IsMatch(package.Name))
+            problems.Add($"its manifest names it '{package.Name}', but it is installed as {installedAs} (names are lowercase letters, digits and dashes)");
         if (!File.Exists(package.Assembly))
             problems.Add($"its assembly {package.Assembly} is missing");
         foreach (string header in package.Headers.Where(header => !File.Exists(Path.Combine(package.Include, header))))
@@ -151,6 +153,70 @@ internal static partial class Extensions
         foreach (ExtensionPackage package in packages)
             if (Problems(package) is { Count: > 0 } problems)
                 throw new InvalidOperationException($"native extension '{package.Name}' cannot be used: {string.Join("; ", problems)}.");
+    }
+
+    /// <summary>
+    /// --install-extension: checks a built package (its manifest; its assembly's llvmnet.abi, llvmnet.version and
+    /// llvmnet.extension; its headers; names that would clash with the sysroot or another installed extension) and copies it
+    /// to ext/&lt;name&gt;, replacing an installed version in one step. Returns the line to print.
+    /// </summary>
+    internal static string Install(string directory)
+    {
+        if (!System.IO.Directory.Exists(directory) || !File.Exists(Path.Combine(directory, "manifest.json")))
+            throw new ArgumentException($"{directory} is not a native extension package (no manifest.json); scripts/build-extensions.sh builds one under <sysroot>/ext/<name>.");
+        ExtensionPackage package = Read(directory);
+        if (!NamePattern().IsMatch(package.Name))
+            throw new InvalidOperationException($"native extension '{package.Name}': names are lowercase letters, digits and dashes.");
+        if (!File.Exists(package.Assembly))
+            throw new InvalidOperationException($"native extension '{package.Name}': its assembly {package.Assembly} is missing.");
+        System.Reflection.Assembly library = System.Reflection.Assembly.LoadFile(package.Assembly);
+        string? Metadata(string key) => System.Reflection.CustomAttributeExtensions.GetCustomAttributes<System.Reflection.AssemblyMetadataAttribute>(library)
+            .FirstOrDefault(attribute => attribute.Key == key)?.Value;
+        if (Metadata("llvmnet.abi") != PortableAbi.Tag)
+            throw new InvalidOperationException($"native extension '{package.Name}': its assembly is for llvmnet.abi {Metadata("llvmnet.abi") ?? "(none)"}, not {PortableAbi.Tag}.");
+        if (Metadata("llvmnet.version") is not string version || !LlvmNet.Runtime.BuildInfo.Compatible(version))
+            throw new InvalidOperationException($"native extension '{package.Name}': its assembly was built for llvmnet {Metadata("llvmnet.version") ?? "(unknown)"}, which is incompatible with {LlvmNet.Runtime.BuildInfo.Version}; rebuild it.");
+        if (Metadata("llvmnet.extension") != package.Tag)
+            throw new InvalidOperationException($"native extension '{package.Name}': its assembly declares llvmnet.extension {Metadata("llvmnet.extension") ?? "(none)"}, but its manifest describes {package.Tag}.");
+        string destination = Path.Combine(Root, package.Name);
+        string stage = destination + ".new", previous = destination + ".old";
+        foreach (string leftover in new[] { stage, previous })
+            if (System.IO.Directory.Exists(leftover)) System.IO.Directory.Delete(leftover, true);
+        System.IO.Directory.CreateDirectory(Root);
+        CopyDirectory(directory, stage);
+        // The copy is checked beside the other installed extensions, so that its names are compared with theirs.
+        List<string> problems = Problems(Read(stage), package.Name);
+        if (problems.Count != 0)
+        {
+            System.IO.Directory.Delete(stage, true);
+            throw new InvalidOperationException($"native extension '{package.Name}' cannot be installed: {string.Join("; ", problems)}.");
+        }
+        bool replaced = System.IO.Directory.Exists(destination);
+        if (replaced) System.IO.Directory.Move(destination, previous);
+        System.IO.Directory.Move(stage, destination);
+        if (replaced) System.IO.Directory.Delete(previous, true);
+        return $"Installed native extension {package.Name} {package.Version} in {destination}{(replaced ? ", replacing the installed one" : "")}.";
+    }
+
+    /// <summary>--uninstall-extension: removes ext/&lt;name&gt;. Returns the line to print.</summary>
+    internal static string Uninstall(string name)
+    {
+        string directory = Path.Combine(Root, name);
+        if (!NamePattern().IsMatch(name) || !System.IO.Directory.Exists(directory))
+            throw new ArgumentException($"native extension '{name}' is not installed in {Root}.");
+        System.IO.Directory.Delete(directory, true);
+        return $"Removed native extension {name} from {Root}.";
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        System.IO.Directory.CreateDirectory(destination);
+        foreach (string file in System.IO.Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            string target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            System.IO.Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, true);
+        }
     }
 
     /// <summary>The --list-extensions text: each installed extension with its names, host libraries, headers and problems.</summary>

@@ -101,6 +101,24 @@ LLVMNET_ROOT="$farm" "$llvmnet" --runtime=portable -O1 "$root/tests/extensions/s
 LLVMNET_ROOT="$farm" "$llvmnet" --runtime=portable -O1 "$root/tests/extensions/structs.c" -lllvmnet-structs --aot-project "$bundle/aot/structs"
 printf 'structs\taot\t-\t-\tnative:structs\n' >>"$bundle/manifest.tsv"
 count=$((count + 1))
+# The template for third-party extensions (NX-12): its example program over its library, built on each host as above.
+template="$root/templates/native-extension"
+bash "$root/scripts/build-extensions.sh" --sysroot "$farm/sysroot/dotnet64-v2" --build-dir "$bundle/native/ext-build" "$template" \
+    >/dev/null 2>"$bundle/native/hello.log" || { cat "$bundle/native/hello.log" >&2; exit 1; }
+mkdir -p "$bundle/native-src/hello"
+cp "$template/native/hello.c" "$bundle/native-src/hello/native.c"
+cp -r "$template/include" "$bundle/native-src/hello/"
+clang-22 -shared -fPIC -O1 -I"$template/include" "$template/native/hello.c" -o "$bundle/native-lib/linux-x86_64/libllvmnet-hello.so"
+if [[ -d "$bundle/native-lib/linux-aarch64" ]]; then
+    clang-22 --target=aarch64-linux-gnu -shared -fPIC -O1 -I"$template/include" "$template/native/hello.c" \
+        -o "$bundle/native-lib/linux-aarch64/libllvmnet-hello.so"
+fi
+cp "$template/example/expected.txt" "$bundle/expected/hello.txt"
+printf '0\n' >"$bundle/expected/hello.status"
+LLVMNET_ROOT="$farm" "$llvmnet" --runtime=portable -O1 "$template/example/main.c" -lllvmnet-hello -o "$bundle/images/hello.dll"
+LLVMNET_ROOT="$farm" "$llvmnet" --runtime=portable -O1 "$template/example/main.c" -lllvmnet-hello --aot-project "$bundle/aot/hello"
+printf 'hello\taot\t-\t-\tnative:hello\n' >>"$bundle/manifest.tsv"
+count=$((count + 1))
 cp "$root/tests/xp/run.sh" "$bundle/run.sh"
 chmod +x "$bundle/run.sh"
 # The NativeAOT projects publish with the .NET 10 SDK wherever the bundle runs, never with a preview of a later one.
