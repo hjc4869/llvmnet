@@ -68,6 +68,19 @@ record() {
     case "$result" in PASS) passed=$((passed + 1)) ;; FAIL) failed=$((failed + 1)) ;; SKIP) skipped=$((skipped + 1)) ;; esac
 }
 selected() { [[ -z "$only" ]] || [[ ",$only," == *",$1,"* ]]; }
+# What a fixture needs from the host besides .NET (the manifest's fifth column): "extension:gles" needs EGL and GLES
+# libraries, found where LLVMNET_EXT_GLES_DIR names (ANGLE on Windows and macOS) or, on Linux, on the loader's path.
+# Prints the reason and fails when the host lacks it, so the fixture is skipped.
+unavailable() {
+    case "$1" in
+        extension:gles)
+            if [[ -n "${LLVMNET_EXT_GLES_DIR:-}" ]]; then return 1; fi
+            if [[ "$system" == linux ]] && { ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null; } | grep -q 'libEGL\.so\.1 '; then return 1; fi
+            printf 'no EGL and GLES libraries (set LLVMNET_EXT_GLES_DIR to a directory with ANGLE'"'"'s libEGL and libGLESv2)'
+            return 0 ;;
+    esac
+    return 1
+}
 # Runs one image or executable in a fresh directory and compares stdout and the exit status with the native record.
 check() {
     local name="$1" mode="$2" arguments="$3" environment="$4"
@@ -105,20 +118,26 @@ publish() {
     "$dotnet" publish "$bundle/aot/$name/NativeHost.csproj" -c Release -r "$rid" -o "$directory/out" --nologo -v quiet \
         >"$directory/publish.log" 2>&1
 }
-while IFS=$'\t' read -r name aot_flag arguments environment; do
+while IFS=$'\t' read -r name aot_flag arguments environment requires; do
     [[ -z "$name" || "$name" == \#* ]] && continue
     name="$(tr -d '\r' <<<"$name")"
     selected "$name" || continue
+    requires="$(tr -d '\r' <<<"${requires:-}")"
+    if reason="$(unavailable "$requires")"; then
+        if [[ $jit -eq 1 ]]; then record "$name" jit SKIP "$reason"; fi
+        if [[ $aot -eq 1 && "$aot_flag" == aot ]]; then record "$name" aot SKIP "$reason"; fi
+        continue
+    fi
     if [[ $jit -eq 1 ]]; then
         check "$name" jit "$arguments" "$environment" "$dotnet" "$bundle/images/$name.dll" || true
     fi
 done <"$bundle/manifest.tsv"
 if [[ $aot -eq 1 ]]; then
     names=()
-    while IFS=$'\t' read -r name aot_flag arguments environment; do
+    while IFS=$'\t' read -r name aot_flag arguments environment requires; do
         [[ -z "$name" || "$name" == \#* ]] && continue
         name="$(tr -d '\r' <<<"$name")"
-        if [[ "$aot_flag" == aot ]] && selected "$name"; then names+=("$name"); fi
+        if [[ "$aot_flag" == aot ]] && selected "$name" && ! unavailable "$(tr -d '\r' <<<"${requires:-}")" >/dev/null; then names+=("$name"); fi
     done <"$bundle/manifest.tsv"
     printf 'Publishing %d NativeAOT projects for %s (%d at once)\n' "${#names[@]}" "$rid" "$jobs"
     pids=()
@@ -128,10 +147,11 @@ if [[ $aot -eq 1 ]]; then
         if [[ ${#pids[@]} -ge $jobs ]]; then wait "${pids[0]}" || true; pids=(${pids[@]:1}); fi
     done
     wait
-    while IFS=$'\t' read -r name aot_flag arguments environment; do
+    while IFS=$'\t' read -r name aot_flag arguments environment requires; do
         [[ -z "$name" || "$name" == \#* ]] && continue
         name="$(tr -d '\r' <<<"$name")"
         [[ "$aot_flag" == aot ]] && selected "$name" || continue
+        unavailable "$(tr -d '\r' <<<"${requires:-}")" >/dev/null && continue
         executable="$results/$name-publish/out/program$exe"
         if [[ ! -x "$executable" ]]; then
             record "$name" aot FAIL "publish failed ($results/$name-publish/publish.log)"

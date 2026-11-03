@@ -18,7 +18,7 @@ work="$bundle/native/work"
 # RLIMIT_STACK on hosts without one (Windows, macOS); GitHub's Linux runners default to 16 MB. run.sh sets the same.
 ulimit -S -s 8192
 {
-    printf '# name\taot\targuments\tenvironment\n'
+    printf '# name\taot\targuments\tenvironment\trequires\n'
 } >"$bundle/manifest.tsv"
 count=0
 while IFS=$'\t' read -r name aot sources flags arguments environment; do
@@ -57,6 +57,18 @@ while IFS=$'\t' read -r name aot sources flags arguments environment; do
     printf '%s\t%s\t%s\t%s\n' "$name" "$aot" "$arguments" "$environment" >>"$bundle/manifest.tsv"
 done <"$root/tests/xp/fixtures.tsv"
 rm -rf "$work"
+# Native extension fixtures (NX-05): portable images linked with an extension from this toolchain, whose expected output
+# is fixed (every conforming host library prints it), run only where the host library can be found (run.sh).
+bash "$root/scripts/build-extensions.sh" gles >/dev/null 2>"$bundle/native/extensions.log" || { cat "$bundle/native/extensions.log" >&2; exit 1; }
+extension_fixtures=(gles)
+for fixture in "${extension_fixtures[@]}"; do
+    count=$((count + 1))
+    "$llvmnet" --runtime=portable -O1 "$root/tests/extensions/$fixture.c" -lEGL -lGLESv2 -o "$bundle/images/$fixture.dll"
+    "$llvmnet" --runtime=portable -O1 "$root/tests/extensions/$fixture.c" -lEGL -lGLESv2 --aot-project "$bundle/aot/$fixture"
+    cp "$root/tests/extensions/$fixture.expected" "$bundle/expected/$fixture.txt"
+    printf '0\n' >"$bundle/expected/$fixture.status"
+    printf '%s\taot\t-\t-\textension:%s\n' "$fixture" "$fixture" >>"$bundle/manifest.tsv"
+done
 cp "$root/tests/xp/run.sh" "$bundle/run.sh"
 chmod +x "$bundle/run.sh"
 # The NativeAOT projects publish with the .NET 10 SDK wherever the bundle runs, never with a preview of a later one.

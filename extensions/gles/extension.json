@@ -1,0 +1,89 @@
+{
+  "name": "gles",
+  "version": "1.0.0",
+  "summary": "EGL 1.5, OpenGL ES 2.0 to 3.2 and desktop OpenGL with their registered extensions, from the Khronos registries",
+  "registries": [
+    { "path": "egl-registry:api/egl.xml", "apis": ["egl"], "library": "EGL" },
+    { "path": "opengl-registry:xml/gl.xml", "apis": ["gles2", "gl"], "library": "GLESv2" }
+  ],
+  "libraries": [
+    {
+      "name": "GLESv2",
+      "linux": ["libGLESv2.so.2"],
+      "windows": ["libGLESv2.dll"],
+      "macos": ["libGLESv2.dylib"],
+      "dlopen": ["libGLESv2.so.2", "libGLESv2.so"]
+    },
+    {
+      "name": "EGL",
+      "linux": ["libEGL.so.1"],
+      "windows": ["libEGL.dll"],
+      "macos": ["libEGL.dylib"],
+      "dlopen": ["libEGL.so.1", "libEGL.so"],
+      "preload": ["GLESv2"]
+    }
+  ],
+  "link": ["EGL", "GLESv2"],
+  "lookup": { "command": "eglGetProcAddress" },
+  "types": {
+    "EGLNativeDisplayType": "void *",
+    "EGLNativePixmapType": "void *",
+    "EGLNativeWindowType": "void *",
+    "NativeDisplayType": "void *",
+    "NativePixmapType": "void *",
+    "NativeWindowType": "void *",
+    "EGLint": "khronos_int32_t"
+  },
+  "exclude-types": ["GLhandleARB"],
+  "callbacks": {
+    "GLDEBUGPROC": 8,
+    "GLDEBUGPROCKHR": 8,
+    "GLDEBUGPROCARB": 4,
+    "GLDEBUGPROCAMD": 4,
+    "EGLDEBUGPROCKHR": 4,
+    "EGLSetBlobFuncANDROID": 4,
+    "EGLGetBlobFuncANDROID": 4
+  },
+  "defaults": {
+    "eglGetDisplay": "0",
+    "eglGetPlatformDisplay": "0",
+    "eglGetPlatformDisplayEXT": "0",
+    "eglGetError": "0x3001",
+    "eglQueryString": "0",
+    "eglInitialize": "0",
+    "eglTerminate": "0",
+    "eglGetCurrentContext": "0",
+    "eglGetCurrentDisplay": "0",
+    "eglGetCurrentSurface": "0",
+    "eglReleaseThread": "1"
+  },
+  "required": [
+    "eglGetProcAddress", "eglGetDisplay", "eglInitialize", "eglChooseConfig", "eglCreateContext", "eglMakeCurrent",
+    "eglGetError", "glGetString", "glGetError"
+  ],
+  "headers": [
+    { "from": "egl-registry:api", "files": ["EGL/egl.h", "EGL/eglext.h", "KHR/khrplatform.h"] },
+    { "from": "include", "files": ["EGL/eglplatform.h"] },
+    {
+      "from": "opengl-registry:api",
+      "files": [
+        "GLES2/gl2.h", "GLES2/gl2ext.h", "GLES2/gl2platform.h", "GLES3/gl3.h", "GLES3/gl31.h", "GLES3/gl32.h",
+        "GLES3/gl3platform.h", "GL/glcorearb.h"
+      ]
+    }
+  ],
+  "licenses": [
+    { "from": "licenses/NOTICE.txt", "as": "NOTICE.txt" },
+    { "from": "licenses/Apache-2.0.txt", "as": "Apache-2.0.txt" },
+    { "from": "licenses/MIT.txt", "as": "MIT.txt" }
+  ],
+  "checks": [
+    {
+      "name": "gles",
+      "apis": ["egl", "gles2"],
+      "defines": ["EGL_EGLEXT_PROTOTYPES", "GL_GLEXT_PROTOTYPES"],
+      "includes": ["EGL/egl.h", "EGL/eglext.h", "GLES3/gl32.h", "GLES2/gl2ext.h"]
+    },
+    { "name": "gl", "apis": ["gl"], "defines": ["GL_GLEXT_PROTOTYPES"], "includes": ["GL/glcorearb.h"] }
+  ]
+}

@@ -86,6 +86,12 @@ missing() {
             node) command -v node >/dev/null || { echo "node not found"; return; } ;;
             wasm-ld) [[ -n "${WASM_LD:-}" ]] || command -v wasm-ld-22 >/dev/null || command -v wasm-ld >/dev/null || command -v wasm-ld-21 >/dev/null || { echo "no wasm-ld (install lld-22 or set WASM_LD)"; return; } ;;
             python3) command -v python3 >/dev/null || { echo "python3 not found"; return; } ;;
+            egl)
+                local libraries
+                libraries="$(ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null)"
+                if ! grep -q 'libEGL\.so\.1 ' <<<"$libraries" || ! grep -q 'libGLESv2\.so\.2 ' <<<"$libraries"; then
+                    echo "libEGL.so.1 or libGLESv2.so.2 not found (install libegl1, libgles2 and Mesa: scripts/ci/install-packages.sh)"; return
+                fi ;;
             rsync) command -v rsync >/dev/null || { echo "rsync not found (needed to fetch the FATE samples)"; return; } ;;
             fuzz-build) { command -v cmake && command -v m4 && command -v clang++-22; } >/dev/null || { echo "cmake, m4 or clang++-22 not found (needed to build csmith and yarpgen)"; return; } ;;
             ffmpeg-cli) command -v ffmpeg >/dev/null || { echo "ffmpeg command-line tool not found (needed to generate media fixtures)"; return; } ;;

@@ -1,0 +1,12 @@
+The gles native extension of llvmnet contains material from the Khronos Group's EGL and OpenGL registries
+(https://github.com/KhronosGroup/EGL-Registry, https://github.com/KhronosGroup/OpenGL-Registry), at the commits that
+scripts/sources.lock pins:
+
+- include/EGL/egl.h and include/EGL/eglext.h: Copyright 2013-2020 The Khronos Group Inc., Apache-2.0 (Apache-2.0.txt).
+- include/EGL/eglplatform.h: derived from the registry's eglplatform.h, Copyright 2007-2020 The Khronos Group Inc.,
+  Apache-2.0 (Apache-2.0.txt); modified by llvmnet contributors for the portable ABI, whose native handle types are
+  void * on every host.
+- include/KHR/khrplatform.h: Copyright 2008-2018 The Khronos Group Inc., under the license in the file itself.
+- include/GL/glcorearb.h, include/GLES2/ and include/GLES3/: Copyright 2013-2026 The Khronos Group Inc., MIT (MIT.txt).
+- lib/LlvmNet.Ext.Gles.dll is generated from egl.xml and gl.xml, Copyright 2013-2026 The Khronos Group Inc.,
+  Apache-2.0 (Apache-2.0.txt).
