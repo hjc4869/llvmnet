@@ -71,8 +71,9 @@ selected() { [[ -z "$only" ]] || [[ ",$only," == *",$1,"* ]]; }
 # What a fixture needs from the host besides .NET (the manifest's fifth column): "extension:gles" needs EGL and GLES
 # libraries, found where LLVMNET_EXT_GLES_DIR names (ANGLE on Windows and macOS) or, on Linux, on the loader's path;
 # "extension:vulkan" needs a Vulkan loader or driver library, where LLVMNET_EXT_VULKAN_DIR names (SwiftShader on macOS)
-# or the system's (libvulkan.so.1, vulkan-1.dll). Prints the reason and fails when the host lacks it, so the fixture is
-# skipped.
+# or the system's (libvulkan.so.1, vulkan-1.dll) with at least one driver registered for it, since a loader alone fails
+# vkCreateInstance with VK_ERROR_INCOMPATIBLE_DRIVER. Prints the reason and fails when the host lacks it, so the fixture
+# is skipped.
 unavailable() {
     local libraries=""
     if [[ "$system" == linux ]]; then libraries="$(ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null)"; fi
@@ -86,11 +87,30 @@ unavailable() {
             printf 'no compiler for the native test library %s (clang on macOS, Visual Studio'"'"'s cl on Windows)' "${1#native:}"
             return 0 ;;
         extension:vulkan)
-            if [[ -n "${LLVMNET_EXT_VULKAN_DIR:-}" ]] || grep -q 'libvulkan\.so\.1 ' <<<"$libraries" ||
-                [[ "$system" == windows && -f "${WINDIR:-C:/Windows}/System32/vulkan-1.dll" ]]; then return 1; fi
+            if [[ -n "${LLVMNET_EXT_VULKAN_DIR:-}" ]]; then return 1; fi
+            if grep -q 'libvulkan\.so\.1 ' <<<"$libraries" || [[ "$system" == windows && -f "${WINDIR:-C:/Windows}/System32/vulkan-1.dll" ]]; then
+                vulkan_driver && return 1
+                printf 'a Vulkan loader but no driver (install one, such as Mesa'"'"'s lavapipe, or set LLVMNET_EXT_VULKAN_DIR)'
+                return 0
+            fi
             printf 'no Vulkan library (set LLVMNET_EXT_VULKAN_DIR to a directory with SwiftShader'"'"'s vk_swiftshader or MoltenVK)'
             return 0 ;;
     esac
+    return 1
+}
+# Whether the system's Vulkan loader has a driver: a manifest named by VK_DRIVER_FILES or VK_ICD_FILENAMES, or one in the
+# loader's search directories on Linux, or one registered under the Khronos key on Windows.
+vulkan_driver() {
+    [[ -n "${VK_DRIVER_FILES:-}${VK_ICD_FILENAMES:-}" ]] && return 0
+    if [[ "$system" == windows ]]; then
+        reg query 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' 2>/dev/null | grep -q REG_DWORD
+        return
+    fi
+    local directory
+    for directory in "${XDG_CONFIG_HOME:-$HOME/.config}" /etc/xdg /etc "${XDG_DATA_HOME:-$HOME/.local/share}" \
+        /usr/local/share /usr/share; do
+        compgen -G "$directory/vulkan/icd.d/*.json" >/dev/null && return 0
+    done
     return 1
 }
 # The directory of a native test library the bundle carries as source (native-src/<name>), built here with the host's

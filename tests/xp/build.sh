@@ -119,6 +119,9 @@ LLVMNET_ROOT="$farm" "$llvmnet" --runtime=portable -O1 "$template/example/main.c
 LLVMNET_ROOT="$farm" "$llvmnet" --runtime=portable -O1 "$template/example/main.c" -lllvmnet-hello --aot-project "$bundle/aot/hello"
 printf 'hello\taot\t-\t-\tnative:hello\n' >>"$bundle/manifest.tsv"
 count=$((count + 1))
+# The symbolic-link farm points into this checkout and the extension build directory is scratch: neither ships, and
+# Windows cannot extract links whose targets are missing.
+rm -rf "$farm" "$bundle/native/ext-build"
 cp "$root/tests/xp/run.sh" "$bundle/run.sh"
 chmod +x "$bundle/run.sh"
 # The NativeAOT projects publish with the .NET 10 SDK wherever the bundle runs, never with a preview of a later one.
