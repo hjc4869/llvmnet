@@ -26,13 +26,13 @@ Functions with `setjmp` keep a local per value, because the jump dispatch re-ent
 | | before | after |
 | --- | ---: | ---: |
 | IL bytes | 22,991,289 | 18,236,708 |
-| methods past a MinOpts threshold | 38 | 16 |
+| methods past a MinOpts threshold, as `--diagnose-limits` counts them | 38 | 16 |
 | methods past the 2,000-locals threshold | 38 | 0 |
 | `ff_h264_decode_mb_cabac` | 169,077 bytes, 6,505 locals | 105,368 bytes, 97 locals |
 | `ff_h264_filter_mb_fast` | 151,235 bytes, 5,242 locals | 103,458 bytes, 239 locals |
 | `ff_vp9_decode_block` | 206,946 bytes, 7,566 locals | 128,143 bytes, 196 locals |
 
-IL shrinks by a fifth because most locals now take short-form indices. The 16 methods left are past the 60,000-byte IL threshold and still compile as MinOpts under the JIT, so the denser IL this item also asks for (and BE-26's splitting) is still needed for them. In the benchmark set, `printf_core` has 101 locals (from 1,421), Stepanov's vectorized `main` 43 (from 1,499) and oourafft's `cftmdl` 152 (from 1,201).
+IL shrinks by a fifth because most locals now take short-form indices. `--diagnose-limits` models three of RyuJIT's five MinOpts triggers (IL size, blocks, locals; BE-46); counting the instruction-count and local-reference triggers too, the [JIT patterns review](2026-11-04-jit-patterns.md) finds 49 methods over a limit before sharing and 26 after, 25 of them on local references, which sharing leaves as they were. Those still compile as MinOpts under the JIT, so the denser IL this item also asks for (and BE-26's splitting, JP-05's budget) is still needed for them. In the benchmark set, `printf_core` has 101 locals (from 1,421), Stepanov's vectorized `main` 43 (from 1,499) and oourafft's `cftmdl` 152 (from 1,201).
 
 ## Speed
 
