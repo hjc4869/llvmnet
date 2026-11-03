@@ -156,7 +156,15 @@ internal sealed class HostInterop : IDisposable
         }
         else
         {
-            for (int index = 0; index < parameters.Length; index++) il.Emit(OpCodes.Ldarg, checked((short)index));
+            // Native callers extend narrow integer arguments to 32 bits, signed ones with their sign; llvmnet keeps narrow
+            // integers zero-extended, so they are masked on the way in.
+            var values = new ValueEmitter(compiler, il);
+            for (int index = 0; index < parameters.Length; index++)
+            {
+                il.Emit(OpCodes.Ldarg, checked((short)index));
+                nint type = Llvm.LLVMTypeOf(Llvm.LLVMGetParam(function, (uint)index));
+                if (TypeSystem.Kind(type) == 8 && TypeSystem.Width(type) < 32) values.Normalize(type);
+            }
             il.Emit(OpCodes.Call, target);
         }
         il.Emit(OpCodes.Ret);

@@ -17,6 +17,10 @@ internal sealed class CompilerOptions
     internal string AbiTag => Runtime == "system" ? "system-linux-x64-v1" : PortableAbi.Tag;
     internal List<string> SystemLibraries { get; } = [];
     internal List<string> CilReferences { get; } = [];
+    /// <summary>Native extensions an image links (portable mode): referenced, registered at start and listed in its metadata.</summary>
+    internal List<ExtensionPackage> Extensions { get; } = [];
+    /// <summary>Native extensions a system-mode image links: their Linux libraries, registered by name and listed in its metadata.</summary>
+    internal List<ExtensionPackage> SystemExtensions { get; } = [];
 }
 
 /// <summary>One link input: a source or object with the language in effect for it (from -x), or an archive with its whole-archive state.</summary>
@@ -55,6 +59,13 @@ internal sealed class Invocation
     internal string? AotProject { get; private set; }
     internal string? AotInstructionSet { get; private set; }
     internal string AotPreference { get; private set; } = "Balanced";
+    /// <summary>--extension names, in order.</summary>
+    internal List<string> ExtensionNames { get; } = [];
+    internal bool ListExtensions { get; private set; }
+    /// <summary>--install-extension: a built extension package to install in the sysroot's ext/ directory.</summary>
+    internal string? InstallExtension { get; private set; }
+    /// <summary>--uninstall-extension: the name of an installed extension to remove.</summary>
+    internal string? UninstallExtension { get; private set; }
     /// <summary>Queries the frontend answers (--version, -dumpmachine, -print-...), run instead of a compilation.</summary>
     internal List<string> Queries { get; } = [];
 
@@ -128,6 +139,10 @@ internal sealed class Invocation
                 case "--simd128": Options.Simd128 = true; break;
                 case "--cil-reference": Options.CilReferences.Add(Path.GetFullPath(value)); break;
                 case "--system-library": Options.SystemLibraries.Add(value); break;
+                case "--extension": ExtensionNames.Add(value); break;
+                case "--list-extensions": ListExtensions = true; break;
+                case "--install-extension": InstallExtension = Path.GetFullPath(value); break;
+                case "--uninstall-extension": UninstallExtension = value; break;
                 case "--nativeaot": Options.NativeAot = true; break;
                 case "--runtime-id": RuntimeId = value; break;
                 case "--aot-project": AotProject = Path.GetFullPath(value); Options.NativeAot = true; break;
@@ -207,6 +222,8 @@ internal sealed class Invocation
         if (PortableAbi.SysrootOverride is not null && Options.Runtime != "portable") throw new ArgumentException("--portable-sysroot requires --runtime=portable.");
         if (Options.Runtime == "system" && RuntimeId is not null && RuntimeId != "linux-x64")
             throw new ArgumentException("The current system ABI profile requires NativeAOT RID linux-x64.");
+        // An extension that is not installed fails before anything runs, whether or not this invocation links.
+        foreach (string name in ExtensionNames) Extensions.Find(name);
         if (LinkerVersion && (Inputs.Count != 0 || Output is not null || CompileOnly || Preprocess || DependencyOnly || EmitLlvm || nativeAot || Options.Library))
             throw new ArgumentException("-Wl,--version is an informational query, not a link operation.");
     }
@@ -214,6 +231,12 @@ internal sealed class Invocation
 
 internal static class Driver
 {
+    /// <summary>-l names that are parts of the C library in both modes and need no archive.</summary>
+    internal static readonly string[] CLibraryNames = ["c", "m", "pthread", "dl", "rt", "util", "crypt", "resolv"];
+
+    /// <summary>-l names of the C++ and Fortran runtimes, which the portable sysroot supplies.</summary>
+    internal static readonly string[] PortableRuntimeNames = ["c++", "c++abi", "stdc++", "supc++", "flang_rt.runtime", "FortranRuntime", "FortranDecimal"];
+
     internal static int Run(string[] arguments)
     {
         arguments = Toolchain.ExpandResponseFiles(arguments);
@@ -232,8 +255,24 @@ internal static class Driver
             foreach (string line in HostSyscalls.DescribeUnavailable()) Console.WriteLine(line);
             return 0;
         }
+        if (parsed.Any(argument => argument.Is("--print-extension-kit")))
+        {
+            // What build-extensions.sh needs from the toolchain it runs with, in the repository, the toolchain package or
+            // the dotnet tool (NX-12): the version stamped into an extension assembly, the runtime assembly it compiles
+            // against, the default portable sysroot, and where the script itself and the template are.
+            string kit = Path.Combine(Toolchain.Root, "share", "llvmnet", "extensions");
+            if (!System.IO.Directory.Exists(kit)) kit = Path.Combine(Toolchain.Root, "scripts");
+            string template = Path.Combine(Toolchain.Root, "share", "llvmnet", "templates", "native-extension");
+            if (!System.IO.Directory.Exists(template)) template = Path.Combine(Toolchain.Root, "templates", "native-extension");
+            Console.Write($"version {BuildInfo.Version}\nruntime {typeof(BuildInfo).Assembly.Location}\nsysroot {PortableAbi.Sysroot}\n" +
+                $"kit {kit}\ntemplate {template}\n");
+            return 0;
+        }
         var invocation = new Invocation(parsed, driver);
         driver = invocation.Driver;
+        if (invocation.ListExtensions) { Console.Write(Extensions.Listing()); return 0; }
+        if (invocation.InstallExtension is not null) { Console.WriteLine(Extensions.Install(invocation.InstallExtension)); return 0; }
+        if (invocation.UninstallExtension is not null) { Console.WriteLine(Extensions.Uninstall(invocation.UninstallExtension)); return 0; }
         CompilerOptions options = invocation.Options;
         if (!invocation.Frontend.Contains("-w")) options.Warnings = new Diagnostics(arguments);
         string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");
@@ -276,6 +315,7 @@ internal static class Driver
                 preprocessing.AddRange(["-o", invocation.Output]);
             bool fortranInput = driver == "flang" || inputs.Any(IsFortran);
             if (options.Runtime == "portable") preprocessing.InsertRange(0, PortableAbi.Arguments(frontend, fortranInput, driver == "clang++" || inputs.Any(IsCpp)));
+            else if (!fortranInput) preprocessing.InsertRange(0, ["-idirafter", Extensions.InterfaceInclude]);
             if (driver == "clang++") preprocessing.Insert(0, "--driver-mode=g++");
             return Toolchain.Run(fortranInput ? flang : clang, preprocessing, verbose, options.Runtime == "portable");
         }
@@ -319,6 +359,8 @@ internal static class Driver
                 if (driver == "clang++") command.Add("--driver-mode=g++");
                 // LLVM IR gets the mode's target and macros only; its headers and feature macros do not apply.
                 if (options.Runtime == "portable") command.AddRange(ir ? PortableAbi.Arguments(frontend, true, false) : PortableAbi.Arguments(frontend, fortran, cpp));
+                // <llvmnet/ext.h> after the host's headers, so that it shadows nothing.
+                else if (!fortran && !ir) command.AddRange(["-idirafter", Extensions.InterfaceInclude]);
                 if (fortran)
                 {
                     if (!invocation.ModuleDirectoryGiven)
@@ -347,18 +389,40 @@ internal static class Driver
             }
             if (invocation.CompileOnly || invocation.DryRun)
                 return 0;
+            List<ExtensionPackage> extensions = [.. invocation.ExtensionNames.Select(Extensions.Find)];
             foreach ((string library, bool wholeArchive) in invocation.Libraries)
             {
                 // Parts of the C library in both modes; in portable mode the sysroot also supplies the C++ and Fortran runtimes.
-                if (library is "c" or "m" or "pthread" or "dl" or "rt" or "util" or "crypt" or "resolv" ||
-                    options.Runtime == "portable" && library is "c++" or "c++abi" or "stdc++" or "supc++" or "flang_rt.runtime" or "FortranRuntime" or "FortranDecimal")
+                if (CLibraryNames.Contains(library) || options.Runtime == "portable" && PortableRuntimeNames.Contains(library))
                     continue;
-                // -l:name names the file exactly; -lname looks for libname.a.
+                // -l:name names the file exactly; -lname looks for libname.a, then for a native extension that answers the name.
                 string file = library.StartsWith(':') ? library[1..] : $"lib{library}.a";
                 string? archive = invocation.SearchPaths.Select(directory => Path.Combine(directory, file)).FirstOrDefault(File.Exists);
+                if (archive is null && !library.StartsWith(':') && Extensions.ForLibrary(library) is ExtensionPackage extension)
+                {
+                    extensions.Add(extension);
+                    continue;
+                }
                 if (archive is null)
-                    throw new FileNotFoundException($"Cannot find LLVM bitcode archive {file} in the -L directories ({string.Join(", ", invocation.SearchPaths.DefaultIfEmpty("none given"))}). Native libraries need --runtime=system with --system-library.");
+                    throw new FileNotFoundException($"Cannot find LLVM bitcode archive {file} in the -L directories ({string.Join(", ", invocation.SearchPaths.DefaultIfEmpty("none given"))}), and no native extension answers -l{library}. Native libraries need --runtime=system with --system-library, or a native extension (llvmnet --list-extensions).");
                 bitcode.Add((archive, wholeArchive));
+            }
+            // A native extension is a managed reference registered at start in portable mode, and its Linux libraries in
+            // system mode, where generated bridges call them directly.
+            extensions = [.. extensions.DistinctBy(extension => extension.Name)];
+            Extensions.Require(extensions);
+            foreach (ExtensionPackage extension in extensions)
+            {
+                if (options.Runtime == "system")
+                {
+                    if (extension.Linux.Count == 0) throw new InvalidOperationException($"native extension '{extension.Name}' names no Linux library for system mode.");
+                    options.SystemLibraries.AddRange(extension.Linux.Except(options.SystemLibraries));
+                    options.SystemExtensions.Add(extension);
+                    continue;
+                }
+                options.CilReferences.Add(extension.Assembly);
+                options.Extensions.Add(extension);
+                if (File.Exists(extension.Wrappers)) bitcode.Add((extension.Wrappers, false));
             }
             // Portable executables link musl's start object and the sysroot archives, in dependency order. Libraries do
             // not: musl keeps per-process state (thread pointer, heap, stdio) that one image per process must own. Nor
@@ -382,8 +446,12 @@ internal static class Driver
             bool executable = !options.Library && !invocation.Relocatable;
             if (!executable && bitcode.All(input => LinkerInputKind(input.Path) == ".a" && !input.WholeArchive))
                 throw new ArgumentException("Provide at least one explicit object or source as the link root, or -Wl,--whole-archive before an archive.");
+            // An executable that uses a native extension also links the musl port's thread attachment, which the
+            // extensions' reverse thunks need on threads a host library started (NX-08).
+            string[] threadAttachment = executable && options.Extensions.Count != 0 && options.Runtime == "portable" && invocation.DefaultLibraries
+                ? ["__llvmnet_attach_thread", "__llvmnet_detach_thread"] : [];
             Llvm.Link([.. bitcode.Select(input => input.Path)], [.. bitcode.Select(input => input.WholeArchive)], linked, options.AbiTag,
-                executable ? ["main", "_QQmain"] : []);
+                executable ? ["main", "_QQmain"] : [], threadAttachment);
             if (invocation.KeepIr is not null)
                 File.Copy(linked, invocation.KeepIr, true);
             string output = Path.GetFullPath(invocation.Output ?? (options.Library ? "a.dll" : invocation.Relocatable ? "a.o" : invocation.EmitLlvm ? "a.bc" : "a.out"));
@@ -404,7 +472,8 @@ internal static class Driver
             string scalarizer = options.Simd128 ? "scalarizer" : "scalarizer<load-store>";
             string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,expand-reductions,scalarize-masked-mem-intrin,{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
-            if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (options.Runtime == "portable" ? ",__llvmnet_libc_main,__llvmnet_register_finalizer,__llvmnet_cxx_can_catch" : ""));
+            if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (options.Runtime == "portable" ? ",__llvmnet_libc_main,__llvmnet_register_finalizer,__llvmnet_cxx_can_catch" : "") +
+                (options.Extensions.Count != 0 && options.Runtime == "portable" ? ",__llvmnet_attach_thread,__llvmnet_detach_thread" : ""));
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);
             if (optimizeResult != 0)
                 return optimizeResult;

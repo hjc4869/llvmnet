@@ -1,0 +1,47 @@
+{
+  "name": "vulkan",
+  "version": "1.0.0",
+  "summary": "Vulkan 1.0 to 1.4 and its registered extensions except the window-system and provisional ones, from the Khronos registry",
+  "registries": [{ "path": "vulkan-headers:registry/vk.xml", "apis": ["vulkan"], "library": "Vulkan" }],
+  "libraries": [
+    {
+      "name": "Vulkan",
+      "linux": ["libvulkan.so.1"],
+      "windows": ["vulkan-1.dll", "vk_swiftshader.dll"],
+      "macos": ["libvulkan.1.dylib", "libMoltenVK.dylib", "libvk_swiftshader.dylib"],
+      "dlopen": ["libvulkan.so.1", "libvulkan.so"]
+    }
+  ],
+  "link": ["vulkan"],
+  "lookup": { "command": "vkGetInstanceProcAddr", "stub": "VulkanLookup.InstanceProcAddress", "bind": "VulkanLookup.Bind" },
+  "replace": { "vkGetDeviceProcAddr": "VulkanLookup.DeviceProcAddress" },
+  "after": { "vkCreateInstance": "VulkanLookup.InstanceCreated", "vkDestroyInstance": "VulkanLookup.InstanceDestroyed" },
+  "sources": ["Vulkan.cs"],
+  "exclude-extensions": ["VK_LUNARG_direct_driver_loading"],
+  "callbacks": {
+    "PFN_vkAllocationFunction": 8,
+    "PFN_vkReallocationFunction": 8,
+    "PFN_vkFreeFunction": 8,
+    "PFN_vkInternalAllocationNotification": 8,
+    "PFN_vkInternalFreeNotification": 8,
+    "PFN_vkDebugUtilsMessengerCallbackEXT": 8,
+    "PFN_vkDebugReportCallbackEXT": 4,
+    "PFN_vkDeviceMemoryReportCallbackEXT": 4
+  },
+  "defaults": {
+    "vkCreateInstance": "-3",
+    "vkEnumerateInstanceExtensionProperties": "-3",
+    "vkEnumerateInstanceLayerProperties": "-3",
+    "vkEnumerateInstanceVersion": "-3"
+  },
+  "required": ["vkCreateInstance", "vkEnumerateInstanceExtensionProperties"],
+  "headers": [
+    { "from": "vulkan-headers:include", "files": ["vulkan/vulkan.h", "vulkan/vk_platform.h", "vulkan/vulkan_core.h", "vk_video/vulkan_video_codec_av1std_decode.h", "vk_video/vulkan_video_codec_av1std_encode.h", "vk_video/vulkan_video_codec_av1std.h", "vk_video/vulkan_video_codec_h264std_decode.h", "vk_video/vulkan_video_codec_h264std_encode.h", "vk_video/vulkan_video_codec_h264std.h", "vk_video/vulkan_video_codec_h265std_decode.h", "vk_video/vulkan_video_codec_h265std_encode.h", "vk_video/vulkan_video_codec_h265std.h", "vk_video/vulkan_video_codecs_common.h", "vk_video/vulkan_video_codec_vp9std_decode.h", "vk_video/vulkan_video_codec_vp9std.h"] }
+  ],
+  "licenses": [
+    { "from": "licenses/NOTICE.txt", "as": "NOTICE.txt" },
+    { "from": "licenses/Apache-2.0.txt", "as": "Apache-2.0.txt" },
+    { "from": "licenses/MIT.txt", "as": "MIT.txt" }
+  ],
+  "checks": [{ "name": "vulkan", "apis": ["vulkan"], "includes": ["vulkan/vulkan.h"], "types": false, "layouts": true }]
+}

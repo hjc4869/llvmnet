@@ -18,6 +18,9 @@ if [[ "$prefix" == / || "$prefix" == "$root" ]]; then
     exit 2
 fi
 bash "$root/scripts/ensure-built.sh"
+# The native extensions of extensions/ ship in the portable sysroot (NX-12); a package is rebuilt only when an input
+# changed, and the sysroot copied below carries what is installed in ext/.
+LLVMNET_SKIP_BUILD=1 bash "$root/scripts/build-extensions.sh"
 mkdir -p "$prefix/bin" "$prefix/lib/llvmnet" "$prefix/share/llvmnet" "$prefix/sysroot"
 publish_options=(--no-self-contained)
 if [[ "$self_contained" -eq 1 ]]; then publish_options=(--self-contained -r linux-x64); fi
@@ -40,6 +43,10 @@ mkdir -p "$prefix/share/llvmnet/cmake/Platform" "$prefix/share/llvmnet/meson"
 cp "$root/cmake/llvmnet.cmake" "$root/cmake/llvmnet-rules.cmake" "$prefix/share/llvmnet/cmake/"
 cp "$root/cmake/Platform/LlvmNet.cmake" "$prefix/share/llvmnet/cmake/Platform/"
 cp "$root/meson/llvmnet.ini" "$prefix/share/llvmnet/meson/"
+# The kit that builds native extensions from an installed toolchain, and the template for third-party ones (NX-12).
+mkdir -p "$prefix/share/llvmnet/extensions" "$prefix/share/llvmnet/templates"
+cp "$root/scripts/build-extensions.sh" "$root/scripts/ext-gen.py" "$prefix/share/llvmnet/extensions/"
+cp -a "$root/templates/native-extension" "$prefix/share/llvmnet/templates/"
 mkdir -p "$prefix/share/llvmnet/spec"
 cp "$root/config/spec/llvmnet.cfg" "$root/config/spec/llvmnet.xml" "$prefix/share/llvmnet/spec/"
 cp "$root/README.md" "$root/LICENSE.TXT" "$root/THIRD-PARTY-NOTICES.md" "$root/CHANGELOG.md" "$prefix/share/llvmnet/"

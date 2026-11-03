@@ -4,7 +4,7 @@ Every claim about llvmnet is backed by a test or a dated evidence file, and the 
 
 ## The runner
 
-`tests/run.sh` discovers `tests/*.sh` scripts with a `# tags:` header, builds the solution and the sysroots once (`scripts/ensure-built.sh`), runs the parallel tests with `-j` jobs and then the serial ones, continues after failures, and writes `artifacts/tests/results/` with one log per test, `summary.tsv` and a JUnit `results.xml`. A test whose prerequisite (`# requires: flang openmp ...`) is missing is reported as skipped with the reason.
+`tests/run.sh` discovers `tests/*.sh` scripts with a `# tags:` header, builds the solution and the sysroots once (`scripts/ensure-built.sh`), runs the parallel tests with `-j` jobs and then the serial ones, continues after failures, and writes `artifacts/tests/results/` with one log per test, `summary.tsv` and a JUnit `results.xml`. A test whose prerequisite (`# requires: flang openmp ...`) is missing is reported as skipped with the reason; `egl` (for `tests/ext-gles.sh`) needs Mesa's `libEGL.so.1` and `libGLESv2.so.2`, and `vulkan` (for `tests/ext-vulkan.sh`) the Khronos loader `libvulkan.so.1` and Mesa's lavapipe, which `scripts/ci/install-packages.sh` installs.
 
 ```sh
 tests/run.sh --list                                          # every test with its tags and prerequisites
@@ -29,7 +29,7 @@ Header keys: `tags` (selection), `requires` (prerequisites), `serial: N` (run al
 | `cpp`, `fortran` | Need `clang++-22` or `flang-22` | with their other tags |
 | `slow` | The full package and deployment test (`deployment`), the release reproducibility test (`release`) | nightly |
 | `integration` | zlib, libxml2, dav1d and the ffmpeg profiles from pinned sources, decoded media compared with native builds | nightly |
-| `optional` | System-mode libstdc++ and OpenMP, SIMD128, local media (`FFMPEG_TEST_VIDEO`) | nightly where the prerequisites exist |
+| `optional` | System-mode libstdc++ and OpenMP, SIMD128, local media (`FFMPEG_TEST_VIDEO`), the Skia scenario of native extensions (`ext-skia`: `LLVMNET_SKIA_DIR` names a Skia checkout with the SkiaSharp C API, and Xvfb) | nightly where the prerequisites exist |
 | `conformance` | musl's libc-test, the libc++ and libc++abi lit suites (and, with `LIBCXX_NATIVEAOT=1`, a NativeAOT subset), FCVS and the gfortran tests of llvm-test-suite, flang-rt's own unit tests, c-testsuite, and llvm-test-suite's SingleSource and MultiSource with gcc-c-torture through the suite's CMake in portable, system and portable NativeAOT modes | nightly ([gates.md](gates.md) has the thresholds) |
 | `fate` | ffmpeg's FATE suite against the real `ffmpeg` and `ffprobe`, native and portable builds of the same configuration, with the samples verified against `tests/ffmpeg/fate-suite.sha256` | nightly |
 | `fuzz` | csmith and YARPGen programs compiled natively and with llvmnet, outputs compared, failures kept with a `repro.sh` | nightly, 500 seeds per generator |

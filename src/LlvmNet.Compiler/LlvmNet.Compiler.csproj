@@ -13,7 +13,9 @@
     <InternalsVisibleTo Include="LlvmNet.UnitTests" />
   </ItemGroup>
   <!-- The dotnet tool package (scripts/release-artifacts.sh, TC-11): the compiler, its LLVM bridge and the sysroots in
-       one package, so that "dotnet tool install -g llvmnet" gives a working thin toolchain with LLVM 22 on PATH. -->
+       one package, so that "dotnet tool install -g llvmnet" gives a working thin toolchain with LLVM 22 on PATH. The
+       portable sysroot carries the native extensions installed in its ext/ (release-artifacts.sh builds those of
+       extensions/ first), with <llvmnet/ext.h>, the kit that builds more and the template for them (NX-12). -->
   <PropertyGroup Condition="'$(PackLlvmnetTool)' == 'true'">
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>llvmnet</ToolCommandName>
@@ -23,9 +25,12 @@
   </PropertyGroup>
   <ItemGroup Condition="'$(PackLlvmnetTool)' == 'true'">
     <None Include="$(OutDir)libllvmnet-llvm.so" Pack="true" PackagePath="tools/$(TargetFramework)/any/" />
-    <None Include="$(MSBuildProjectDirectory)/../../sysroot/dotnet64-v2/**" Exclude="$(MSBuildProjectDirectory)/../../sysroot/dotnet64-v2/.*" Pack="true" PackagePath="tools/$(TargetFramework)/any/sysroot/dotnet64-v2/" />
+    <None Include="$(MSBuildProjectDirectory)/../../sysroot/dotnet64-v2/**" Exclude="$(MSBuildProjectDirectory)/../../sysroot/dotnet64-v2/.*;$(MSBuildProjectDirectory)/../../sysroot/dotnet64-v2/ext/*/.*" Pack="true" PackagePath="tools/$(TargetFramework)/any/sysroot/dotnet64-v2/" />
     <None Include="$(MSBuildProjectDirectory)/../../sysroot/system-linux-x64-v1/**" Exclude="$(MSBuildProjectDirectory)/../../sysroot/system-linux-x64-v1/.*" Pack="true" PackagePath="tools/$(TargetFramework)/any/sysroot/system-linux-x64-v1/" />
     <None Include="$(MSBuildProjectDirectory)/../../sysroot/simd128/**" Exclude="$(MSBuildProjectDirectory)/../../sysroot/simd128/.*" Pack="true" PackagePath="tools/$(TargetFramework)/any/sysroot/simd128/" />
+    <None Include="$(MSBuildProjectDirectory)/../../sysroot/extensions/**" Pack="true" PackagePath="tools/$(TargetFramework)/any/sysroot/extensions/" />
+    <None Include="$(MSBuildProjectDirectory)/../../scripts/build-extensions.sh;$(MSBuildProjectDirectory)/../../scripts/ext-gen.py" Pack="true" PackagePath="tools/$(TargetFramework)/any/share/llvmnet/extensions/" />
+    <None Include="$(MSBuildProjectDirectory)/../../templates/native-extension/**" Pack="true" PackagePath="tools/$(TargetFramework)/any/share/llvmnet/templates/native-extension/" />
     <None Include="$(MSBuildProjectDirectory)/../../LICENSE.TXT" Pack="true" PackagePath="" />
     <None Include="$(MSBuildProjectDirectory)/../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="" />
     <None Include="$(MSBuildProjectDirectory)/../../README.md" Pack="true" PackagePath="" />

@@ -1,0 +1,21 @@
+{
+  "name": "structs",
+  "version": "1.0.0",
+  "summary": "The synthetic API of tests/ext-structs.sh: structures passed by value and returned (NX-07)",
+  "registries": [
+    { "kind": "headers", "include-path": "include", "header": "llvmnet-structs.h", "include": ["*_*"], "apis": ["structs"], "library": "Structs" }
+  ],
+  "libraries": [
+    {
+      "name": "Structs",
+      "linux": ["libllvmnet-structs.so"],
+      "windows": ["llvmnet-structs.dll"],
+      "macos": ["libllvmnet-structs.dylib"],
+      "dlopen": ["libllvmnet-structs.so"]
+    }
+  ],
+  "link": ["llvmnet-structs"],
+  "required": ["structs_version"],
+  "headers": [{ "from": "include", "files": ["llvmnet-structs.h"] }],
+  "checks": [{ "name": "structs", "apis": ["structs"], "includes": ["llvmnet-structs.h"], "types": false }]
+}

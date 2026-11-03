@@ -49,6 +49,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         .ToDictionary(item => item.Name, item => item.Method, StringComparer.Ordinal);
 
     private readonly Dictionary<nint, bool> undefinedWeak = [];
+    /// <summary>The NativeExtension subclass of each linked extension, which the image initializer registers.</summary>
+    private readonly List<ConstructorInfo> extensionProviders = [];
     private MethodBuilder constructors = null!;
     private nint libcMain;
     private nint libcFinalizer;
@@ -67,7 +69,7 @@ internal sealed class CilCompiler(CompilerOptions options)
     private bool MuslVisible(string name, MethodInfo method)
     {
         Type owner = method.DeclaringType!;
-        if (owner == typeof(HostSyscalls) || owner == typeof(NonLocalJumps) || owner == typeof(Simd128))
+        if (owner == typeof(HostSyscalls) || owner == typeof(NonLocalJumps) || owner == typeof(Simd128) || owner == typeof(NativeExtensions))
             return true;
         if (owner != typeof(Cxx)) return managedImports.Contains(name);
         // The bridge handles throwing, catching and termination (docs/dev/cxx-eh-bridge.md); libc++abi and musl supply
@@ -266,6 +268,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         if (options.Simd128)
             foreach (string name in runtimeExports.Keys.Where(name => name.StartsWith("__llvmnet_simd128_", StringComparison.Ordinal)))
                 managedImports.Add(name);
+        // <llvmnet/ext.h> answers from the runtime in both modes, not from a native library in system mode.
+        managedImports.UnionWith(["llvmnet_ext_available", "llvmnet_ext_library"]);
         ConstructorInfo metadataAttribute = typeof(AssemblyMetadataAttribute).GetConstructor([typeof(string), typeof(string)])!;
         assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.abi", options.AbiTag]));
         assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.version", BuildInfo.Version]));
@@ -288,6 +292,11 @@ internal sealed class CilCompiler(CompilerOptions options)
                         managedImports.Add(export.Name);
                     }
         }
+        foreach (ExtensionPackage extension in options.Extensions)
+            extensionProviders.Add(ExtensionProvider(extension));
+        if (options.Extensions.Count + options.SystemExtensions.Count != 0)
+            assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.extensions",
+                string.Join(", ", options.Extensions.Concat(options.SystemExtensions).Select(extension => extension.Tag))]));
         foreach (nint function in Llvm.Functions(module))
         {
             if (Llvm.LLVMIsDeclaration(function) != 0)
@@ -395,6 +404,24 @@ internal sealed class CilCompiler(CompilerOptions options)
                 File.Copy(reference, destination, true);
         }
         Host?.Build();
+    }
+
+    /// <summary>
+    /// The registration class of a native extension's assembly (already loaded as a CIL reference): the one public, concrete
+    /// NativeExtension subclass with a public parameterless constructor, in an assembly that declares the manifest's
+    /// llvmnet.extension name and version.
+    /// </summary>
+    private static ConstructorInfo ExtensionProvider(ExtensionPackage extension)
+    {
+        Assembly library = Assembly.LoadFrom(extension.Assembly);
+        string? declared = library.GetCustomAttributes<AssemblyMetadataAttribute>().FirstOrDefault(attribute => attribute.Key == "llvmnet.extension")?.Value;
+        if (declared != extension.Tag)
+            throw new InvalidOperationException($"native extension '{extension.Name}': {extension.Assembly} declares llvmnet.extension {declared ?? "(none)"}, but its manifest describes {extension.Tag}.");
+        ConstructorInfo[] providers = [.. library.GetExportedTypes()
+            .Where(type => type.IsSubclassOf(typeof(NativeExtension)) && !type.IsAbstract)
+            .Select(type => type.GetConstructor(Type.EmptyTypes)).OfType<ConstructorInfo>()];
+        return providers.Length == 1 ? providers[0]
+            : throw new InvalidOperationException($"native extension '{extension.Name}': {extension.Assembly} must define one public NativeExtension subclass with a public parameterless constructor, not {providers.Length}.");
     }
 
     /// <summary>The class for the next <paramref name="methods"/> internal methods (see <see cref="MethodsPerType"/>).</summary>
@@ -570,7 +597,30 @@ internal sealed class CilCompiler(CompilerOptions options)
         il.Emit(OpCodes.Ldstr, options.AbiTag);
         il.Emit(OpCodes.Ldstr, BuildInfo.Version);
         il.Emit(OpCodes.Call, typeof(AbiContract).GetMethod(nameof(AbiContract.Require), [typeof(string), typeof(string)])!);
+        // Native extensions serve dlopen from the start (docs/dev/host-abi.md#dynamic-loading).
+        foreach (ConstructorInfo provider in extensionProviders)
+        {
+            il.Emit(OpCodes.Newobj, provider);
+            il.Emit(OpCodes.Call, typeof(NativeExtensions).GetMethod(nameof(NativeExtensions.Register))!);
+        }
+        // In system mode the loader has linked the extension's libraries; <llvmnet/ext.h> still answers for it.
+        foreach (ExtensionPackage extension in options.SystemExtensions)
+        {
+            il.Emit(OpCodes.Ldstr, extension.Name);
+            il.Emit(OpCodes.Ldstr, string.Join(" ", extension.Linux));
+            il.Emit(OpCodes.Call, typeof(NativeExtensions).GetMethod(nameof(NativeExtensions.RegisterSystem))!);
+        }
         // When linked, libc++abi's catch matcher (ports/libcxxabi/llvmnet-catch.cpp) decides which handlers catch an exception.
+        // Callbacks from threads a host library started get musl thread state from the musl port (NX-08); the driver
+        // links these two only into images that use a native extension.
+        nint attachThread = Llvm.LLVMGetNamedFunction(module, "__llvmnet_attach_thread");
+        nint detachThread = Llvm.LLVMGetNamedFunction(module, "__llvmnet_detach_thread");
+        if (attachThread != 0 && Llvm.LLVMIsDeclaration(attachThread) == 0 && detachThread != 0 && Llvm.LLVMIsDeclaration(detachThread) == 0)
+        {
+            il.Emit(OpCodes.Ldftn, Methods[attachThread]);
+            il.Emit(OpCodes.Ldftn, Methods[detachThread]);
+            il.Emit(OpCodes.Call, typeof(NativeCallbacks).GetMethod(nameof(NativeCallbacks.RegisterThreads))!);
+        }
         nint catchMatcher = Llvm.LLVMGetNamedFunction(module, "__llvmnet_cxx_can_catch");
         if (catchMatcher != 0 && Llvm.LLVMIsDeclaration(catchMatcher) == 0)
         {

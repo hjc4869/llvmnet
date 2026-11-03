@@ -152,14 +152,17 @@ struct LinkDiagnostics {
 // define, rescanning the archives until no member resolves anything more. An archive is recognized by its content,
 // whatever its name. `entry` names the program's entry point (main, or the Fortran main program): while the module
 // defines none of them, a member that defines one is linked, as crt1.o's reference to main extracts it natively (the
-// gtest_main and Catch2 idiom). Libraries and relocatable links have no entry point.
+// gtest_main and Catch2 idiom). Libraries and relocatable links have no entry point. `required` names symbols that are
+// linked from the archive member that defines them in any case, as a native linker's -u does (the musl port's thread
+// attachment, which images with native extensions need although nothing in them calls it).
 //
 // Bitcode is loaded lazily, so a function body is read only when its definition is linked: archive members that are
 // never needed, and the copies of an inline function that every C++ object carries, cost little more than their
 // symbol tables. One Linker serves the whole link, because a Linker indexes every struct type of the destination
 // module when it is constructed: one per input made the link of a large program quadratic in its size.
 extern "C" int llvmnet_link(const char *const *paths, const int *wholeArchive, unsigned count, const char *const *entry,
-                            unsigned entryCount, const char *output, const char *abi, char **message)
+                            unsigned entryCount, const char *const *required, unsigned requiredCount, const char *output,
+                            const char *abi, char **message)
 {
     llvm::LLVMContext context;
     LinkDiagnostics diagnostics;
@@ -259,6 +262,12 @@ extern "C" int llvmnet_link(const char *const *paths, const int *wholeArchive, u
             return value && !value->isDeclarationForLinker();
         });
     };
+    auto isRequired = [&](llvm::StringRef name) {
+        if (std::none_of(required, required + requiredCount, [&](const char *candidate) { return name == candidate; }))
+            return false;
+        const llvm::GlobalValue *value = linked->getNamedValue(name);
+        return !value || value->isDeclarationForLinker();
+    };
     bool progress;
     do {
         progress = false;
@@ -276,7 +285,7 @@ extern "C" int llvmnet_link(const char *const *paths, const int *wholeArchive, u
                 const llvm::GlobalValue *reference = linked->getNamedValue(definition.getName());
                 if ((reference && reference->isDeclarationForLinker() && !reference->hasExternalWeakLinkage() &&
                      !reference->use_empty()) ||
-                    (needEntry && isEntry(definition.getName()))) {
+                    (needEntry && isEntry(definition.getName())) || isRequired(definition.getName())) {
                     needed = true;
                     break;
                 }

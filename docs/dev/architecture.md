@@ -71,4 +71,4 @@ Fortran uses Flang 22 CFI descriptors and flang-rt in both modes: compiled again
 - Managed linking uses `--cil-reference` and `CExport` methods.
 - System mode resolves the remaining symbols in native libraries (the C library and `--system-library`) through generated LLVM bridges and unmanaged-callable callbacks.
 
-Portable mode accepts only the first two: native libraries are rejected.
+Portable mode accepts only the first two: native libraries are rejected. A native extension ([user/extensions.md](../user/extensions.md)) is the second kind: a generated managed reference whose stubs call a host library they load at run time, registered with the runtime's `dlopen` at start.

@@ -55,6 +55,7 @@ for variant in $variants; do
         tool)
             # The dotnet tool: the compiler, its LLVM bridge and the sysroots in one package; LLVM 22 comes from PATH.
             bash "$root/scripts/ensure-built.sh"
+            LLVMNET_SKIP_BUILD=1 bash "$root/scripts/build-extensions.sh" 2>"$work/extensions.log"
             dotnet pack "$root/src/LlvmNet.Compiler" -c Release --no-build --nologo -v quiet -o "$work/tool" \
                 -p:PackLlvmnetTool=true -p:PackageVersion="${version%%+*}"
             # NuGet stamps the package's generated entries with the build time; rewriting the zip with the commit time

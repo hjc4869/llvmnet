@@ -1,0 +1,7 @@
+EGL initialized; GLES API bound: yes
+GLES 2 pixels: inside 255,102,51,255 outside 0,0,255,255, glGetError 0x0
+GL_KHR_debug: callback received, type GL_DEBUG_TYPE_ERROR, user pointer kept, glGetError 0x500
+unknown entry point: null
+GLES 3: vertex array bound, extension strings listed
+GLES 3 pixels: inside 255,102,51,255 outside 0,0,255,255, glGetError 0x0
+dlopen libEGL.so.1: eglGetProcAddress found, display initialized, glGetString found

@@ -22,6 +22,16 @@ Compatibility follows Semantic Versioning with the usual 0.x rule: while the maj
 
 ABI tags are versioned separately from the compiler. The current tags are `dotnet64-v2` (portable mode) and `system-linux-x64-v1` (system mode). A tag stays fixed for the lifetime of its documented contract, including the portable [host interface](host-abi.md); an incompatible change creates a new tag. `llvmnet -c` records the tag in every object, and the linker rejects inputs whose tag differs from the link's, as well as untagged LLVM input. The runtime refuses to load images of two different ABIs into one process. See [ADR-09](../plan/decisions.md#adr-09-portable-abi-evolution).
 
+## Native extensions
+
+A native extension ([extensions.md](extensions.md)) is versioned apart from llvmnet and from `dotnet64-v2`: its manifest's `version` follows Semantic Versioning for its own interface. Its major version changes when an entry point is removed or changes its C signature, its minor version when entry points or types are added (a newer registry or header), and its patch version for fixes that change neither. The shipped `gles` and `vulkan` extensions follow the same rule, and the changelog records their versions.
+
+- An extension's assembly carries `llvmnet.abi` (`dotnet64-v2`), `llvmnet.version` (the llvmnet it was built for) and `llvmnet.extension` (`<name>/<version>`). `LlvmNet.Checks inspect` prints them.
+- The compiler links an extension's assembly as it links a `--cil-reference`, so it refuses one built by an incompatible llvmnet, by the rule above. `llvmnet --install-extension` refuses such an assembly too, and one whose `llvmnet.extension` does not match its manifest. While llvmnet's major version is 0, a third-party extension is rebuilt for each minor release.
+- A program records the extensions it links in its `llvmnet.extensions` metadata (`gles/1.1.0`). It carries their assemblies with it, beside a JIT image or compiled into a NativeAOT executable, so installing another version of an extension changes only programs built afterwards.
+- `<llvmnet/ext.h>` and the host entry points behind it are compatible additions to the runtime. They are outside the frozen `dotnet64-v2` header set, which extensions do not change.
+- The release artifacts build the extensions of `extensions/` before they are packaged (`scripts/package-toolchain.sh`, `scripts/release-artifacts.sh`), so both packages ship the versions the release's sources describe.
+
 ## LLVM
 
 Each llvmnet release pins exactly one LLVM release, currently 22.1.8. See [ADR-06](../plan/decisions.md#adr-06-llvm-version-policy).

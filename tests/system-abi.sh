@@ -13,7 +13,7 @@ for fixture in runtime io threads posix; do
         *) "$output/$fixture" ;;
     esac
 done
-clang-22 -shared -fPIC "$root/tests/c/system-library.c" -o "$output/libexternal.so"
+clang-22 -shared -fPIC -O1 "$root/tests/c/system-library.c" -o "$output/libexternal.so"
 "$root/bin/llvmnet" --runtime=system --system-library "$output/libexternal.so" \
     "$root/tests/c/system-library-client.c" -o "$output/external-client"
 "$output/external-client"
@@ -27,4 +27,4 @@ if "$root/bin/llvmnet" --runtime=system "$output/system.o" "$output/compat.o" -o
     exit 1
 fi
 grep -q 'ABI mismatch' "$output/mismatch.log"
-printf 'PASS: system libc/stdio, native varargs, qsort and pthread callbacks, OS mappings, and ABI-mix rejection\n'
+printf 'PASS: system libc/stdio, native varargs, qsort and pthread callbacks, narrow integers through native pointers and callbacks, OS mappings, and ABI-mix rejection\n'

@@ -11,6 +11,8 @@ What a compiled program consists of, what the host that runs it needs, how the t
 | `-shared -o Library.dll` | `Library.dll` with its `LlvmNet.Runtime.dll`, alongside the program or .NET application that references it | the .NET 10 runtime |
 | `--nativeaot -o program` | `program` alone (system mode: plus the `--system-library` libraries, which stay dynamic dependencies) | nothing from .NET; the C library of the target |
 
+A program linked with a [native extension](extensions.md) also ships the extension's assembly (`LlvmNet.Ext.Gles.dll`), which the link copies beside the image and NativeAOT compiles into the executable. The host library it stands for is not part of any output form: it is the host's (Mesa's `libEGL.so.1` on Linux) or the application's, shipped beside the image or the executable (ANGLE's `libEGL.dll` and `libGLESv2.dll` on Windows, the `.dylib` pair on macOS) or found through `LLVMNET_EXT_<NAME>_DIR`; without it the program asks `llvmnet_ext_available` or ends with one `llvmnet:` line when it calls the library.
+
 An image's `runtimeconfig.json` pins the .NET 10 band (`rollForward: Minor`): patch and minor updates of .NET 10 are accepted, a host with only a later major refuses to run it until `DOTNET_ROLL_FORWARD=LatestMajor` is set. It also turns off the JIT's dynamic profile-guided optimization (`System.Runtime.TieredPGO: false`), which made translated programs about 7% slower on average; `DOTNET_TieredPGO=1` turns it back on for a run. A host the runtime cannot support (32-bit, big-endian, Mono, .NET before 10) prints one `llvmnet:` line naming the problem and the fix and exits with status 1 before any translated code runs.
 
 ## Supported hosts

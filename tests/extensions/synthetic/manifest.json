@@ -1,0 +1,11 @@
+{
+  "name": "synthetic",
+  "version": "1.0.0",
+  "libraries": {
+    "linux": ["libllvmnet-synthetic.so.1"],
+    "windows": ["llvmnet-synthetic.dll"],
+    "macos": ["libllvmnet-synthetic.dylib"]
+  },
+  "link": ["llvmnet-synthetic"],
+  "headers": ["llvmnet-synthetic.h"]
+}

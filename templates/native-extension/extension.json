@@ -1,0 +1,29 @@
+{
+  "name": "hello",
+  "version": "1.0.0",
+  "summary": "The template extension: libllvmnet-hello, read from include/hello.h",
+  "registries": [
+    {
+      "kind": "headers",
+      "include-path": "include",
+      "header": "hello.h",
+      "include": ["hello_*"],
+      "apis": ["hello"],
+      "library": "Hello"
+    }
+  ],
+  "libraries": [
+    {
+      "name": "Hello",
+      "linux": ["libllvmnet-hello.so"],
+      "windows": ["llvmnet-hello.dll"],
+      "macos": ["libllvmnet-hello.dylib"],
+      "dlopen": ["libllvmnet-hello.so"]
+    }
+  ],
+  "link": ["llvmnet-hello"],
+  "callbacks": { "hello_visit": 4 },
+  "required": ["hello_version"],
+  "headers": [{ "from": "include", "files": ["hello.h"] }],
+  "checks": [{ "name": "hello", "apis": ["hello"], "includes": ["hello.h"], "types": false, "layouts": true }]
+}

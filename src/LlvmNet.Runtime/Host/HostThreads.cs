@@ -22,6 +22,9 @@ public static unsafe partial class HostSyscalls
 
     internal static int CurrentThreadId => threadId != 0 ? threadId : threadId = Interlocked.Increment(ref nextThreadId) + 100;
 
+    /// <summary>Whether musl gave this thread a thread pointer: false on a thread a host library started (NX-08).</summary>
+    internal static bool HasThreadPointer => threadPointer != 0;
+
     private static long SetThreadPointer(nint pointer)
     {
         threadPointer = pointer;
