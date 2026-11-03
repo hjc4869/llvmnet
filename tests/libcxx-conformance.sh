@@ -16,6 +16,8 @@
 # Results: artifacts/tests/libcxx-conformance/{summary.tsv,results.json,failures.txt}; the test fails if any
 # directory passes fewer than LIBCXX_THRESHOLD percent (default 0: report only) of its tests.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# lit's --timeout needs psutil; without it lit stops before the first test and leaves no results.
+python3 -c 'import psutil' 2>/dev/null || { printf 'FAIL: lit --timeout needs the Python psutil module (Debian: python3-psutil)\n' >&2; exit 1; }
 llvm="$("$root/scripts/fetch-sources.sh" --path llvm-project)"
 sysroot="$root/sysroot/dotnet64-v2"
 project=libcxx

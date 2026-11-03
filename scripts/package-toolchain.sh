@@ -76,14 +76,21 @@ if [[ "$bundle_llvm" -eq 1 ]]; then
     cp -a "$resource/include" "$llvm_prefix/lib/clang/$(basename "$resource")/include"
     mkdir -p "$llvm_prefix/include/flang"
     cp "$(dirname "$(dirname "$(realpath "$(command -v flang-22)")")")"/include/flang/*.mod "$llvm_prefix/include/flang/"
+    # ldd runs on the resolved file: Debian trixie's /usr/bin/flang-22 links to flang, which links to flang-22, and
+    # through that chain $ORIGIN/../lib does not reach /usr/lib/llvm-22/lib, the only home of libMLIR. A library
+    # ldd cannot find would be missing from the bundle, so it fails the package.
     for binary in "${original_binaries[@]}" "$root/src/LlvmNet.Compiler/bin/Release/net10.0/libllvmnet-llvm.so"; do
         while read -r library; do
+            if [[ "$library" == missing:* ]]; then
+                printf 'ldd finds no %s for %s; the bundle would be incomplete.\n' "${library#missing:}" "$binary" >&2
+                exit 1
+            fi
             [[ -f "$library" ]] || continue
             destination="$llvm_prefix/lib/$(basename "$library")"
             if [[ "$(realpath "$library")" != "$(realpath -m "$destination")" ]]; then
                 cp -L "$library" "$destination"
             fi
-        done < <(ldd "$binary" | awk '/libLLVM|libclang-cpp|libflang|libMLIR/ {print $3}')
+        done < <(ldd "$(realpath "$binary")" | awk '/libLLVM|libclang-cpp|libflang|libMLIR/ {print ($3 == "not" ? "missing:" $1 : $3)}')
     done
     llvm_library="$(realpath "$(llvm-config-22 --libdir)/libLLVM-22.so")"
     cp -L "$llvm_library" "$llvm_prefix/lib/$(basename "$llvm_library")"

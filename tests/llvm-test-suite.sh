@@ -20,6 +20,8 @@
 # and per group (gcc-c-torture, the other SingleSource directories, MultiSource/Applications and Benchmarks).
 # On a shared machine run it in a memory cap: systemd-run --user --scope -p MemoryMax=24G -p MemorySwapMax=0 ...
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# lit's --timeout needs psutil; without it lit stops before the first test and every mode reports no results.
+python3 -c 'import psutil' 2>/dev/null || { printf 'FAIL: lit --timeout needs the Python psutil module (Debian: python3-psutil)\n' >&2; exit 1; }
 suite="$("$root/scripts/fetch-sources.sh" --path llvm-test-suite)"
 llvm="$("$root/scripts/fetch-sources.sh" --path llvm-project)"
 lit="$llvm/llvm/utils/lit/lit.py"

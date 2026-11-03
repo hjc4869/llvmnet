@@ -21,6 +21,8 @@ packages=(
     clang-22 flang-22 llvm-22 llvm-22-dev llvm-22-tools libflang-22-dev
     build-essential zlib1g-dev libzstd-dev libxml2-dev libedit-dev libffi-dev
     cmake ninja-build m4 pkg-config perl python3 shellcheck
+    # lit's per-test timeout (tests/libcxx-conformance.sh, tests/llvm-test-suite.sh) needs psutil.
+    python3-psutil
     # tests/ext-gles.sh: Mesa's EGL and GLES with its software renderer (llvmpipe), for headless runners without a GPU.
     libegl1 libgles2 libegl-mesa0 libgl1-mesa-dri
     # tests/ext-vulkan.sh: the Khronos loader and Mesa's software Vulkan driver (lavapipe).
