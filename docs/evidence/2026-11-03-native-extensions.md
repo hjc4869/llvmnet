@@ -172,3 +172,36 @@ The four shapes cover the conventions' cases: on x86-64 System V the pair of flo
 | The `xp` bundle's `hello` fixture, the library built by each host's compiler | passed under the JIT and as NativeAOT on Windows x64 (`cl`) and macOS ARM64 (Apple clang), and under the JIT on Linux ARM64 (Docker with qemu) |
 
 The tool package first failed to pack: NuGet refuses the build stamp `ext/<name>/.llvmnet-inputs` (NU5119), which only appears once the release builds the extensions, so the tool's items exclude it. The `xp` runner read its manifest on standard input, and `cmd` building the first native library on Windows consumed the fixtures after it; earlier runs passed because `structs` was the last fixture. The manifest is now read on its own descriptor.
+
+## NX-13: the AvaloniaStatic scenario
+
+Skia from AvaloniaStatic's SkiaSharp 4.153.1 tree (the SkiaSharp C API included) was built with its Ganesh GL backend and EGL twice, in portable mode against the `gles` extension and natively with clang-22 against Mesa, both with `target_cpu="generic"` (1,259 build steps, 74 s and 92 s). `tests/extensions/skia/skia-gl.c` is the renderer: it takes the native handles of a window as arguments, builds Skia's `GrGLInterface` with `gr_glinterface_assemble_gles_interface` from `eglGetProcAddress`, as Avalonia does through SkiaSharp, wraps the window's framebuffer as an `SkSurface`, draws eight frames of an animated UI-like scene (gradients, blurred shadows, round rectangles, a stroked cubic, a clip, a rotation, a scaled bitmap) and reads the last one back before `eglSwapBuffers`. It also draws the same scene with Skia's CPU rasterizer. The host, `tests/extensions/skia/host/`, is a .NET application that creates the window (Xlib, user32 or AppKit), keeps the event loop, and runs the renderer in its own process, as a child process, or (`host-aot/`) compiled with it into one NativeAOT executable. `tests/ext-skia.sh` (tag `optional`, requirements `egl xvfb skia`) runs the Linux forms under Xvfb.
+
+| Host and display | Form | Result |
+| --- | --- | --- |
+| Linux x64, Xvfb with Mesa llvmpipe | native renderer as a child; portable renderer in the host's process (JIT), as a JIT child, as a NativeAOT child; host and renderer as one NativeAOT executable (14.9 MB) | all five print the same lines (frame `b7f89cd42a6219f0`, raster `d1704f03d5e792c3`, the flat pixels), and the host reads the window back with `XGetImage` as that frame |
+| Linux x64, Mesa radeonsi, pbuffer | native and portable JIT | identical frame (`43d00b6323e47beb`) and raster hashes |
+| macOS ARM64, ANGLE over Metal (Visual Studio Code's Electron), an `NSWindow` the host created over SSH | portable renderer in the host's process (JIT); host and renderer as one NativeAOT executable published on the Mac | the layer's surface is 960x720 pixels for the 480x360 window (Retina); both forms present eight frames with the same frame hash (`6c344be57edde662`); 257 of 691,200 pixels differ from the raster reference by more than 32 |
+| macOS ARM64, ANGLE over Metal, pbuffer | portable JIT | raster hash `d1704f03d5e792c3`, as on Linux; 54 pixels apart from the GPU frame |
+| Windows x64, ANGLE over Direct3D 11 (Intel Arc A380), pbuffer | portable JIT | raster hash `d1704f03d5e792c3`, as on Linux; 3 pixels apart from the GPU frame (largest difference 37) |
+| Windows x64, a Win32 window the host created over SSH | portable JIT in the host's process; one NativeAOT executable published on Windows | ANGLE cannot create the swap chain: `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` in a session without a desktop, then `EGL_CONTEXT_LOST`; not run in a desktop session |
+
+The flat pixels the renderer samples are the same on every host and display. The GPU frames differ between drivers only at antialiased edges and in blurs.
+
+Frame times on Linux under Xvfb (llvmpipe, 480x360, one run each of `tests/ext-skia.sh`):
+
+| Form | First frame | Each later frame |
+| --- | --- | --- |
+| native | 39.7 ms | 0.87 ms |
+| portable, JIT in the host's process | 494 ms | 2.01 ms |
+| portable, JIT child | 557 ms | 1.93 ms |
+| portable, NativeAOT child | 44.3 ms | 1.37 ms |
+| portable, one NativeAOT executable with the host | 51.2 ms | 1.25 ms |
+
+On macOS the one NativeAOT executable took 18.7 ms for the first frame and 0.89 ms for each later one at 960x720; the JIT in the host's process 390 ms and 1.21 ms.
+
+What the scenario found:
+
+- **ANGLE's own extensions.** On ANGLE, Skia's GL interface failed to validate. ANGLE advertises `GL_CHROMIUM_bind_uniform_location`, so Skia requires `glBindUniformLocationCHROMIUM`, which is not in the Khronos `gl.xml`, and the extension had no stub for it. `gles` 1.1.0 adds ANGLE's registry (`gl_angle_ext.xml`, `egl_angle_ext.xml` from ANGLE `7e08726`, chromium/7922, the revision AvaloniaStatic builds, pinned in `sources.lock`) through the generator's new `supplements`, with ANGLE's two extension headers: 3,472 entry points, all verified against the headers. This is a minor version under the [versioning policy](../dev/versioning.md#native-extensions).
+- **A NativeAOT output directory.** `--nativeaot -o <dir>/<name>` failed with .NET's "Could not find a part of the path" when the directory did not exist, which a JIT image's `-o` creates; the driver now creates it (`tests/driver.sh`).
+- **Images as compile-time references.** C# cannot reference a portable image at compile time: the image is built against `System.Private.CoreLib`, and calling `Program.__Entry` fails with CS0012. The one-executable host finds the entry point by reflection over the rooted image instead (NX-14).

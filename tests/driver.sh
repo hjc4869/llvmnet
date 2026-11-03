@@ -74,9 +74,11 @@ grep -q core.c "$output/core.d"
 "$root/bin/llvmnet" -r "$output/main.o" "$output/library.o" -o "$output/combined.o"
 "$root/bin/llvmnet" "$output/combined.o" -o "$output/combined"
 "$output/combined"
-"$root/bin/llvmnet" --nativeaot "$root/tests/c/response.c" -DRESPONSE_VALUE=42 -o "$output/aot-response"
+# -o may name a directory that does not exist yet, as for a JIT image.
+rm -rf "$output/aot-new"
+"$root/bin/llvmnet" --nativeaot "$root/tests/c/response.c" -DRESPONSE_VALUE=42 -o "$output/aot-new/aot-response"
 result=0
-LLVMNET_DOTNET=/does/not/exist "$output/aot-response" || result=$?
+LLVMNET_DOTNET=/does/not/exist "$output/aot-new/aot-response" || result=$?
 test "$result" -eq 42
 "$root/bin/llvmnet" --runtime=system --nativeaot "$root/tests/c/threads.c" -o "$output/system-aot-threads"
 mkdir -p "$output/single-file"

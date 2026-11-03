@@ -23,7 +23,7 @@ llvmnet-clang -shared -fvisibility=hidden exports.c -o Exports.dll
 llvmnet-clang consumer.c --cil-reference Exports.dll -o consumer.dll
 ```
 
-Scalar and pointer signatures (`int`, `long`, `float`, `double`, pointers) are the stable surface for 1.0 ([ADR-09](../plan/decisions.md#adr-09-portable-abi-evolution)); aggregate parameters and results across assemblies are not yet a stable ABI. .NET code can call the exports too: they are ordinary `public static` methods on the `Program` class, taking pointers as `nint`, and the library carries `LlvmNet.Runtime.CExportAttribute` with each C name (`LlvmNet.Checks inspect Exports.dll` lists them).
+Scalar and pointer signatures (`int`, `long`, `float`, `double`, pointers) are the stable surface for 1.0 ([ADR-09](../plan/decisions.md#adr-09-portable-abi-evolution)); aggregate parameters and results across assemblies are not yet a stable ABI. .NET code can call the exports too: they are ordinary `public static` methods on the `Program` class, taking pointers as `nint`, and the library carries `LlvmNet.Runtime.CExportAttribute` with each C name (`LlvmNet.Checks inspect Exports.dll` lists them). C# reaches them through reflection for now: the library is built against `System.Private.CoreLib`, so a C# project that references it and calls `Program.add` directly fails with CS0012 ([NX-14](../plan/11-native-extensions.md)).
 
 A portable library does not contain the C library: musl's process state (the thread pointer, the heap, stdio) belongs to the program image, so a library that calls the C library must be linked into a program as bitcode, or the program must be built in the same mode and provide it. A library built from several objects links them together as a program does.
 

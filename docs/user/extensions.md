@@ -4,7 +4,7 @@ A portable program is one image for every host, so it cannot link native librari
 
 | Extension | Host libraries | Link with | Tested on |
 | --- | --- | --- | --- |
-| `gles`: EGL 1.5, OpenGL ES 2.0 to 3.2, desktop OpenGL and their registered extensions | `libEGL.so.1` and `libGLESv2.so.2` (Linux: Mesa or a vendor driver), `libEGL.dll` and `libGLESv2.dll` (Windows: ANGLE), `libEGL.dylib` and `libGLESv2.dylib` (macOS: ANGLE) | `-lEGL -lGLESv2` or `--extension=gles` | Linux x64 with Mesa (radeonsi and llvmpipe), Windows x64 with ANGLE over Direct3D 11, macOS ARM64 with ANGLE over Metal |
+| `gles`: EGL 1.5, OpenGL ES 2.0 to 3.2, desktop OpenGL and their registered extensions, and the ANGLE and Chromium extensions in ANGLE's registry (`<EGL/eglext_angle.h>`, `<GLES2/gl2ext_angle.h>`) | `libEGL.so.1` and `libGLESv2.so.2` (Linux: Mesa or a vendor driver), `libEGL.dll` and `libGLESv2.dll` (Windows: ANGLE), `libEGL.dylib` and `libGLESv2.dylib` (macOS: ANGLE) | `-lEGL -lGLESv2` or `--extension=gles` | Linux x64 with Mesa (radeonsi and llvmpipe), Windows x64 with ANGLE over Direct3D 11, macOS ARM64 with ANGLE over Metal |
 | `vulkan`: Vulkan 1.0 to 1.4 and its registered extensions, except the window-system and provisional ones | `libvulkan.so.1` (Linux: the Khronos loader), `vulkan-1.dll` (Windows: the loader) or `vk_swiftshader.dll`, `libvulkan.1.dylib`, `libMoltenVK.dylib` or `libvk_swiftshader.dylib` (macOS) | `-lvulkan` or `--extension=vulkan` | Linux x64 with Mesa's RADV and lavapipe, Windows x64 with the Intel Arc driver through the loader and with SwiftShader, macOS ARM64 with SwiftShader |
 
 The toolchain package and the dotnet tool ship both, in the portable sysroot's `ext/` directory. `llvmnet --list-extensions` prints the extensions installed in the toolchain, with their `-l` names, host libraries and headers, and any problem that stops one from being used. `llvmnet --install-extension <dir>` installs a built extension package, such as one made from the template below, and `llvmnet --uninstall-extension <name>` removes one. In a source checkout, `scripts/build-extensions.sh` builds the extensions of `extensions/` into `sysroot/dotnet64-v2/ext/`.
@@ -18,7 +18,7 @@ llvmnet-clang -O2 render.c -lEGL -lGLESv2 -o render.dll
 llvmnet-clang -O2 render.c --extension=gles --nativeaot -o render
 ```
 
-A JIT image gets the extension's assembly, `LlvmNet.Ext.Gles.dll`, beside it, as it gets `LlvmNet.Runtime.dll`; NativeAOT compiles it into the executable, and `--aot-project` puts it into the project for another host. The image records the extensions it links in its metadata (`LlvmNet.Checks inspect` prints `llvmnet.extensions: gles/1.0.0`). A program linked with no extension is unchanged.
+A JIT image gets the extension's assembly, `LlvmNet.Ext.Gles.dll`, beside it, as it gets `LlvmNet.Runtime.dll`; NativeAOT compiles it into the executable, and `--aot-project` puts it into the project for another host. The image records the extensions it links in its metadata (`LlvmNet.Checks inspect` prints `llvmnet.extensions: gles/1.1.0`). A program linked with no extension is unchanged.
 
 In system mode an extension names only libraries: `--extension=gles` links `libEGL.so.1` and `libGLESv2.so.2` as `--system-library` does, through generated bridges, so one build configuration serves both modes. The headers are the host's in system mode; on a host without them, `-I <sysroot>/ext/gles/include` uses the extension's.
 
@@ -77,6 +77,24 @@ The rules are a C ABI boundary's, applied by the CLR for the running host:
 - **Structures by value** (none in EGL, GL or Vulkan; common in C libraries such as GLFW's neighbors) are passed and returned with the host's convention for their layout: a C wrapper the extension links into the program takes them as the prototype says and hands them over by address, and the extension passes them to the host as typed CLR structures, which the CLR classifies per host (two floats in one register on x86-64 Linux, in two on ARM64; 17 bytes by reference on Windows). Members may be integers, floating point, pointers, arrays of those and nested structures; unions, bit-fields and function pointers inside a structure passed by value are not proxied. `dlsym` returns the wrapper for such a function.
 - **Not proxied**: variadic functions, C++ interfaces, and types whose size differs between hosts. In `gles`, the 23 `GL_ARB_shader_objects` functions that use `GLhandleARB` (an `unsigned int` on Linux and Windows but a pointer on macOS) are left out; use the core GL 2.0 equivalents. `glGetVkProcAddrNV` returns a host function pointer, which portable code cannot call, so calling it ends the program.
 - **errno** is the host library's own, not the program's.
+
+## Drawing into an application's window
+
+A .NET application can own the window and let portable code draw into it, as an Avalonia application lets Skia draw. The application creates the window and passes its handles to the portable program as numbers; the program passes them to EGL. `tests/extensions/skia/` is a complete example: a host that creates the window, and a renderer that draws with Skia's GL backend, whose `GrGLInterface` comes from `eglGetProcAddress`.
+
+| Host | Handles the application passes | EGL display |
+| --- | --- | --- |
+| Linux, X11 | the `Display *` of its Xlib connection and the `Window` | `eglGetPlatformDisplay(EGL_PLATFORM_X11_KHR, display, NULL)`; a display of 0 makes the EGL implementation open its own connection, which a child process needs |
+| Windows | the `HWND` | `eglGetDisplay(EGL_DEFAULT_DISPLAY)` with ANGLE over Direct3D 11 |
+| macOS | the `CALayer *` of a layer-backed view | `eglGetDisplay(EGL_DEFAULT_DISPLAY)` with ANGLE over Metal |
+
+- **In the application's process.** A portable image's entry point is the public `Program.__Entry(string[])`, which the application can call on a thread of its own with the handles as arguments, as `dotnet image.dll <arguments>` would. The application keeps its event loop on the main thread. The program's `exit` ends the process, after the application's `ProcessExit` handlers.
+- **One NativeAOT executable.** The application's project references the image, `LlvmNet.Runtime.dll` and the extension's assembly, roots the image with `<TrimmerRootAssembly>`, and finds the entry point by reflection (`Assembly.Load` of the image's name, then `EntryPoint`). C# cannot call the image directly: the image is built against `System.Private.CoreLib`, which C# does not resolve beside the reference assemblies. `tests/extensions/skia/host-aot/` is such a project.
+- **A child process.** X11 windows and `HWND`s work across processes, so the application can also start the renderer, a NativeAOT executable or `dotnet image.dll`, and pass it the handles. A `CALayer *` does not.
+- **Scale.** On a Retina display a layer's surface has more pixels than the window has points. `eglQuerySurface` reports the pixel size, and the program draws scaled to it, as Avalonia does.
+- **Windows sessions.** Direct3D cannot present to a window in a session without a desktop, such as an SSH session: ANGLE reports `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` and `eglCreateWindowSurface` fails. Offscreen surfaces work there.
+
+ANGLE exposes extensions of its own beside the Khronos ones, and Skia requires the ones ANGLE advertises: `GL_CHROMIUM_bind_uniform_location`, for one. `gles` proxies the entry points of ANGLE's registry too, so Skia's GL interface validates on ANGLE as it does natively.
 
 ## Shipping a program
 

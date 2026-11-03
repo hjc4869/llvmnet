@@ -30,7 +30,7 @@ for file in sysroot/dotnet64-v2/ext/gles/manifest.json sysroot/dotnet64-v2/ext/v
     [[ -f "$relocated/$file" ]] || { printf 'FAIL: the toolchain package has no %s\n' "$file" >&2; exit 1; }
 done
 "$relocated/bin/llvmnet" --list-extensions >"$output/extensions.txt"
-grep -q '^gles 1\.0\.0$' "$output/extensions.txt" && grep -q '^vulkan 1\.0\.0$' "$output/extensions.txt" && ! grep -q 'problem:' "$output/extensions.txt" ||
+grep -q '^gles 1\.1\.0$' "$output/extensions.txt" && grep -q '^vulkan 1\.0\.0$' "$output/extensions.txt" && ! grep -q 'problem:' "$output/extensions.txt" ||
     { cat "$output/extensions.txt" >&2; exit 1; }
 "$relocated/bin/llvmnet" --print-extension-kit | grep -qxF "kit $relocated/share/llvmnet/extensions"
 template="$output/template"

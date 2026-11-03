@@ -41,7 +41,7 @@ if [[ "$variants" == *tool* ]]; then
     ./tool/llvmnet --driver-mode=g++ "$root/tests/cpp/core.cpp" -o tool-cpp.dll
     dotnet tool-cpp.dll
     # The tool carries the shipped native extensions, <llvmnet/ext.h> and the kit that builds more (NX-12).
-    ./tool/llvmnet --list-extensions | grep -q '^gles 1\.0\.0$'
+    ./tool/llvmnet --list-extensions | grep -q '^gles 1\.1\.0$'
     kit="$(./tool/llvmnet --print-extension-kit | sed -n 's/^kit //p')"
     [[ -f "$kit/build-extensions.sh" && -f "$kit/ext-gen.py" && -f "$kit/../../../sysroot/extensions/include/llvmnet/ext.h" ]]
 fi

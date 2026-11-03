@@ -100,6 +100,9 @@ missing() {
                 fi ;;
             rsync) command -v rsync >/dev/null || { echo "rsync not found (needed to fetch the FATE samples)"; return; } ;;
             cmake) { command -v cmake && command -v ninja; } >/dev/null || { echo "cmake or ninja not found"; return; } ;;
+            xvfb) { command -v xvfb-run && command -v Xvfb; } >/dev/null || { echo "xvfb-run or Xvfb not found (Debian: apt-get install xvfb xauth)"; return; } ;;
+            skia) [[ -n "${LLVMNET_SKIA_DIR:-}" && -f "${LLVMNET_SKIA_DIR:-}/include/c/sk_canvas.h" && -x "${LLVMNET_SKIA_DIR:-}/bin/gn" ]] && command -v ninja >/dev/null ||
+                { echo "LLVMNET_SKIA_DIR does not name a Skia checkout with the SkiaSharp C API and bin/gn, or ninja is missing"; return; } ;;
             fuzz-build) { command -v cmake && command -v m4 && command -v clang++-22; } >/dev/null || { echo "cmake, m4 or clang++-22 not found (needed to build csmith and yarpgen)"; return; } ;;
             ffmpeg-cli) command -v ffmpeg >/dev/null || { echo "ffmpeg command-line tool not found (needed to generate media fixtures)"; return; } ;;
             openmp) [[ -f "${LLVMNET_OPENMP_PREFIX:-$root/artifacts/system-openmp}/lib/libomp.so.5" ]] || { echo "system OpenMP not staged; run scripts/install-system-openmp.sh"; return; } ;;

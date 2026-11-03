@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The host of tests/ext-skia.sh as one NativeAOT executable with the portable renderer (NX-13): the host's source
+       with EMBEDDED, referencing the portable image, LlvmNet.Runtime and the gles extension's assembly from the
+       directory LlvmNetImage names (a JIT image directory or an aot-project directory). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SkiaHost</AssemblyName>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishAot>true</PublishAot>
+    <DefineConstants>$(DefineConstants);EMBEDDED</DefineConstants>
+    <NoWarn>$(NoWarn);IL2104;IL3053</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../host/Program.cs" />
+    <Reference Include="$(LlvmNetImage)" />
+    <TrimmerRootAssembly Include="$([System.IO.Path]::GetFileNameWithoutExtension($(LlvmNetImage)))" />
+    <AssemblyMetadata Include="LlvmNetImage" Value="$([System.IO.Path]::GetFileNameWithoutExtension($(LlvmNetImage)))" />
+    <Reference Include="$([System.IO.Path]::GetDirectoryName($(LlvmNetImage)))/LlvmNet.Runtime.dll" />
+    <Reference Include="$([System.IO.Path]::GetDirectoryName($(LlvmNetImage)))/LlvmNet.Ext.Gles.dll" />
+  </ItemGroup>
+</Project>

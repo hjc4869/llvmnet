@@ -253,6 +253,8 @@ internal static class Toolchain
         if (result != 0) return result;
         string native = Path.Combine(publish, assemblyName + ((rid ?? RuntimeInformation.RuntimeIdentifier).StartsWith("win-", StringComparison.Ordinal) ? ".exe" : ""));
         if (!File.Exists(native)) throw new FileNotFoundException("NativeAOT did not produce the requested executable.", native);
+        // As for a JIT image, -o may name a directory that does not exist yet.
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
         File.Copy(native, output, true);
         foreach (string sidecar in Directory.EnumerateFiles(Path.GetDirectoryName(assembly)!, "*.so"))
             File.Copy(sidecar, Path.Combine(Path.GetDirectoryName(output)!, Path.GetFileName(sidecar)), true);

@@ -37,7 +37,7 @@ export LLVMNET_ROOT="$toolchain"
 test -f "$test_output/jit/LlvmNet.Ext.Gles.dll"
 run jit-llvmpipe env LIBGL_ALWAYS_SOFTWARE=1 dotnet "$test_output/jit/gles.dll"
 run jit-default dotnet "$test_output/jit/gles.dll"
-dotnet "$checks" inspect "$test_output/jit/gles.dll" | grep -qx 'llvmnet.extensions: gles/1.0.0'
+dotnet "$checks" inspect "$test_output/jit/gles.dll" | grep -qx 'llvmnet.extensions: gles/1.1.0'
 mkdir -p "$test_output/aot"
 "$llvmnet" -O1 --nativeaot "$fixtures/gles.c" -lEGL -lGLESv2 -o "$test_output/aot/gles" >"$test_output/aot.log" 2>&1 ||
     { cat "$test_output/aot.log" >&2; exit 1; }
