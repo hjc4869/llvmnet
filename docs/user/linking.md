@@ -1,6 +1,6 @@
 # Linking: bitcode, managed and native libraries
 
-llvmnet has three kinds of library: archives of LLVM bitcode objects (the ordinary C way), managed libraries that other .NET code or other llvmnet programs call, and, in system mode, native shared libraries. [driver.md](driver.md#link-inputs) states the rules the linker applies to objects and archives; this page is about what each kind is for.
+llvmnet has three kinds of library: archives of LLVM bitcode objects (the ordinary C way), managed libraries that other .NET code or other llvmnet programs call, and native shared libraries: in system mode directly, in portable mode through native extensions. [driver.md](driver.md#link-inputs) states the rules the linker applies to objects and archives; this page is about what each kind is for.
 
 ## Bitcode objects and archives
 
@@ -36,6 +36,16 @@ llvmnet-clang --runtime=system client.c --system-library /path/libexternal.so -o
 ```
 
 LLVM generates a bridge for each imported signature (`lib<name>.llvmnet-host.so` next to a JIT image, linked statically into a NativeAOT executable): scalars, structures by value, `sret`, varargs and native data all work, and C callbacks passed to native code are native-callable entry points as long as they take and return scalars. The library stays a dynamic dependency, found through the loader's usual path (`LD_LIBRARY_PATH` or an installed location); the compiler host must be able to load it too, because the symbols are resolved at compile time. Native C++ libraries are not callable through their C++ ABI: provide a C wrapper, or compile the C++ code to bitcode. Portable mode rejects `--system-library`: a dependency is recompiled in portable mode or reached through a managed interface.
+
+## Native extensions (portable mode)
+
+A host library that cannot be recompiled, because it is the operating system's or the GPU vendor's (EGL and OpenGL ES), is reached through a native extension: a package under the sysroot's `ext/` with the library's headers, which are on the include path, and a generated managed assembly that the link references as it references a managed library. `-l<name>` links the extension whose manifest lists the name when no archive matches, and `--extension=<name>` names it; `llvmnet --list-extensions` lists the installed ones.
+
+```sh
+llvmnet-clang render.c -lEGL -lGLESv2 -o render.dll    # LlvmNet.Ext.Gles.dll is copied beside render.dll
+```
+
+The assembly loads the host's library at run time under its name for the running system, so the image stays portable; `dlopen` serves the library under its Linux names, and a program asks whether it is available with `<llvmnet/ext.h>`. In system mode the same options link the extension's Linux libraries through generated bridges. [extensions.md](extensions.md) describes the run-time search, availability and what crosses the boundary.
 
 ## Build-system integration
 

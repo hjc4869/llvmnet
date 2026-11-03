@@ -51,6 +51,7 @@ Behavior that differs from a Linux kernel, in short ([dev/host-abi.md](../dev/ho
 - Only the C and C.UTF-8 locales exist; the floating-point environment is fixed to round-to-nearest without exception flags.
 - `__linux__`, `__unix__`, `__x86_64__` and the other host macros are not defined (ADR-14); a program that selects platform code by them needs a portable path or a documented per-program flag.
 - Thread stacks are at least 8 MB and `CLOCK_THREAD_CPUTIME_ID` reports process time.
+- Native libraries are reached only through native extensions ([extensions.md](extensions.md)), which pass integers, floating point and pointers; structures by value (NX-07), variadic functions and C++ interfaces are not proxied, a callback must run on a thread the program created (NX-08), and `dlopen` serves only the libraries of the linked extensions.
 """
 
 HOSTS = """## Hosts other than Linux
