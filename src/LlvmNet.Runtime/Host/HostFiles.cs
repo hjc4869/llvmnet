@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -195,24 +196,74 @@ public static unsafe partial class HostSyscalls
         return total;
     }
 
+    /// <summary>The most bytes a vectored transfer gathers into one host write or scatters from one host read.</summary>
+    private const int GatherLimit = 65536;
+
+    /// <summary>
+    /// readv, writev, preadv and pwritev. As in Linux, the vectors make one transfer: up to <see cref="GatherLimit"/>
+    /// bytes in all go through one buffer and one host call, so a pipe write of at most PIPE_BUF bytes stays atomic, a
+    /// read from a pipe or terminal returns what is there instead of waiting to fill the later vectors, and musl's
+    /// stdio, which writes its buffer and the new data together and reads into the caller's buffer and its own, makes
+    /// one host call per flush or refill as natively. Longer transfers go in runs of vectors that fit the buffer (a
+    /// longer vector alone) and end at the first short count; reads go past the first run only from regular files and
+    /// devices, which never block.
+    /// </summary>
     private static long Vector(int descriptor, nint vectors, int count, bool read, long offset)
     {
         if (count is < 0 or > 1024) return -EINVAL;
-        long total = 0;
+        var vector = (IoVector*)vectors;
+        long sum = 0;
         for (int index = 0; index < count; index++)
+            if (vector[index].Length < 0 || (sum += vector[index].Length) < 0) return -EINVAL;
+        if (sum == 0) return Transfer(descriptor, 0, 0, read, offset);
+        long total = 0;
+        for (int first = 0, end; first < count; first = end)
         {
-            nint start = ((nint*)vectors)[index * 2];
-            long length = ((long*)vectors)[index * 2 + 1];
+            long length = vector[first].Length;
+            int filled = length > 0 ? 1 : 0, last = first;
+            for (end = first + 1; end < count && length + vector[end].Length <= GatherLimit; end++)
+                if (vector[end].Length > 0) (length, filled, last) = (length + vector[end].Length, filled + 1, end);
             if (length == 0) continue;
-            long done = offset < 0
-                ? read ? Read(descriptor, start, length) : Write(descriptor, start, length)
-                : read ? ReadAt(descriptor, start, length, offset + total) : WriteAt(descriptor, start, length, offset + total);
+            long at = offset < 0 ? -1 : offset + total;
+            long done = filled == 1 ? Transfer(descriptor, vector[last].Base, length, read, at)
+                : Gathered(descriptor, vector + first, end - first, (int)length, read, at);
             if (done < 0) return total > 0 ? total : done;
             total += done;
-            if (done < length) break;
+            if (done < length || read && Lookup(descriptor)?.Kind is not (FileKind.Regular or FileKind.Device)) break;
         }
         return total;
     }
+
+    /// <summary>One host call for <paramref name="count"/> vectors of <paramref name="length"/> bytes in all, through a pooled buffer.</summary>
+    private static long Gathered(int descriptor, IoVector* vector, int count, int length, bool read, long offset)
+    {
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(length);
+        try
+        {
+            fixed (byte* start = buffer)
+            {
+                byte* next = start;
+                if (!read)
+                    for (int index = 0; index < count; next += vector[index++].Length)
+                        NativeMemory.Copy((void*)vector[index].Base, next, (nuint)vector[index].Length);
+                long done = Transfer(descriptor, (nint)start, length, read, offset);
+                for (long left = read ? done : 0, index = 0; left > 0; index++)
+                {
+                    long part = Math.Min(left, vector[index].Length);
+                    NativeMemory.Copy(next, (void*)vector[index].Base, (nuint)part);
+                    next += part;
+                    left -= part;
+                }
+                return done;
+            }
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
+    }
+
+    /// <summary>read or write at the descriptor's offset, or pread or pwrite at <paramref name="offset"/> when it is not negative.</summary>
+    private static long Transfer(int descriptor, nint buffer, long count, bool read, long offset) => offset < 0
+        ? read ? Read(descriptor, buffer, count) : Write(descriptor, buffer, count)
+        : read ? ReadAt(descriptor, buffer, count, offset) : WriteAt(descriptor, buffer, count, offset);
 
     private static long Seek(int descriptor, long offset, int whence)
     {
