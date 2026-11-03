@@ -200,7 +200,7 @@ Each decision is recorded in the style of an architecture decision record: conte
 - Native code runs with the process's rights, as the program does; SECURITY.md says so. An extension loads only the names its manifest lists.
 - The compiler and runtime do not grow a per-API feature: each extension is a generated package, and the list of extensions is a packaging decision.
 
-**Status.** Accepted 2026-11-03 by the owner: option 4 (generated managed proxies), system-mode bridges unchanged. The owner also pulled the whole workstream, including NX-02 and NX-03, before 1.0 (see the 2026-11-03 section below).
+**Status.** Accepted 2026-11-03 by the owner: option 4 (generated managed proxies), system-mode bridges unchanged. The owner also pulled the whole workstream, including NX-02 and NX-03, before 1.0, and later the same day accepted the names as implemented (see the 2026-11-03 section below).
 
 ## ADR-16: SIMD levels
 
@@ -277,7 +277,8 @@ Questions from the [native extension spike](../evidence/2026-11-03-native-extens
 - **Milestone.** Decided: all native-extension work, NX-02 and NX-03 included, lands before 1.0 instead of as a post-1.0 M10. The plan's milestone table and 1.0 exit criteria still need to be updated to match.
 - **First extensions and their priorities.** Accepted: `gles` (EGL, GLES, desktop GL) as P1 and `vulkan` as P2; windowing libraries (SDL3, GLFW) only through the C-header generator later.
 - **Test dependencies on other hosts.** Accepted: (a) now, the `xp` jobs use an ANGLE present on the runner, found through `LLVMNET_EXT_GLES_DIR`, and skip otherwise; (c), a pinned prebuilt ANGLE fetched by hash, when the extension ships.
-- **Names.** Still proposed, not yet reviewed: `ext/` under the sysroot, `--extension=<name>`, `-l<name>` mapped through the manifest, `LlvmNet.Ext.<Name>.dll`, `<llvmnet/ext.h>` with `llvmnet_ext_available`; and `dlopen(NULL)` left unsupported in NX-02 unless a use case appears.
+- **Names.** Accepted as implemented: `sysroot/dotnet64-v2/ext/<name>/`, `--extension=<name>`, `-l<name>` mapped through the manifest when no archive matches, `LlvmNet.Ext.<Name>.dll` for every extension including third-party ones, `<llvmnet/ext.h>` with `llvmnet_ext_available` and `llvmnet_ext_library`, and `dlopen(NULL)` unsupported until a use case appears. Accepted with them, the names the implementation added: `--list-extensions`, `--install-extension`, `--uninstall-extension` and `--print-extension-kit`; `LLVMNET_EXT_<NAME>_DIR` and `LLVMNET_EXT_<NAME>_NON_BLOCKING`; the `llvmnet.extension` and `llvmnet.extensions` metadata; `manifest.json`, `extension.json` and the kit and template under `share/llvmnet/`; `LlvmNet.Runtime.NativeExtension` and `NativeExtensions.Register`. A second directory searched for extensions, for toolchains installed read-only, stays a possible compatible addition.
+- **NX-14.** Deferred: images as compile-time C# references are not an immediate focus; they are done with the full NativeBindings FFI integration, when that integration happens. Until then a host reaches an image's entry point and exports by reflection.
 
 ## Decided by the owner (2026-11-03, SIMD)
 
