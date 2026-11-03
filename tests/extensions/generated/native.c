@@ -2,6 +2,7 @@
  * against the second one, so that loading it by path needs the second one loaded first. */
 #define LLVMNET_GEN_BUILD 1
 #include <llvmnet-gen.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,19 @@ GENint genObjectId(GENobject object) { return object->id; }
 void genDestroy(GENobject object) { free(object); }
 void genRegister(GENcallback function, void *user) { callback = function; callback_user = user; }
 GENint genFire(GENint value) { return callback ? callback(value, (GENubyte)value, (GENshort)-value, callback_user) : -1; }
+struct fire { GENint value, result; };
+static void *fire_thread(void *argument) {
+    struct fire *fire = argument;
+    fire->result = callback ? callback(fire->value, (GENubyte)fire->value, (GENshort)-fire->value, callback_user) : -1;
+    return NULL;
+}
+GENint genFireOnThread(GENint value) {
+    struct fire fire = { value, 0 };
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, fire_thread, &fire)) return -2;
+    pthread_join(thread, NULL);
+    return fire.result;
+}
 void genSetLogger(GENlogproc function) { logger = function; }
 void genLog(const GENchar *message, GENshort level) { if (logger) logger(message, level); }
 void genSetOther(GENotherproc function) { other = function; }

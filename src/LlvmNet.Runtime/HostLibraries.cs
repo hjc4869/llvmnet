@@ -191,9 +191,46 @@ public sealed class HostEntryPoints
 /// calling the portable function stored in its slot. The same portable function always gets the same entry point, so a
 /// callback registered twice or compared by address behaves as natively; slots are never released.
 /// </summary>
-public static class NativeCallbacks
+public static unsafe class NativeCallbacks
 {
     private static readonly object gate = new();
+    private static delegate*<nint> attachThread;
+    private static delegate*<nint, void> detachThread;
+    [ThreadStatic] private static AttachedThread? attached;
+
+    /// <summary>
+    /// Registers the musl port's __llvmnet_attach_thread and __llvmnet_detach_thread
+    /// (ports/musl/src/thread/llvmnet/__llvmnet_attach_thread.c); the initializer of an image that links a native
+    /// extension calls this.
+    /// </summary>
+    public static void RegisterThreads(nint attach, nint detach)
+    {
+        attachThread = (delegate*<nint>)attach;
+        detachThread = (delegate*<nint, void>)detach;
+    }
+
+    /// <summary>
+    /// Called first by every reverse thunk: on a thread the host library started, which has no musl thread state yet,
+    /// gives it one, so that the callback can use errno, locks, thread-local storage and pthread_self. The state is
+    /// released by a finalizer once the thread has ended.
+    /// </summary>
+    public static void Enter()
+    {
+        if (HostSyscalls.HasThreadPointer || attachThread == null) return;
+        nint descriptor = attachThread();
+        if (descriptor == 0)
+            NativeExtension.Fail("a callback arrived on a thread that a host library started, and no thread state could be made for it");
+        attached = new AttachedThread(descriptor);
+    }
+
+    /// <summary>Owns an attached thread's descriptor; the thread's static data dies with the thread.</summary>
+    private sealed class AttachedThread(nint descriptor)
+    {
+        ~AttachedThread()
+        {
+            if (detachThread != null) detachThread(descriptor);
+        }
+    }
 
     /// <summary>
     /// The slot of <paramref name="targets"/> that holds <paramref name="target"/>, storing it in a free slot first when

@@ -60,6 +60,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - The `gles` native extension: EGL 1.5, OpenGL ES 2.0 to 3.2 and desktop OpenGL from the Khronos registries, for Mesa on Linux and ANGLE on Windows and macOS (`-lEGL -lGLESv2`; `scripts/build-extensions.sh gles` installs it); `tests/ext-gles.sh` and the `gles` fixture of the `tests/xp/` bundle check it (NX-05).
 - `docs/user/extensions.md` (using a native extension) and `docs/dev/extensions.md` (writing one) (NX-06).
 - `LLVMNET_EXT_<NAME>_NON_BLOCKING=1` lets the entry points an extension marks non-blocking skip the GC transition: `glGetError` costs 2.2 ns instead of 3.8 (NativeAOT) or 5.1 (JIT) on Mesa (NX-11).
+- A host library can call a portable program back on a thread it started itself: the first callback there gives the thread musl's thread state (`errno`, stdio, `malloc`, thread-local variables, `pthread_self`), released after the thread ends (NX-08).
 
 ### Changed
 

@@ -46,6 +46,7 @@ typedef unsigned int GENplatform;
         <command><proto>void <name>genDestroy</name></proto><param><ptype>GENobject</ptype> <name>object</name></param></command>
         <command><proto>void <name>genRegister</name></proto><param><ptype>GENcallback</ptype> <name>callback</name></param><param>void *<name>user</name></param></command>
         <command><proto><ptype>GENint</ptype> <name>genFire</name></proto><param><ptype>GENint</ptype> <name>value</name></param></command>
+        <command><proto><ptype>GENint</ptype> <name>genFireOnThread</name></proto><param><ptype>GENint</ptype> <name>value</name></param></command>
         <command><proto>void <name>genSetLogger</name></proto><param><ptype>GENlogproc</ptype> <name>logger</name></param></command>
         <command><proto>void <name>genLog</name></proto><param>const <ptype>GENchar</ptype> *<name>message</name></param><param><ptype>GENshort</ptype> <name>level</name></param></command>
         <command><proto>void <name>genSetOther</name></proto><param><ptype>GENotherproc</ptype> <name>other</name></param></command>
@@ -63,7 +64,7 @@ typedef unsigned int GENplatform;
             <command name="genAdd"/><command name="genLow"/><command name="genNegateByte"/><command name="genMix"/>
             <command name="genSwap"/><command name="genWide"/><command name="genSpan"/><command name="genScale"/>
             <command name="genHalve"/><command name="genName"/><command name="genFormat"/><command name="genCreate"/>
-            <command name="genObjectId"/><command name="genDestroy"/><command name="genRegister"/><command name="genFire"/>
+            <command name="genObjectId"/><command name="genDestroy"/><command name="genRegister"/><command name="genFire"/><command name="genFireOnThread"/>
             <command name="genSetLogger"/><command name="genLog"/><command name="genSetOther"/><command name="genGetOther"/>
             <command name="genPlatformValue"/><command name="genStatus"/><command name="genGetProcAddress"/>
         </require>

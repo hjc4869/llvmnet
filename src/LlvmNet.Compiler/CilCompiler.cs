@@ -611,6 +611,16 @@ internal sealed class CilCompiler(CompilerOptions options)
             il.Emit(OpCodes.Call, typeof(NativeExtensions).GetMethod(nameof(NativeExtensions.RegisterSystem))!);
         }
         // When linked, libc++abi's catch matcher (ports/libcxxabi/llvmnet-catch.cpp) decides which handlers catch an exception.
+        // Callbacks from threads a host library started get musl thread state from the musl port (NX-08); the driver
+        // links these two only into images that use a native extension.
+        nint attachThread = Llvm.LLVMGetNamedFunction(module, "__llvmnet_attach_thread");
+        nint detachThread = Llvm.LLVMGetNamedFunction(module, "__llvmnet_detach_thread");
+        if (attachThread != 0 && Llvm.LLVMIsDeclaration(attachThread) == 0 && detachThread != 0 && Llvm.LLVMIsDeclaration(detachThread) == 0)
+        {
+            il.Emit(OpCodes.Ldftn, Methods[attachThread]);
+            il.Emit(OpCodes.Ldftn, Methods[detachThread]);
+            il.Emit(OpCodes.Call, typeof(NativeCallbacks).GetMethod(nameof(NativeCallbacks.RegisterThreads))!);
+        }
         nint catchMatcher = Llvm.LLVMGetNamedFunction(module, "__llvmnet_cxx_can_catch");
         if (catchMatcher != 0 && Llvm.LLVMIsDeclaration(catchMatcher) == 0)
         {

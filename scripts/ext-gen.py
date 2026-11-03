@@ -724,7 +724,8 @@ class Emitter:
                 w('')
                 w('        [UnmanagedCallersOnly]')
                 call = f'Call(targets[{i}]{"".join(", " + n for n in names)})'
-                w(f'        private static {ret} T{i}({native_params}) => {call};')
+                # Enter gives a thread the host library started the program's thread state first (NX-08).
+                w(f'        private static {ret} T{i}({native_params}) {{ NativeCallbacks.Enter(); {"" if ret == "void" else "return "}{call}; }}')
             w('')
             call_params = ''.join(f', {native_type(t)} {n}' for (_, t), n in zip(callback.params, names))
             args = ', '.join(to_managed(t, n) for (_, t), n in zip(callback.params, names))

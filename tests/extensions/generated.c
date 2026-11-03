@@ -7,8 +7,13 @@
  *   generated system     availability in system mode (built with -DLLVMNET_SYSTEM_TEST)
  *   generated exhaust    a third distinct logger, beyond the extension's pool of two
  *   generated other      a callback type the extension has no reverse thunks for
- *   generated returned   an entry point that returns a host function pointer */
+ *   generated returned   an entry point that returns a host function pointer
+ *   generated threads    callbacks on threads the host library starts: errno, stdio, malloc, thread-local storage,
+ *                        pthread_self and pthread keys work there, for 3 threads and then 200 more */
 #include <dlfcn.h>
+#include <errno.h>
+#include <pthread.h>
+#include <stdlib.h>
 #include <inttypes.h>
 #include <llvmnet-gen.h>
 #include <stdio.h>
@@ -25,6 +30,32 @@ static GENint on_event(GENint value, GENubyte flag, GENshort level, void *user) 
 static GENint on_other_event(GENint value, GENubyte flag, GENshort level, void *user) {
     (void)user;
     return -(value + flag + level);
+}
+
+static _Thread_local int calls_here;
+static pthread_key_t key;
+static pthread_t main_thread;
+static int thread_checks_failed;
+
+/* Runs on a thread the host library started; everything here needs musl's thread state. */
+static GENint on_thread_event(GENint value, GENubyte flag, GENshort level, void *user) {
+    calls_here++;
+    errno = 0;
+    (void)strtol("99999999999999999999999", NULL, 10);
+    int range = errno == ERANGE;
+    char *text = malloc(64);
+    snprintf(text, 64, "thread event %d (%s)", value, (const char *)user);
+    int own = !pthread_equal(pthread_self(), main_thread);
+    void *before = pthread_getspecific(key);
+    pthread_setspecific(key, text);
+    int kept = pthread_getspecific(key) == text;
+    if (!own || !range || calls_here != 1 || before || !kept) thread_checks_failed++;
+    if (value < 100)
+        printf("%s: own thread %s, errno %s, thread-local calls %d, key %s then %s\n", text, own ? "yes" : "no",
+               range ? "ERANGE" : "wrong", calls_here, before ? "set" : "unset", kept ? "kept" : "lost");
+    pthread_setspecific(key, NULL);
+    free(text);
+    return value + flag + level;
 }
 
 static void log_a(const GENchar *message, GENshort level) { printf("log a: %s (%d)\n", message, level); }
@@ -44,6 +75,16 @@ int main(int argc, char **argv) {
         genLog("first again", 3);
         genSetLogger(log_c);
         genLog("third", 4);
+        return 0;
+    }
+    if (strcmp(mode, "threads") == 0) {
+        main_thread = pthread_self();
+        pthread_key_create(&key, NULL);
+        genRegister(on_thread_event, "x");
+        for (int i = 1; i <= 3; i++) printf("fire on thread %d\n", genFireOnThread(i * 10));
+        long sum = 0;
+        for (int i = 0; i < 200; i++) sum += genFireOnThread(100 + i);
+        printf("200 more threads: sum %ld, failed checks %d, main thread's calls %d\n", sum, thread_checks_failed, calls_here);
         return 0;
     }
     if (strcmp(mode, "other") == 0) {

@@ -54,6 +54,8 @@ GENAPI GENint genObjectId(GENobject object);
 GENAPI void genDestroy(GENobject object);
 GENAPI void genRegister(GENcallback callback, void *user);
 GENAPI GENint genFire(GENint value);
+/* Calls the registered callback on a thread the library starts, and waits for it. */
+GENAPI GENint genFireOnThread(GENint value);
 GENAPI void genSetLogger(GENlogproc logger);
 GENAPI void genLog(const GENchar *message, GENshort level);
 GENAPI void genSetOther(GENotherproc other);

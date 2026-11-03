@@ -424,8 +424,12 @@ internal static class Driver
             bool executable = !options.Library && !invocation.Relocatable;
             if (!executable && bitcode.All(input => LinkerInputKind(input.Path) == ".a" && !input.WholeArchive))
                 throw new ArgumentException("Provide at least one explicit object or source as the link root, or -Wl,--whole-archive before an archive.");
+            // An executable that uses a native extension also links the musl port's thread attachment, which the
+            // extensions' reverse thunks need on threads a host library started (NX-08).
+            string[] threadAttachment = executable && options.Extensions.Count != 0 && options.Runtime == "portable" && invocation.DefaultLibraries
+                ? ["__llvmnet_attach_thread", "__llvmnet_detach_thread"] : [];
             Llvm.Link([.. bitcode.Select(input => input.Path)], [.. bitcode.Select(input => input.WholeArchive)], linked, options.AbiTag,
-                executable ? ["main", "_QQmain"] : []);
+                executable ? ["main", "_QQmain"] : [], threadAttachment);
             if (invocation.KeepIr is not null)
                 File.Copy(linked, invocation.KeepIr, true);
             string output = Path.GetFullPath(invocation.Output ?? (options.Library ? "a.dll" : invocation.Relocatable ? "a.o" : invocation.EmitLlvm ? "a.bc" : "a.out"));
@@ -446,7 +450,8 @@ internal static class Driver
             string scalarizer = options.Simd128 ? "scalarizer" : "scalarizer<load-store>";
             string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,expand-reductions,scalarize-masked-mem-intrin,{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
-            if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (options.Runtime == "portable" ? ",__llvmnet_libc_main,__llvmnet_register_finalizer,__llvmnet_cxx_can_catch" : ""));
+            if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (options.Runtime == "portable" ? ",__llvmnet_libc_main,__llvmnet_register_finalizer,__llvmnet_cxx_can_catch" : "") +
+                (options.Extensions.Count != 0 && options.Runtime == "portable" ? ",__llvmnet_attach_thread,__llvmnet_detach_thread" : ""));
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);
             if (optimizeResult != 0)
                 return optimizeResult;

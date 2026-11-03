@@ -31,9 +31,9 @@ toolchain="$test_output/toolchain"
 extension_root "$toolchain"
 bash "$root/scripts/build-extensions.sh" --sysroot "$toolchain/sysroot/dotnet64-v2" --build-dir "$test_output/ext-build" "$description" \
     2>"$test_output/build.log" || { cat "$test_output/build.log" >&2; exit 1; }
-grep -q 'generated 2.1.0: 24 entry points, 1 that fail when called, 1 left out, 2 callback types with reverse thunks' "$test_output/build.log" ||
+grep -q 'generated 2.1.0: 25 entry points, 1 that fail when called, 1 left out, 2 callback types with reverse thunks' "$test_output/build.log" ||
     { cat "$test_output/build.log" >&2; exit 1; }
-grep -q 'verified 25 stubs against the C prototypes llvmnet compiled' "$test_output/build.log"
+grep -q 'verified 26 stubs against the C prototypes llvmnet compiled' "$test_output/build.log"
 # An unchanged description is not rebuilt; the same inputs generate the same files.
 bash "$root/scripts/build-extensions.sh" --sysroot "$toolchain/sysroot/dotnet64-v2" --build-dir "$test_output/ext-build" "$description" \
     2>&1 | grep -q '^Extension generated is up to date'
@@ -52,6 +52,12 @@ LLVMNET_EXT_GENERATED_DIR="$native" "$test_output/aot/generated" | diff -u "$tes
 # The non-blocking entry points (genAdd, genSwap) skip the GC transition when the run asks for it (NX-11).
 LLVMNET_EXT_GENERATED_DIR="$native" LLVMNET_EXT_GENERATED_NON_BLOCKING=1 dotnet "$test_output/jit/generated.dll" | diff -u "$test_output/native.txt" -
 LLVMNET_EXT_GENERATED_DIR="$native" LLVMNET_EXT_GENERATED_NON_BLOCKING=1 "$test_output/aot/generated" | diff -u "$test_output/native.txt" -
+# Callbacks on threads the host library starts get musl thread state (NX-08), also while collections run often, so
+# that the finalizers that release it run during the program.
+LD_LIBRARY_PATH="$native" "$test_output/generated-native" threads >"$test_output/threads-native.txt"
+LLVMNET_EXT_GENERATED_DIR="$native" dotnet "$test_output/jit/generated.dll" threads | diff -u "$test_output/threads-native.txt" -
+LLVMNET_EXT_GENERATED_DIR="$native" DOTNET_GCgen0size=0x20000 dotnet "$test_output/jit/generated.dll" threads | diff -u "$test_output/threads-native.txt" -
+LLVMNET_EXT_GENERATED_DIR="$native" "$test_output/aot/generated" threads | diff -u "$test_output/threads-native.txt" -
 LIBRARY_PATH="$native" LD_LIBRARY_PATH="$native" "$llvmnet" --runtime=system -O1 -DLLVMNET_SYSTEM_TEST -I"$include" \
     "$fixtures/generated.c" --extension=generated -o "$test_output/system/generated.dll"
 LD_LIBRARY_PATH="$native" dotnet "$test_output/system/generated.dll" | diff -u "$test_output/native.txt" -
