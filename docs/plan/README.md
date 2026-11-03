@@ -17,6 +17,10 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-11-03, SIMD levels)
+
+The owner asked for a multi-level SIMD plan: LLVM's vector IR and autovectorization, the C and C++ intrinsics and the inline and separate assembly of the popular ecosystems, in both runtime modes, keeping single-ISA-per-compile libraries working, with extended options and APIs for runtime detection, per-architecture assembly bundled for the JIT or linked statically by NativeAOT, and a C fallback, with emscripten's SIMD over WebAssembly as the reference. The design is a new workstream, [12-simd.md](12-simd.md) (prefix SV, proposed milestone M11 after 1.0), and [ADR-16](decisions.md#adr-16-simd-levels): Level 1 lowers vector IR to typed `Vector128<T>` (and `Vector256<T>` on request), which serves the vectorizers, GCC vector extensions and the half of the x86 intrinsics Clang lowers generically; Level 2 translates the `llvm.x86.*`, `llvm.wasm.*` and NEON intrinsics through runtime helpers with explicit `IsSupported` dispatch and exact portable fallbacks, selected by a new `--isa` option that changes no data layout; Level 3 bundles natively assembled kernel packages per runtime identifier with compiler-generated stubs, the project's own C dispatch, and CPU detection APIs (`__cpu_model`, CPUID emulation, `<llvmnet/cpu.h>`); Level 4 (a spike) would let llvmnet compile leaf functions natively. The survey behind it ([evidence](../evidence/2026-11-03-simd-survey.md)) measured the corpus's SIMD forms, which intrinsics Clang keeps target-specific (46 of 99 common ones), what the vectorizers emit for the portable target, .NET 10's SIMD surface and NativeAOT's instruction-set behavior (opportunistic sets help only explicit `IsSupported` checks: 13 ns against 4 ns for a run-time shuffle), LLVM's scalarizer as a 128-bit legalizer, and hand-written `Vector128` loops as a stand-in for Level 1 against native scalar and vectorized code (3.7 to 5x over today's scalar translation on element-wise and widening loops, about double at 256 bits, level with native SSE2 except on the `psadbw`/`pmaddwd` idioms, while today's scalarized `-O3 -fvectorize` costs 1.2 to 2x). Two scalar findings became PF-17 (global base addresses reloaded on every access) and PF-18 (the branch-free select on a loop-carried maximum, 7x native). Nothing is implemented; the decisions are [proposed for the owner](decisions.md#proposed-for-the-owner-2026-11-03-simd).
+
 ## Progress (2026-11-03, native extensions of the portable ABI)
 
 The owner asked how a portable program could reference standardized native libraries (EGL and OpenGL ES, Vulkan) through clear FFI boundaries without depending on a host ABI, so that the shared code stays neutral and runs on Windows and macOS, where no system mode exists. The design is a new workstream, [11-native-extensions.md](11-native-extensions.md) (prefix NX, proposed milestone M10 after 1.0), and [ADR-15](decisions.md#adr-15-native-extensions-of-the-portable-abi): generated managed proxy assemblies per API, platform-neutral, loading the host's library at run time, with `dlopen` host entry points in the runtime and extension packages under the sysroot. A feasibility spike ([evidence](../evidence/2026-11-03-native-extension-spike.md), `artifacts/native-ext/`) built such a proxy for EGL and GL from the Khronos registries without changing the compiler or runtime: a plain GLES program and ANGLE's unmodified GL backend render the native pixels from one portable image on Linux x64 (Mesa, JIT and NativeAOT), Windows x64 (ANGLE over Direct3D 11) and macOS ARM64 (ANGLE over Metal), driver callbacks reach portable code, and a call costs about 1 ns more than natively. The decisions (ADR-15, the milestone, the first extensions, how the other hosts' tests obtain ANGLE, the names) are [proposed for the owner](decisions.md#proposed-for-the-owner-2026-11-03-native-extensions).
@@ -222,6 +226,7 @@ Non-goals for 1.0: native C++ ABI interoperability, general SIMD lowering, socke
 | [M8](#m8-performance) Performance | Benchmarks, atomics, allocas, method splitting, AOT policy | M3 | 4 to 8 |
 | [M9](#m9-workload-gates-and-10) Workload gates and 1.0 | Full suites on the release candidate | all | 4 to 6 |
 | [M10](#m10-native-extensions-proposed) Native extensions (proposed) | Proxied host libraries for portable programs: `dlopen` in the runtime, extension packages, the generator, the `gles` extension | M6, M7 | 6 to 10 |
+| [M11](#m11-simd-proposed) SIMD (proposed) | Vector lowering to `Vector128`/`Vector256`, intrinsic helpers, native kernel packages, CPU detection, vectorizer policy | M6, M8 | 12 to 20 |
 
 The effort column is a rough order of magnitude for one experienced engineer and will be wrong in detail; it exists so milestones can be compared and so the total (roughly 45 to 65 engineer-weeks) is visible. M6, M7 and M8 can run in parallel with M4 and M5 once M3 is done.
 
@@ -242,6 +247,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M8 | 0.7 | exit items done (PF-01, PF-02, benchmark table published); the first GitHub run of the nightly benchmark job needs FD-19. P1: PF-03, 04, 05, 08, 10, 11, 13, 14, 16 done, PF-06, PF-07 and PF-15 in progress | 0 | 2026-11-02 |
 | M9 | 1.0-rc | in progress: WG-02, 03, 04, 05, 09 done, WG-01 at 99.1% portable and 98.8% system (target 99%), WG-06 not run (FD-21); RL-02, 05, 08, 09 done; two nightlies on a release candidate need GitHub (FD-19) | 2 (WG-01, WG-06) | 2026-11-01 |
 | M10 | after 1.0 | proposed (ADR-15, NX); NX-02 (`dlopen` over registered extensions) and NX-03 (extension packages, `--extension`) done as compatible additions to `dotnet64-v2`; NX-01 awaits the owner, the generator and `gles` (NX-04, NX-05) are next | 0 | 2026-11-03 |
+| M11 | after 1.0 | proposed (ADR-16, SV); survey done, nothing implemented | 0 | 2026-11-03 |
 
 ### M0: Foundations
 
@@ -287,6 +293,10 @@ Exit: WG-01 through WG-06 at threshold on the release candidate for two consecut
 
 Exit: NX-02 through NX-06 done; a portable program using the `gles` extension renders the native pixels on Linux x64, Windows x64 and macOS ARM64 under the JIT and as NativeAOT executables in CI; programs without extensions are byte-identical to before; the ABI freeze test passes unchanged. Proposed after 1.0 ([ADR-15](decisions.md#adr-15-native-extensions-of-the-portable-abi)). Details: [11-native-extensions.md](11-native-extensions.md).
 
+### M11: SIMD (proposed)
+
+Exit: SV-02 through SV-05, SV-07, SV-08, SV-12, SV-13, SV-15, SV-19 and SV-20 done; vectorized and intrinsic-using code from the survey corpus runs as vector code on all four hosts with output identical to native; the ffmpeg browser profile runs its nasm kernels from a kernel package on Linux x64 (JIT and NativeAOT) and its C paths elsewhere, with native hashes; the benchmark table shows no regression at any level; programs without the new options are byte-identical to before; the ABI freeze test passes unchanged. Proposed after 1.0 ([ADR-16](decisions.md#adr-16-simd-levels)). Details: [12-simd.md](12-simd.md).
+
 ## Workstreams
 
 | Prefix | File | Scope |
@@ -303,6 +313,7 @@ Exit: NX-02 through NX-06 done; a portable program using the `gles` extension re
 | WG | [09-workload-gates.md](09-workload-gates.md) | Conformance suites, ffmpeg FATE, SPEC |
 | RL | [10-release.md](10-release.md) | Pre-release train and the 1.0 checklist |
 | NX | [11-native-extensions.md](11-native-extensions.md) | Proxied host libraries (EGL/GLES, Vulkan) for portable programs; proposed, M10 |
+| SV | [12-simd.md](12-simd.md) | SIMD levels: vector lowering, intrinsic helpers, native kernel packages, CPU detection; proposed, M11 |
 
 ## Risks
 
