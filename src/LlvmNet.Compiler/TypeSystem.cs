@@ -23,17 +23,15 @@ internal sealed class TypeSystem : IDisposable
 {
     private readonly nint layout;
     private readonly ModuleBuilder module;
-    private readonly bool simd128;
     private readonly bool typedVectors;
     private readonly Dictionary<nint, Type> types = [];
     private readonly Dictionary<nint, VectorShape?> vectors = [];
     private readonly Dictionary<nint, Type> returns = [];
     private readonly Dictionary<(Type Lane, int Fragments), (Type Cil, FieldInfo[] Fields)> containers = [];
 
-    internal TypeSystem(nint llvmModule, ModuleBuilder module, bool simd128, bool typedVectors, int vectorBits = 128)
+    internal TypeSystem(nint llvmModule, ModuleBuilder module, bool typedVectors, int vectorBits = 128)
     {
         this.module = module;
-        this.simd128 = simd128;
         this.typedVectors = typedVectors;
         FragmentBits = vectorBits;
         layout = Llvm.LLVMCreateTargetData(Llvm.LLVMGetDataLayoutStr(llvmModule));
@@ -66,7 +64,6 @@ internal sealed class TypeSystem : IDisposable
             8 when Width(type) <= 64 => typeof(long),
             8 when Width(type) <= 128 => typeof(UInt128),
             12 => typeof(nint),
-            13 when simd128 && Size(type) == 16 && VectorBits(type) == 128 => typeof(Vector128<byte>),
             13 when Vector(type) is VectorShape shape => shape.Cil,
             10 or 11 or 13 => Aggregate(type),
             _ => throw new NotSupportedException($"Unsupported LLVM type: {Llvm.PrintType(type)}")
@@ -148,13 +145,6 @@ internal sealed class TypeSystem : IDisposable
     };
 
     internal static int LaneBits(Type lane) => System.Runtime.InteropServices.Marshal.SizeOf(lane) * 8;
-
-    private static int VectorBits(nint type)
-    {
-        nint element = Llvm.LLVMGetElementType(type);
-        int bits = Kind(element) switch { 2 => 32, 3 => 64, 8 => Width(element), _ => 0 };
-        return checked(bits * (int)Llvm.LLVMGetVectorSize(type));
-    }
 
     internal (nint Type, long Offset) Element(nint type, uint index)
     {

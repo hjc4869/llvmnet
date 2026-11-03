@@ -437,6 +437,16 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         Release(address);
     }
 
+    /// <summary>Reinterprets the vector on the stack as another vector of the same width (CilCompiler.Reinterpretable).</summary>
+    internal void Reinterpret(Type from, Type to)
+    {
+        if (from == to || !CilCompiler.Reinterpretable(from, to)) return;
+        Type owner = from.GetGenericTypeDefinition() == typeof(Vector256<>) ? typeof(Vector256) : typeof(Vector128);
+        Type source = from.GetGenericArguments()[0], target = to.GetGenericArguments()[0];
+        il.Emit(OpCodes.Call, Methods.GetOrAdd((owner, "As", source, target.FullName!), _ =>
+            owner.GetMethods().Single(method => method.Name == "As" && method.GetGenericArguments().Length == 2).MakeGenericMethod(source, target)));
+    }
+
     /// <summary>Turns the typed vector on the stack into the bytes a function returns it as (<see cref="TypeSystem.Return"/>).</summary>
     internal void ToBoundary(nint type)
     {

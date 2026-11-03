@@ -238,12 +238,22 @@ internal sealed class CilCompiler(CompilerOptions options)
             return Methods[function] = constructors;
         if (!runtimeExports.TryGetValue(name, out method) || options.Runtime == "portable" && !MuslVisible(name, method))
             throw new NotSupportedException($"Unresolved function: {name}");
-        if (Types.Return(Llvm.LLVMGetReturnType(signature)) != method.ReturnType ||
-            !Types.Parameters(signature).SequenceEqual(method.GetParameters().Select(parameter => parameter.ParameterType)))
+        if (!Reinterpretable(Types.Map(Llvm.LLVMGetReturnType(signature)), method.ReturnType) ||
+            !Types.Parameters(signature).Zip(method.GetParameters().Select(parameter => parameter.ParameterType), Reinterpretable).All(match => match) ||
+            Types.Parameters(signature).Length != method.GetParameters().Length)
             throw new NotSupportedException($"Runtime ABI mismatch for {name}: {Llvm.PrintType(signature)}");
         Methods[function] = method;
         return method;
     }
+
+    /// <summary>
+    /// Whether a value of CIL type <paramref name="value"/> passes as <paramref name="parameter"/> of a runtime method:
+    /// the same type, or vectors of the same width with other lanes, which a call reinterprets (Vector128.As) as C's
+    /// header types do for the SIMD128 helpers, whose LLVM type is whatever vector the header declares.
+    /// </summary>
+    internal static bool Reinterpretable(Type value, Type parameter) => value == parameter ||
+        value.IsGenericType && parameter.IsGenericType && value.GetGenericTypeDefinition() == parameter.GetGenericTypeDefinition() &&
+        value.GetGenericTypeDefinition() is Type definition && (definition == typeof(System.Runtime.Intrinsics.Vector128<>) || definition == typeof(System.Runtime.Intrinsics.Vector256<>));
 
     internal static bool NativeScalar(Type type) => type == typeof(void) || type == typeof(int) || type == typeof(long) || type == typeof(nint) || type == typeof(float) || type == typeof(double);
 
@@ -256,7 +266,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         ModuleBuilder cilModule = assembly.DefineDynamicModule("program");
         Program = cilModule.DefineType("Program", TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
         fieldHolders.Add(Program);
-        using var types = new TypeSystem(module, cilModule, options.Simd128, options.TypedVectors, options.VectorWidth);
+        using var types = new TypeSystem(module, cilModule, options.TypedVectors, options.VectorWidth);
         Types = types;
         if (options.TypedVectors)
             foreach ((string function, string? reason) in VectorEmitter.Legalize(types, module, options.VectorLowering == "auto"))

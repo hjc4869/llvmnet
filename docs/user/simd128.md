@@ -2,9 +2,9 @@
 
 WebAssembly's fixed 128-bit SIMD operations map onto .NET's architecture-neutral `System.Runtime.Intrinsics.Vector128<T>` APIs and compositions of them. .NET uses hardware SIMD instructions where the CPU has them and a software implementation otherwise. The storage contract is `Vector128<T>`, not `System.Numerics.Vector<T>`, whose lane count depends on the host.
 
-The opt-in `--simd128` option compiles code written against WebAssembly's `wasm_simd128.h` intrinsics, in both runtime modes and without changing their 64-bit data ABI. It supports the subset of intrinsics that ffmpeg's WebAssembly HEVC kernels use. Exactly 128-bit vector values become `Vector128<byte>`, and each intrinsic becomes a call to a managed helper. Other vector arithmetic is scalarized as usual.
+The opt-in `--simd128` option (also `--isa=wasm-simd128`) compiles code written against WebAssembly's `wasm_simd128.h` intrinsics, in both runtime modes and without changing their 64-bit data ABI. It supports the subset of intrinsics that ffmpeg's WebAssembly HEVC kernels use. As Clang's own header does, llvmnet's writes most intrinsics as Clang vector extensions, which the typed vector lowering ([ADR-16](../plan/decisions.md#adr-16-simd-levels) Level 1) translates to `Vector128<T>` operations like any other vector code; the operations Clang's header takes from `llvm.wasm.*` intrinsics (swizzle, bitselect, bitmask, all and any true, the saturating narrows, `q15mulr_sat`, `pmin` and the saturating truncations) call managed helpers.
 
-The ffmpeg profile `FFMPEG_SIMD128=1` enables the HEVC IDCT at 8 and 10 bits and SAO at 8 bits. With the default baseline instruction set, NativeAOT code for these kernels is slower than the scalar build; host-targeted NativeAOT and the JIT are faster (PF-08). [dev/video-benchmark.md](../dev/video-benchmark.md) describes how to measure this.
+The ffmpeg profile `FFMPEG_SIMD128=1` enables the HEVC IDCT at 8 and 10 bits and SAO at 8 bits. It decodes faster than the scalar profile under the JIT and as NativeAOT at the default baseline instruction set, except baseline NativeAOT on four threads, which is about as fast; `x86-64-v3` NativeAOT is faster still (PF-08, SV-07). [dev/video-benchmark.md](../dev/video-benchmark.md) describes how to measure this.
 
 ## Build ffmpeg
 
@@ -28,7 +28,7 @@ bin/llvmnet --runtime=portable --simd128 --nativeaot --aot-instruction-set nativ
 	-o artifacts/ffmpeg-browser-portable-simd128/decode-aot-host
 ```
 
-The default is `--aot-instruction-set baseline`, the NativeAOT compiler's `x86-64` level on x64 (SSE2), which runs on every x64 CPU. It cannot assume SSSE3, so the SIMD128 shuffles (`wasm_i8x16_swizzle`, `wasm_i8x16_shuffle` and the helpers built on them) fall back to software and the SIMD128 profile decodes HEVC more slowly than the scalar one (3.29 s against 2.71 s for 240 frames of 1080p, [evidence](../evidence/2026-11-01-m8-performance.md#pf-08-nativeaot-instruction-sets)). `x86-64-v3` (AVX2, BMI2, FMA; x64 CPUs since about 2015) compiles them to `pshufb` and makes the profile as fast as the scalar one; it applies only to x64 targets. `native` specializes the code for the build host's CPU and rejects another RID; the result may not run on older CPUs. Neither changes the C data ABI. The JIT selects instructions at run time without this option.
+The default is `--aot-instruction-set baseline`, the NativeAOT compiler's `x86-64` level on x64 (SSE2), which runs on every x64 CPU. It cannot assume SSSE3, so the SIMD128 shuffles (`wasm_i8x16_swizzle`, `wasm_i8x16_shuffle` and the helpers built on them) fall back to software sequences. With every intrinsic a helper call, that made the SIMD128 profile decode HEVC more slowly than the scalar one (3.29 s against 2.71 s for 240 frames of 1080p, [evidence](../evidence/2026-11-01-m8-performance.md#pf-08-nativeaot-instruction-sets)); with the header on the typed lowering it takes 2.41 s against the scalar profile's 2.60 s on one thread ([evidence](../evidence/2026-11-03-vector-lowering.md#sv-07-simd128-on-the-typed-lowering)). `x86-64-v3` (AVX2, BMI2, FMA; x64 CPUs since about 2015) compiles them to `pshufb` and makes the profile as fast as the scalar one; it applies only to x64 targets. `native` specializes the code for the build host's CPU and rejects another RID; the result may not run on older CPUs. Neither changes the C data ABI. The JIT selects instructions at run time without this option.
 
 ## Tests
 
@@ -67,10 +67,10 @@ The ffmpeg kernel tests also exercise signed short extended multiplication, satu
 
 ## Compiler integration
 
-- The header produces recognized `__llvmnet_simd128_*` helper calls that survive scalarization. With `--simd128`, the optimizer runs LLVM's scalarizer without load/store expansion, so 128-bit vector loads and stores stay whole and map to `Vector128<byte>`. Other fixed-width vectors keep their explicit-layout value types.
+- The header is vector-extension code plus `__llvmnet_simd128_*` helper calls for the `llvm.wasm.*` operations. The typed vector lowering translates the vector code; a helper takes and returns `Vector128<byte>`, and a call reinterprets the header's vectors as that, which costs nothing. The other helpers of `Simd128.cs` stay exported for code that calls them directly.
 - Source compatibility is separate from the machine ABI. Clang's own `wasm_simd128.h` requires a WebAssembly target; llvmnet's header works under both 64-bit ABIs. wasm32 pointers, layouts, varargs and library contracts are incompatible with them, and WebAssembly modules cannot be loaded.
 - SIMD helpers are managed imports in both modes. ffmpeg's DSP entry points take scalar pointer arguments, so their vector values stay in managed code. Passing vector values to or from native code in system mode is not supported.
-- Open work: direct acceleration of generic LLVM vector instructions and of target-specific `llvm.wasm.*` intrinsics, kernels beyond HEVC IDCT and 8-bit SAO (10-bit SAO, motion compensation and deblocking are scalar), ARM64 execution, and baseline NativeAOT code quality.
+- Open work: kernels beyond HEVC IDCT and 8-bit SAO (10-bit SAO, motion compensation and deblocking are scalar), ARM64 execution, and baseline NativeAOT code quality, which Level 2's helpers with explicit `IsSupported` dispatch address.
 
 ## References
 

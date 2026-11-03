@@ -190,9 +190,25 @@ The survey's seven kernels (`artifacts/simd-survey/autovec/kernels.c`, five time
 
 256-bit fragments gain 1.25 to 1.9 times over 128 where the host has AVX2, and put NativeAOT `x86-64-v3` at 1.02 to 1.25 times native AVX2 on the element-wise and float kernels; `sad8` and `dot16` stay 2.2 to 3 times native, the `psadbw`/`pmaddwd` idioms of SV-21. Without AVX most kernels run as at 128 bits, but not `max8`: there RyuJIT does not treat `Vector256` methods as intrinsics, and in `k_max8`, which LLVM unrolled into 3,200 instructions, it leaves 147 `As` and 73 `Max` calls uninlined (`DOTNET_JitDisasm`), 14 times slower than 128. On macOS ARM64 (`mainmac`, portable `-O3 -fvectorize`, 128-bit vectors), where `Vector256` is never accelerated, 256 costs 1.07 to 1.5 times 128 (saxpy 1.182 against 0.939 s, sad8 2.042 against 1.336). `--vector-width=256` is therefore for builds that target AVX2 hosts, as the plan intends with `--isa=x86-64-v3` (SV-08, SV-09), and 128 stays the default. The same ARM64 run puts the 128-bit JIT code at 1.5 times native NEON on saxpy, i32mix and max8.
 
+## SV-07: SIMD128 on the typed lowering
+
+`sysroot/simd128/include/wasm_simd128.h` is rewritten as Clang's own header is written: Clang vector extensions for the intrinsics with a generic form (arithmetic, comparisons, lane access, loads and stores, widening, shuffles through `__builtin_shufflevector`), and helper calls only for the operations Clang's header takes from `llvm.wasm.*` intrinsics (swizzle, bitselect, bitmask, all and any true, the saturating narrows, `q15mulr_sat`, `pmin`, the saturating truncations): 12 helper declarations instead of 47. `--simd128` became `--isa=wasm-simd128` (the old spelling stays an alias) and runs on the typed lowering; the `Vector128<byte>` mapping of exactly 128-bit vectors and the path's own scalarizer are gone. The helpers take and return `Vector128<byte>` while the header's vectors are typed, so a call of a runtime method reinterprets a vector argument or result of the same width with other lanes (`Vector128.As`, free).
+
+`tests/wasm-simd128.sh`, `tests/simd128.sh` and `tests/ffmpeg-simd128.sh`, unchanged, pass: the 21 operations on 67 input records against Node's WebAssembly oracle under the JIT, without hardware intrinsics, as baseline and as host-targeted NativeAOT, and ffmpeg's 512 IDCT and 144 SAO cases and the 8- and 10-bit HEVC frame hashes with frame and slice threading in both modes (30 checks), with no P/Invoke imports in the portable decoder.
+
+The HEVC profile (`FFMPEG_SIMD128=1`), the 10-bit 1080p clip of the benchmark set (240 frames), before (the bitcode built with the old header, translated by the compiler at `ee9304b`) and after (rebuilt with the new header, translated by this one), `scripts/ab-time.py 5`, median seconds:
+
+| engine | one thread, before | after | four threads, before | after |
+| --- | ---: | ---: | ---: | ---: |
+| JIT | 2.798 | 2.739 | 1.389 | 1.334 |
+| NativeAOT, baseline | 2.909 | 2.407 | 1.181 | 0.938 |
+| NativeAOT, `x86-64-v3` | 2.263 | 2.182 | 0.871 | 0.837 |
+
+The profile is faster in every engine, by a fifth as baseline NativeAOT, which no longer pays a call per intrinsic. The scalar profile took 3.115 s (JIT) and 2.601 s (NativeAOT) on one thread and 1.445 and 0.946 s on four in the final SV-05 run, so the SIMD128 profile now beats it as baseline NativeAOT too, where it was 3.29 against 2.71 s ([PF-08](2026-11-01-m8-performance.md#pf-08-nativeaot-instruction-sets)), except on four threads, where they are level.
+
 ## What it does not show
 
 - Speedups on the survey's libraries: SV-05 measured the benchmark set and the survey's kernels; the vectorizers stay off by default (ADR-11) until the owner decides.
-- Transcendental intrinsics and `is.fpclass` still scalarize their function (SV-03); SIMD128 on the typed lowering is SV-07.
+- Transcendental intrinsics and `is.fpclass` still scalarize their function (SV-03).
 - The disassembly is from this AVX-512 host; NativeAOT's default instruction set (SSE2 guaranteed) compiles byte shuffles and 32-bit multiplications through software sequences, which Level 2's explicit `IsSupported` helpers address.
 - Linux ARM64 NativeAOT, for the reason above.

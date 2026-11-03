@@ -15,8 +15,8 @@ internal sealed class CompilerOptions
     /// translate, and scalar scalarizes every vector, as llvmnet did before the typed lowering.
     /// </summary>
     internal string VectorLowering { get; set; } = "auto";
-    /// <summary>Whether vector IR is lowered to Vector128 (ADR-16 Level 1); --simd128 keeps its own representation until SV-07.</summary>
-    internal bool TypedVectors => !Simd128 && VectorLowering != "scalar";
+    /// <summary>Whether vector IR is lowered to Vector128 (ADR-16 Level 1).</summary>
+    internal bool TypedVectors => VectorLowering != "scalar";
     /// <summary>The bits of a typed vector fragment, 128 or 256 (--vector-width, SV-06).</summary>
     internal int VectorWidth { get; set; } = 128;
     internal bool TrapMissingArguments { get; set; }
@@ -147,6 +147,14 @@ internal sealed class Invocation
                 case "--runtime": break;
                 case "--portable-sysroot": PortableAbi.SysrootOverride = Path.GetFullPath(value); break;
                 case "--simd128": Options.Simd128 = true; break;
+                case "--isa=":
+                    // The instruction set the frontend may assume (ADR-16): baseline, or wasm-simd128, the SIMD128 header
+                    // path (--simd128); the x86 and NEON levels come with their intrinsic helpers.
+                    if (value is "x86-64-v2" or "x86-64-v3" or "neon")
+                        throw new ArgumentException($"--isa={value} is not implemented yet; the supported levels are baseline and wasm-simd128.");
+                    if (value is not ("baseline" or "wasm-simd128")) throw new ArgumentException("--isa requires baseline or wasm-simd128.");
+                    Options.Simd128 = value == "wasm-simd128";
+                    break;
                 case "--vector-width=":
                     if (value is not ("128" or "256")) throw new ArgumentException("--vector-width requires 128 or 256.");
                     Options.VectorWidth = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
@@ -488,9 +496,10 @@ internal static class Driver
                     throw new IOException("Cannot write the legalized module.");
             }
             // The typed vector lowering keeps vector code whole, reductions included, and expands and scalarizes only the
-            // functions it does not translate (VectorEmitter.Legalize); --simd128 keeps 128-bit loads and stores whole,
-            // and without either every vector operation becomes scalar code.
-            string scalarizer = options.Simd128 ? ",scalarizer" : options.TypedVectors ? "" : ",scalarizer<load-store>";
+            // functions it does not translate (VectorEmitter.Legalize); without it every vector operation becomes scalar code.
+            if (options.Simd128 && !options.TypedVectors)
+                throw new ArgumentException("--simd128 needs the typed vector lowering; it cannot be combined with --vector-lowering=scalar.");
+            string scalarizer = options.TypedVectors ? "" : ",scalarizer<load-store>";
             string reductions = options.TypedVectors ? "" : "expand-reductions,";
             string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,{reductions}scalarize-masked-mem-intrin{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];

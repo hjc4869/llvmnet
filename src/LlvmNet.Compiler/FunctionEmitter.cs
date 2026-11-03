@@ -1459,6 +1459,10 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         if (variadic)
             varargs.Pack(instruction);
+        // A runtime method (a SIMD128 helper) may take vectors of other lanes than the call passes: reinterpreted.
+        MethodInfo? runtime = !variadic && Llvm.LLVMIsAFunction(target) != 0 &&
+            (Compiler.Methods.TryGetValue(target, out MethodInfo? resolved) ? resolved : Compiler.ResolveFunction(target)) is MethodInfo direct &&
+            direct is not MethodBuilder ? direct : null;
         uint count = variadic || Llvm.LLVMIsAFunction(target) != 0 ? Llvm.LLVMCountParamTypes(signature) : Llvm.LLVMGetNumArgOperands(instruction);
         for (uint index = 0; index < count; index++)
         {
@@ -1475,6 +1479,8 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Il.Emit(TypeSystem.Kind(parameter) == 12 ? OpCodes.Conv_I : TypeSystem.Width(parameter) == 64 ? OpCodes.Conv_U8 : OpCodes.Conv_I4);
                 Normalize(parameter);
             }
+            if (runtime is not null && index < runtime.GetParameters().Length)
+                Vectors.Reinterpret(Types.Map(Llvm.LLVMTypeOf(argument)), runtime.GetParameters()[index].ParameterType);
         }
         if (variadic)
             varargs.Load();
@@ -1543,6 +1549,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         if (legacyComplete is Label completeLegacy) Il.MarkLabel(completeLegacy);
         if (discardReturn) Il.Emit(OpCodes.Pop);
+        else if (runtime is not null) Vectors.Reinterpret(runtime.ReturnType, Types.Map(Llvm.LLVMGetReturnType(signature)));
         else if (Types.ReturnsBytes(Llvm.LLVMGetReturnType(signature))) Vectors.FromBoundary(Llvm.LLVMGetReturnType(signature));
         if (truncateBooleanReturn) Normalize(Llvm.LLVMTypeOf(instruction));
         if (convertReturn is not null) Il.Emit(convertReturn == typeof(nint) ? OpCodes.Conv_I : OpCodes.Conv_I8);

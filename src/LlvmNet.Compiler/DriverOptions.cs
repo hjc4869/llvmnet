@@ -125,7 +125,8 @@ internal static class DriverOptions
         // Runtime mode and ABI
         new("--runtime", OptionKind.JoinedOrSeparate, Modes, "portable (the default; ABI " + PortableAbi.Tag + ", runs on every supported .NET host) or system (the native Linux x86-64 ABI, system-linux-x64-v1)", H, value: "<mode>"),
         new("--portable-sysroot", OptionKind.JoinedOrSeparate, Modes, "Use another portable sysroot instead of the toolchain's sysroot/" + PortableAbi.Tag, H, value: "<dir>"),
-        new("--simd128", OptionKind.Flag, Modes, "Compile wasm_simd128.h intrinsics to Vector128 helper calls (docs/user/simd128.md)", H),
+        new("--isa=", OptionKind.Joined, Modes, "The instruction set intrinsics and headers may assume, without changing the data layout (ADR-16): baseline (the default) or wasm-simd128, the wasm_simd128.h header (docs/user/simd128.md); x86-64-v2, x86-64-v3 and neon follow with their intrinsic helpers", H, value: "<level>"),
+        new("--simd128", OptionKind.Flag, Modes, "--isa=wasm-simd128: compile wasm_simd128.h intrinsics to Vector128 code (docs/user/simd128.md)", H),
         new("--vector-lowering=", OptionKind.Joined, Hidden, "", H, value: "<auto|typed|scalar>"),
         new("--vector-width=", OptionKind.Joined, Modes, "128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a 256-bit vector as one instruction where the host has AVX2 and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128", H, value: "<bits>"),
         // Managed and native libraries
