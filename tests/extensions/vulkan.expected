@@ -1,0 +1,9 @@
+instance version at least 1.1: yes
+instance created with allocation callbacks: used
+debug messenger: created, the message arrived, severity warning, type general
+debug messenger: in the instance's pNext chain accepted
+lookup of an unknown function: null
+physical devices: at least one
+device created, queue from vkGetDeviceProcAddr's pointer: yes
+vkCmdFillBuffer: 16384 of 16384 words read back as 0x12345678
+allocation callbacks: every allocation freed: yes

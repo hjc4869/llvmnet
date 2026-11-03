@@ -69,14 +69,22 @@ record() {
 }
 selected() { [[ -z "$only" ]] || [[ ",$only," == *",$1,"* ]]; }
 # What a fixture needs from the host besides .NET (the manifest's fifth column): "extension:gles" needs EGL and GLES
-# libraries, found where LLVMNET_EXT_GLES_DIR names (ANGLE on Windows and macOS) or, on Linux, on the loader's path.
-# Prints the reason and fails when the host lacks it, so the fixture is skipped.
+# libraries, found where LLVMNET_EXT_GLES_DIR names (ANGLE on Windows and macOS) or, on Linux, on the loader's path;
+# "extension:vulkan" needs a Vulkan loader or driver library, where LLVMNET_EXT_VULKAN_DIR names (SwiftShader on macOS)
+# or the system's (libvulkan.so.1, vulkan-1.dll). Prints the reason and fails when the host lacks it, so the fixture is
+# skipped.
 unavailable() {
+    local libraries=""
+    if [[ "$system" == linux ]]; then libraries="$(ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null)"; fi
     case "$1" in
         extension:gles)
-            if [[ -n "${LLVMNET_EXT_GLES_DIR:-}" ]]; then return 1; fi
-            if [[ "$system" == linux ]] && { ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null; } | grep -q 'libEGL\.so\.1 '; then return 1; fi
+            if [[ -n "${LLVMNET_EXT_GLES_DIR:-}" ]] || grep -q 'libEGL\.so\.1 ' <<<"$libraries"; then return 1; fi
             printf 'no EGL and GLES libraries (set LLVMNET_EXT_GLES_DIR to a directory with ANGLE'"'"'s libEGL and libGLESv2)'
+            return 0 ;;
+        extension:vulkan)
+            if [[ -n "${LLVMNET_EXT_VULKAN_DIR:-}" ]] || grep -q 'libvulkan\.so\.1 ' <<<"$libraries" ||
+                [[ "$system" == windows && -f "${WINDIR:-C:/Windows}/System32/vulkan-1.dll" ]]; then return 1; fi
+            printf 'no Vulkan library (set LLVMNET_EXT_VULKAN_DIR to a directory with SwiftShader'"'"'s vk_swiftshader or MoltenVK)'
             return 0 ;;
     esac
     return 1

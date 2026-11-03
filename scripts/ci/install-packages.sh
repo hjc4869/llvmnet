@@ -23,6 +23,8 @@ packages=(
     cmake ninja-build m4 pkg-config perl python3 shellcheck
     # tests/ext-gles.sh: Mesa's EGL and GLES with its software renderer (llvmpipe), for headless runners without a GPU.
     libegl1 libgles2 libegl-mesa0 libgl1-mesa-dri
+    # tests/ext-vulkan.sh: the Khronos loader and Mesa's software Vulkan driver (lavapipe).
+    libvulkan1 mesa-vulkan-drivers
 )
 if [[ "$integration" -eq 1 ]]; then packages+=(meson ffmpeg nodejs lld-22 rsync); fi
 apt-get install -y --no-install-recommends "${packages[@]}"

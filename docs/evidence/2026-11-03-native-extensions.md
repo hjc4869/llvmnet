@@ -118,3 +118,18 @@ A reverse thunk now calls `NativeCallbacks.Enter` first; on a thread without a m
 | before this item | the first callback faulted on the null thread pointer (`NullReferenceException` in the callback) |
 
 Images that use no extension are unaffected: the attachment is linked only with an extension, and `libc.a` gains one member that nothing else extracts. `tests/ext-gen.sh`, `tests/ext-gles.sh`, `tests/extensions.sh` and `tests/abi-freeze.sh` pass.
+
+## NX-10: the vulkan extension
+
+`extensions/vulkan/extension.json` takes Vulkan 1.0 to 1.4 and its registered extensions from `vk.xml` (Vulkan-Headers 1.4.367, pinned), without the window-system and provisional extensions and `VK_LUNARG_direct_driver_loading`; the generator produces 775 entry points, all verified against the Khronos headers, with reverse thunks for the eight callback types and the layout assertions of the four structures it patches. The generator gained what `vk.xml` needs: command aliases, `api` filtering of commands, parameters, types and structures (it also holds Vulkan SC), comma-separated API lists, handle, enum and bitmask types, the newer function-pointer format, parameters with array suffixes, the integer values of enumerants (sType), structure layouts in the portable ABI, callbacks inside structures, hand-written hooks (`replace`, `after`, `sources`) and a lookup function of its own (`extensions/vulkan/Vulkan.cs`: `vkGetInstanceProcAddr` and `vkGetDeviceProcAddr`, binding through the last instance).
+
+`tests/extensions/vulkan.c` creates an instance with application allocation callbacks and two debug messengers, one in the instance's `pNext` chain and one created through `vkGetInstanceProcAddr`, submits a message, creates a device, takes a queue through `vkGetDeviceProcAddr`'s pointer, fills a 64 KiB host-visible buffer with `vkCmdFillBuffer` on the device and reads it back, and checks that every allocation was freed. Its standard output is `tests/extensions/vulkan.expected`.
+
+| Host and driver | Builds that print the expected output | Allocations through the program's callbacks | Messages to the chained messenger |
+| --- | --- | --- | --- |
+| Linux x64, Khronos loader 1.4.363, Mesa lavapipe | native, portable JIT, NativeAOT (3.4 MB), system mode | 316, all freed, 20 reallocations; the native build's counts | 66, as natively |
+| Linux x64, Mesa RADV (AMD Radeon 8060S) | portable JIT | 551, all freed | 100 |
+| Windows x64, `fluorite`: the system loader and Visual Studio Code's own `vulkan-1.dll`, Intel Arc A380 | the bundle's portable JIT image and NativeAOT executable, with each loader | 1,633, all freed | 54 to 66 (the loader's own diagnostics) |
+| macOS ARM64, `mainmac`: SwiftShader (`libvk_swiftshader.dylib` from Visual Studio Code's Electron), no loader | the bundle's portable JIT image and NativeAOT executable | 10, all freed | none (no loader); the submitted message reaches the chained messenger instead of the created one, because SwiftShader attaches only the messenger it gets at instance creation (its `Instance::submitDebugUtilsMessage`), which the test accepts |
+
+On SwiftShader every function binds through `vkGetInstanceProcAddr`, with no instance for the global functions and with the one the program created for the rest, since the library exports four symbols. With lavapipe the allocation callbacks also run on the driver's queue thread, which gets musl thread state from NX-08. The whole `tests/xp/` bundle passed on both other hosts with the new fixtures (64 runs on each).

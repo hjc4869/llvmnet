@@ -13,6 +13,7 @@ llvmnet itself is licensed under the MIT License; see [LICENSE.TXT](LICENSE.TXT)
 | compiler-rt builtins: complex multiplication and division (`libclang_rt.builtins.a` bitcode in the portable sysroot) | 22.1.8 | Apache-2.0 WITH LLVM-exception | always | `sysroot/dotnet64-v2/share/licenses/libcxx.LICENSE.TXT` (the LLVM license text) |
 | .NET runtime | 10.0 | MIT | `--self-contained` (the compiler's own runtime) | `share/llvmnet/licenses/dotnet.LICENSE.txt`, `dotnet.ThirdPartyNotices.txt` |
 | Khronos EGL and OpenGL headers (`include/` of the `gles` native extension) and `LlvmNet.Ext.Gles.dll`, generated from the Khronos `egl.xml` and `gl.xml` registries | EGL-Registry `e964211`, OpenGL-Registry `6af574a` | Apache-2.0 (the registries, the EGL headers, the extension's modified `eglplatform.h`); MIT (the GL and GLES headers); the Khronos license in `khrplatform.h` | when `scripts/build-extensions.sh` installed the extension in the sysroot | `sysroot/dotnet64-v2/ext/gles/share/licenses/gles/NOTICE.txt`, `Apache-2.0.txt`, `MIT.txt` |
+| Khronos Vulkan headers (`include/` of the `vulkan` native extension) and `LlvmNet.Ext.Vulkan.dll`, generated from `vk.xml` | Vulkan-Headers 1.4.367 | Apache-2.0 OR MIT | when `scripts/build-extensions.sh` installed the extension in the sysroot | `sysroot/dotnet64-v2/ext/vulkan/share/licenses/vulkan/NOTICE.txt`, `Apache-2.0.txt`, `MIT.txt` |
 
 The LLVM libraries are bundled only when `--bundle-llvm` is passed. The copyright files are copied from the build host's Debian packages so the notices match the binaries that were bundled.
 
@@ -52,3 +53,4 @@ NativeAOT executables also embed the .NET runtime (MIT; include its `LICENSE.TXT
 | llvm-test-suite (Fortran conformance tests) | 22.1.8 | Apache-2.0 WITH LLVM-exception; its gfortran tests are GPL, and other imported tests carry their own terms |
 | libc-test (C library conformance tests) | `7b95dfa` | MIT |
 | Khronos EGL-Registry and OpenGL-Registry (the `gles` native extension) | `e964211`, `6af574a` | Apache-2.0 (registry XML, EGL headers), MIT (GL headers) |
+| Khronos Vulkan-Headers (the `vulkan` native extension) | 1.4.367 | Apache-2.0 OR MIT |

@@ -254,3 +254,33 @@ public static unsafe class NativeCallbacks
         return -1;
     }
 }
+
+/// <summary>
+/// Callback members of structures in a call's pNext chains (Vulkan's VkDebugUtilsMessengerCreateInfoEXT in a
+/// VkInstanceCreateInfo), set to reverse thunks in place for the call and restored after it (NX-10). The structures are
+/// the program's own, so a chain that carries a callback must not be in use by two calls at once.
+/// </summary>
+public unsafe struct CallbackPatch
+{
+    private const int Capacity = 16;
+    private fixed long addresses[Capacity];
+    private fixed long values[Capacity];
+    private int count;
+
+    /// <summary>Stores <paramref name="value"/> at <paramref name="address"/>, remembering what was there.</summary>
+    public void Set(nint address, nint value)
+    {
+        if (count == Capacity) NativeExtension.Fail($"a call carries more than {Capacity} callbacks in its structures");
+        addresses[count] = address;
+        values[count] = *(nint*)address;
+        count++;
+        *(nint*)address = value;
+    }
+
+    /// <summary>Puts back every value <see cref="Set"/> replaced, the last first.</summary>
+    public void Restore()
+    {
+        for (int index = count - 1; index >= 0; index--) *(nint*)addresses[index] = (nint)values[index];
+        count = 0;
+    }
+}

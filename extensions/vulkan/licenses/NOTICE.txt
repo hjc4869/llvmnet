@@ -1,0 +1,7 @@
+The vulkan native extension of llvmnet contains material from the Khronos Group's Vulkan-Headers
+(https://github.com/KhronosGroup/Vulkan-Headers), at the tag scripts/sources.lock pins:
+
+- include/vulkan/ and include/vk_video/: Copyright 2015-2026 The Khronos Group Inc., Apache-2.0 OR MIT
+  (Apache-2.0.txt, MIT.txt).
+- lib/LlvmNet.Ext.Vulkan.dll is generated from registry/vk.xml, Copyright 2015-2026 The Khronos Group Inc.,
+  Apache-2.0 OR MIT.

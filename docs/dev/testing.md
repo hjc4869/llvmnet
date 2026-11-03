@@ -4,7 +4,7 @@ Every claim about llvmnet is backed by a test or a dated evidence file, and the 
 
 ## The runner
 
-`tests/run.sh` discovers `tests/*.sh` scripts with a `# tags:` header, builds the solution and the sysroots once (`scripts/ensure-built.sh`), runs the parallel tests with `-j` jobs and then the serial ones, continues after failures, and writes `artifacts/tests/results/` with one log per test, `summary.tsv` and a JUnit `results.xml`. A test whose prerequisite (`# requires: flang openmp ...`) is missing is reported as skipped with the reason; `egl` (for `tests/ext-gles.sh`) needs Mesa's `libEGL.so.1` and `libGLESv2.so.2`, which `scripts/ci/install-packages.sh` installs with the software renderer.
+`tests/run.sh` discovers `tests/*.sh` scripts with a `# tags:` header, builds the solution and the sysroots once (`scripts/ensure-built.sh`), runs the parallel tests with `-j` jobs and then the serial ones, continues after failures, and writes `artifacts/tests/results/` with one log per test, `summary.tsv` and a JUnit `results.xml`. A test whose prerequisite (`# requires: flang openmp ...`) is missing is reported as skipped with the reason; `egl` (for `tests/ext-gles.sh`) needs Mesa's `libEGL.so.1` and `libGLESv2.so.2`, and `vulkan` (for `tests/ext-vulkan.sh`) the Khronos loader `libvulkan.so.1` and Mesa's lavapipe, which `scripts/ci/install-packages.sh` installs.
 
 ```sh
 tests/run.sh --list                                          # every test with its tags and prerequisites

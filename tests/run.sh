@@ -92,6 +92,12 @@ missing() {
                 if ! grep -q 'libEGL\.so\.1 ' <<<"$libraries" || ! grep -q 'libGLESv2\.so\.2 ' <<<"$libraries"; then
                     echo "libEGL.so.1 or libGLESv2.so.2 not found (install libegl1, libgles2 and Mesa: scripts/ci/install-packages.sh)"; return
                 fi ;;
+            vulkan)
+                local loader
+                loader="$(ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null)"
+                if ! grep -q 'libvulkan\.so\.1 ' <<<"$loader" || [[ ! -f /usr/share/vulkan/icd.d/lvp_icd.json ]]; then
+                    echo "libvulkan.so.1 or Mesa's lavapipe not found (install libvulkan1 and mesa-vulkan-drivers: scripts/ci/install-packages.sh)"; return
+                fi ;;
             rsync) command -v rsync >/dev/null || { echo "rsync not found (needed to fetch the FATE samples)"; return; } ;;
             fuzz-build) { command -v cmake && command -v m4 && command -v clang++-22; } >/dev/null || { echo "cmake, m4 or clang++-22 not found (needed to build csmith and yarpgen)"; return; } ;;
             ffmpeg-cli) command -v ffmpeg >/dev/null || { echo "ffmpeg command-line tool not found (needed to generate media fixtures)"; return; } ;;

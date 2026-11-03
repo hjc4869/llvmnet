@@ -59,12 +59,14 @@ done <"$root/tests/xp/fixtures.tsv"
 rm -rf "$work"
 # Native extension fixtures (NX-05): portable images linked with an extension from this toolchain, whose expected output
 # is fixed (every conforming host library prints it), run only where the host library can be found (run.sh).
-bash "$root/scripts/build-extensions.sh" gles >/dev/null 2>"$bundle/native/extensions.log" || { cat "$bundle/native/extensions.log" >&2; exit 1; }
-extension_fixtures=(gles)
-for fixture in "${extension_fixtures[@]}"; do
+bash "$root/scripts/build-extensions.sh" gles vulkan >/dev/null 2>"$bundle/native/extensions.log" || { cat "$bundle/native/extensions.log" >&2; exit 1; }
+extension_fixtures=("gles:-lEGL -lGLESv2" "vulkan:-lvulkan")
+for entry in "${extension_fixtures[@]}"; do
+    fixture="${entry%%:*}"
+    read -r -a link <<<"${entry#*:}"
     count=$((count + 1))
-    "$llvmnet" --runtime=portable -O1 "$root/tests/extensions/$fixture.c" -lEGL -lGLESv2 -o "$bundle/images/$fixture.dll"
-    "$llvmnet" --runtime=portable -O1 "$root/tests/extensions/$fixture.c" -lEGL -lGLESv2 --aot-project "$bundle/aot/$fixture"
+    "$llvmnet" --runtime=portable -O1 "$root/tests/extensions/$fixture.c" "${link[@]}" -o "$bundle/images/$fixture.dll"
+    "$llvmnet" --runtime=portable -O1 "$root/tests/extensions/$fixture.c" "${link[@]}" --aot-project "$bundle/aot/$fixture"
     cp "$root/tests/extensions/$fixture.expected" "$bundle/expected/$fixture.txt"
     printf '0\n' >"$bundle/expected/$fixture.status"
     printf '%s\taot\t-\t-\textension:%s\n' "$fixture" "$fixture" >>"$bundle/manifest.tsv"

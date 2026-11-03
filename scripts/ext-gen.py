@@ -154,18 +154,46 @@ def to_managed(ctype, value):
 # Registries
 # ---------------------------------------------------------------------------------------------------------------------
 
-def text_without(element, skip='name'):
-    """The C text of a <proto>, <param> or <type> element without its <name> child's text."""
-    parts = [element.text or '']
+SKIPPED_TAGS = {'comment'}
+
+
+def text_parts(element):
+    """The C text of a <proto>, <param>, <member> or <type> element before and after its <name> child, without comments."""
+    before, after, named = [element.text or ''], [], False
     for child in element:
-        if child.tag != skip:
-            parts.append(''.join(child.itertext()) if child.tag != 'apientry' else '')
-        parts.append(child.tail or '')
-    return ''.join(parts)
+        if child.tag == 'name':
+            named = True
+        elif child.tag not in SKIPPED_TAGS:
+            (after if named else before).append('' if child.tag == 'apientry' else ''.join(child.itertext()))
+        (after if named else before).append(child.tail or '')
+    return ''.join(before), ''.join(after)
+
+
+def text_without(element):
+    before, after = text_parts(element)
+    return before + after
+
+
+def api_list(value):
+    """The APIs an api= or supported= attribute names: gl.xml separates them with |, vk.xml with commas."""
+    return {name for name in re.split(r'[|,]', value or '') if name}
+
+
+def api_matches(element, apis):
+    return element.get('api') is None or bool(api_list(element.get('api')) & apis)
+
+
+class Param:
+    """A parameter or member: its name, its C type without the name, and its C declaration with the name in place."""
+
+    def __init__(self, name, before, after=''):
+        self.name = name
+        self.text = before + after
+        self.declaration = ' '.join(f'{before} {name}{after}'.split())
 
 
 def split_parameters(text):
-    """'GLenum source, const GLchar *message' -> [('source', 'GLenum'), ('message', 'const GLchar *')]."""
+    """'GLenum source, const GLchar *message' -> [Param(source, GLenum), Param(message, const GLchar *)]."""
     text = text.strip()
     if text in ('', 'void'):
         return []
@@ -177,9 +205,9 @@ def split_parameters(text):
         match = re.match(r'^(.*?[\s*])([A-Za-z_]\w*)\s*(\[[^\]]*\])?$', part)
         words = set(spaced(QUALIFIERS.sub(' ', part)).split())
         if match and match.group(2) not in ('int', 'char', 'short', 'long', 'float', 'double', 'void', 'signed', 'unsigned') and len(words) > 1:
-            result.append((match.group(2), match.group(1) + (match.group(3) or '')))
+            result.append(Param(match.group(2), match.group(1), match.group(3) or ''))
         else:
-            result.append((f'p{index}', part))
+            result.append(Param(f'p{index}', part))
     return result
 
 
@@ -196,42 +224,117 @@ class Command:
         self.problem = None
 
 
+class Structure:
+    """A struct or union of a registry: its members as Params, the sType value it carries, the structs it extends."""
+
+    def __init__(self, name, element):
+        self.name = name
+        self.union = element.get('category') == 'union'
+        self.members = []
+        self.stype = None
+        self.bitfields = False
+        for member in element.findall('member'):
+            if member.find('name') is None:
+                continue
+            before, after = text_parts(member)
+            if ':' in after:
+                self.bitfields = True
+            self.members.append(Param(member.find('name').text, before, after))
+            if member.find('name').text == 'sType' and member.get('values'):
+                self.stype = member.get('values').split(',')[0]
+        self.extends = [name for name in (element.get('structextends') or '').split(',') if name]
+
+
 class Registry:
     """One Khronos registry: its types, commands and which commands each API selects."""
 
-    def __init__(self, spec, path, overrides):
+    def __init__(self, spec, path, overrides, allowed_platforms=(), provisional=False, excluded_extensions=()):
         self.spec = spec
         self.path = path
         self.file = os.path.basename(path)
+        self.apis = set(spec['apis'])
+        self.allowed_platforms = set(allowed_platforms)
+        self.provisional = provisional
+        self.excluded_extensions = set(excluded_extensions)
         with open(path, 'rb') as stream:
             data = stream.read()
         self.sha256 = hashlib.sha256(data).hexdigest()
         self.root = ET.fromstring(data)
         self.overrides = overrides
         self.typedefs = {}     # name -> C text of the aliased type
-        self.callbacks = {}    # name -> (return text, [(param name, text)])
-        self.structs = set()
+        self.callbacks = {}    # name -> (return text, [Param])
+        self.structs = {}      # name -> Structure (forward declarations have no members)
+        self.handles = set()
+        self.enums = set()
         self.opaque = {}       # name -> why it cannot be resolved (#ifdef blocks, platform headers)
         self.type_elements = []
-        for element in self.root.find('types'):
-            if element.tag != 'type':
+        types = self.root.find('types')
+        for element in (types if types is not None else []):
+            if element.tag != 'type' or not api_matches(element, self.apis):
                 continue
             self.type_elements.append(element)
             self._read_type(element)
         self.commands = {}
+        aliases = []
         for element in self.root.find('commands').findall('command'):
+            if not api_matches(element, self.apis):
+                continue
+            if element.get('alias'):
+                aliases.append((element.get('name'), element.get('alias')))
+                continue
             proto = element.find('proto')
             name = proto.find('name').text
-            params = [(param.find('name').text, text_without(param)) for param in element.findall('param')]
+            params = []
+            for param in element.findall('param'):
+                if api_matches(param, self.apis):
+                    before, after = text_parts(param)
+                    params.append(Param(param.find('name').text, before, after))
             self.commands[name] = Command(name, text_without(proto), params, self)
+        # vk.xml names an alias of a command (vkGetPhysicalDeviceFeatures2KHR) as an entry point of its own.
+        for name, target in aliases:
+            if target in self.commands:
+                original = self.commands[target]
+                self.commands[name] = Command(name, original.ret_text, original.params, self)
+        self.values = self._enum_values()
+
+    @staticmethod
+    def _name_of(element):
+        if element.get('name'):
+            return element.get('name')
+        name = element.find('name')
+        if name is None and element.find('proto') is not None:
+            name = element.find('proto').find('name')
+        return name.text if name is not None else None
 
     def _read_type(self, element):
-        name_element = element.find('name')
-        name = name_element.text if name_element is not None else element.get('name')
-        text = ''.join(element.itertext()) if name_element is None else text_without(element)
-        full = ' '.join(text.split())
+        name = self._name_of(element)
         if name is None:
             return
+        category = element.get('category')
+        if element.get('alias'):
+            self.typedefs[name] = element.get('alias')
+            return
+        if category in ('include', 'define'):
+            return
+        if category == 'handle':
+            self.handles.add(name)
+            return
+        if category == 'enum':
+            self.enums.add(name)
+            return
+        if category in ('struct', 'union'):
+            self.structs[name] = Structure(name, element)
+            return
+        if category == 'funcpointer' and element.find('proto') is not None:
+            params = []
+            for param in element.findall('param'):
+                before, after = text_parts(param)
+                params.append(Param(param.find('name').text, before, after))
+            self.callbacks[name] = (text_without(element.find('proto')), params)
+            return
+        name_element = element.find('name')
+        text = ''.join(element.itertext()) if name_element is None else text_without(element)
+        full = ' '.join(text.split())
         if name_element is None:
             if full.startswith('#include') or not full:
                 if not full:
@@ -242,37 +345,98 @@ class Registry:
         if full.startswith('#define'):
             return
         if full.startswith('struct') and not full.startswith('typedef'):
-            self.structs.add(name)
+            self.structs.setdefault(name, None)
             return
-        callback = re.match(r'^typedef (.+?)\(\s*\*\s*\)\s*\((.*)\)\s*;$', full)
+        callback = re.match(r'^typedef (.+?)\(\s*(?:\w+\s*)?\*\s*\)\s*\((.*)\)\s*;$', full)
         if callback:
             self.callbacks[name] = (callback.group(1).strip(), split_parameters(callback.group(2)))
             return
         alias = re.match(r'^typedef (.+?)\s*;$', full)
         if alias:
             self.typedefs[name] = alias.group(1).strip()
+            return
+        self.opaque[name] = 'its definition depends on the platform (' + full[:40] + ')'
 
-    def selected(self, apis):
-        """The commands the APIs' features and extensions require, in registry order."""
+    def _extensions(self):
+        """The extensions of the registry's APIs this description takes: not disabled, not for a platform or provisional
+        unless the description allows it, not excluded by name."""
+        extensions = self.root.find('extensions')
+        for extension in (extensions if extensions is not None else []):
+            supported = api_list(extension.get('supported'))
+            if 'glcore' in supported:
+                supported.add('gl')
+            if not supported & self.apis or extension.get('name') in self.excluded_extensions:
+                continue
+            if extension.get('platform') and extension.get('platform') not in self.allowed_platforms:
+                continue
+            if extension.get('provisional') == 'true' and not self.provisional:
+                continue
+            yield extension
+
+    def _enum_values(self):
+        """Integer values of the enumerants (vk.xml's sType values, API constants), with extension offsets resolved."""
+        values = {}
+        aliases = []
+
+        def number(text):
+            text = text.strip().rstrip('ULF').rstrip('ul')
+            return int(text, 0) if re.match(r'^-?(0x[0-9a-fA-F]+|\d+)$', text) else None
+
+        def read(enum, extension_number=None):
+            name = enum.get('name')
+            if name is None:
+                return
+            if enum.get('alias'):
+                aliases.append((name, enum.get('alias')))
+            elif enum.get('value') is not None and number(enum.get('value')) is not None:
+                values[name] = number(enum.get('value'))
+            elif enum.get('offset') is not None:
+                base = int(enum.get('extnumber') or extension_number or 0)
+                value = 1000000000 + (base - 1) * 1000 + int(enum.get('offset'))
+                values[name] = -value if enum.get('dir') == '-' else value
+            elif enum.get('bitpos') is not None:
+                values[name] = 1 << int(enum.get('bitpos'))
+
+        for group in self.root.findall('enums'):
+            for enum in group.findall('enum'):
+                read(enum)
+        for feature in self.root.findall('feature'):
+            for require in feature.findall('require'):
+                for enum in require.findall('enum'):
+                    read(enum)
+        extensions = self.root.find('extensions')
+        for extension in (extensions if extensions is not None else []):
+            for require in extension.findall('require'):
+                for enum in require.findall('enum'):
+                    read(enum, extension.get('number'))
+        for _ in range(4):
+            for name, target in aliases:
+                if target in values:
+                    values.setdefault(name, values[target])
+        return values
+
+    def selected(self, apis, kind='command'):
+        """The commands (or, with kind='type', the types) the APIs' features and extensions require, in registry order."""
         apis = set(apis)
         names = set()
 
         def take(requirements):
             for require in requirements:
-                if require.tag != 'require' or require.get('api') and require.get('api') not in apis:
+                if require.tag != 'require' or require.get('api') and not api_list(require.get('api')) & apis:
                     continue
-                names.update(command.get('name') for command in require.findall('command'))
+                names.update(element.get('name') for element in require.findall(kind))
 
         for feature in self.root.findall('feature'):
-            if feature.get('api') in apis:
+            if api_list(feature.get('api')) & apis:
                 take(feature)
-        extensions = self.root.find('extensions')
-        for extension in (extensions if extensions is not None else []):
-            supported = set((extension.get('supported') or '').split('|'))
+        for extension in self._extensions():
+            supported = api_list(extension.get('supported'))
             if 'glcore' in supported:
                 supported.add('gl')
             if supported & apis:
                 take(extension)
+        if kind == 'type':
+            return names
         return [name for name in self.commands if name in names]
 
 
@@ -293,12 +457,28 @@ class Model:
                 return ('typedef', registry.typedefs[name])
             if name in registry.callbacks:
                 return ('callback', registry.callbacks[name])
+            if name in registry.handles:
+                return ('handle', None)
+            if name in registry.enums:
+                return ('enum', None)
             if name in registry.structs:
-                return ('struct', None)
+                return ('struct', registry.structs[name])
         for registry in self.registries:
             if name in registry.opaque:
                 return ('opaque', registry.opaque[name])
         return None
+
+    def structure(self, name):
+        found = self.lookup(name)
+        while found and found[0] == 'typedef':
+            found = self.lookup(spaced(QUALIFIERS.sub(' ', found[1])).replace('struct ', ''))
+        return found[1] if found and found[0] == 'struct' else None
+
+    def value(self, name):
+        for registry in self.registries:
+            if name in registry.values:
+                return registry.values[name]
+        raise GenerationError(f'the enumerant {name} has no value in the registries')
 
     def resolve(self, text, seen=()):
         stripped = spaced(QUALIFIERS.sub(' ', text))
@@ -325,6 +505,10 @@ class Model:
         if kind == 'callback':
             self.callback(stripped, value)
             return ('callback', stripped)
+        if kind == 'handle':
+            return POINTER
+        if kind == 'enum':
+            return BASE_TYPES['int32_t']
         if kind == 'struct':
             raise GenerationError(f'struct {stripped} is passed by value; structures by value are not supported yet (NX-07)')
         raise GenerationError(f'{stripped} is {value}; give it a meaning in "types" or exclude it with "exclude-types"')
@@ -335,7 +519,7 @@ class Model:
         ret_text, params = signature
         try:
             ret = self.resolve(ret_text)
-            types = [self.resolve(text) for _, text in params]
+            types = [self.resolve(param.text) for param in params]
         except GenerationError as error:
             self.callbacks[name] = Callback(name, None, [])
             self.callbacks[name].problem = str(error)
@@ -344,10 +528,54 @@ class Model:
             callback = Callback(name, None, [])
             callback.problem = 'it takes or returns another function pointer'
         else:
-            callback = Callback(name, ret, [(param_name, t) for (param_name, _), t in zip(params, types)])
+            callback = Callback(name, ret, [(param.name, t) for param, t in zip(params, types)])
             callback.problem = None
         self.callbacks[name] = callback
         return callback
+
+    def layout(self, name, seen=()):
+        """(size, alignment, {member: (offset, Param)}) of a struct or union in the portable ABI's LP64 x86-64 layout,
+        which is also each 64-bit host's for the fixed-width and pointer-sized members registries use."""
+        structure = self.structure(name)
+        if structure is None or not structure.members:
+            raise GenerationError(f'the layout of {name} is not in the registries')
+        if structure.bitfields:
+            raise GenerationError(f'{name} has bit-fields, whose layout differs between compilers')
+        if name in seen:
+            raise GenerationError(f'{name} contains itself')
+        offset, alignment, members = 0, 1, {}
+        for member in structure.members:
+            size, align = self.member_size(member, seen + (name,))
+            if structure.union:
+                offset_here = 0
+                offset = max(offset, size)
+            else:
+                offset = (offset + align - 1) // align * align
+                offset_here = offset
+                offset += size
+            alignment = max(alignment, align)
+            members[member.name] = (offset_here, member)
+        size = (offset + alignment - 1) // alignment * alignment
+        return size, alignment, members
+
+    def member_size(self, member, seen):
+        text = spaced(QUALIFIERS.sub(' ', member.text))
+        count = 1
+        for dimension in re.findall(r'\[\s*([^\]]+?)\s*\]', text):
+            count *= int(dimension, 0) if re.match(r'^\d+$', dimension) else self.value(dimension)
+        text = re.sub(r'\[[^\]]*\]', '', text).strip()
+        if '*' in text:
+            return 8 * count, 8
+        base = text.replace('struct ', '').strip()
+        structure = self.structure(base)
+        if structure is not None and structure.members:
+            size, align, _ = self.layout(base, seen)
+            return size * count, align
+        resolved = self.resolve(base)
+        if resolved[0] in ('ptr', 'callback'):
+            return 8 * count, 8
+        size = {'float': 4, 'double': 8}.get(resolved[0]) or resolved[1] // 8
+        return size * count, size
 
 
 class ExcludedType(Exception):
@@ -389,8 +617,8 @@ def load_description(path):
     if not any(library.get('dlopen') for library in description['libraries']):
         raise GenerationError(f'{path}: at least one library needs "dlopen" names, the names programs open it by')
     lookup = description.get('lookup')
-    if lookup is not None and set(lookup) - {'command', 'library'}:
-        raise GenerationError(f'{path}: "lookup" has "command" and optionally "library"')
+    if lookup is not None and (set(lookup) - {'command', 'library', 'stub', 'bind'} or ('stub' in lookup) != ('bind' in lookup)):
+        raise GenerationError(f'{path}: "lookup" has "command", optionally "library", and "stub" with "bind" for a hand-written lookup')
     return description
 
 
@@ -432,6 +660,11 @@ class Emitter:
         self.excluded = set(description.get('exclude', []))
         self.pools = description.get('callbacks', {})
         self.non_blocking = set(description.get('non-blocking', []))
+        self.replace = description.get('replace', {})
+        self.after = description.get('after', {})
+        self.wraps = {}             # command name -> [(parameter index, 'copy' or 'chain', struct name)]
+        self.patched = {}           # struct name -> (size, {member: offset}, [(member, offset, callback type)], sType value)
+        self.chains = {}            # struct name -> [struct names whose nodes its pNext chain may carry with callbacks]
         self.commands = []          # (Command, library name), proxied
         self.unsupported = []       # (Command, library name, reason): stubs that fail
         self.skipped = []           # (name, reason): no stub at all
@@ -450,7 +683,7 @@ class Emitter:
                     continue
                 try:
                     command.ret = self.model.resolve(command.ret_text)
-                    command.types = [self.model.resolve(text) for _, text in command.params]
+                    command.types = [self.model.resolve(param.text) for param in command.params]
                 except ExcludedType as excluded:
                     self.skipped.append((name, f'it uses {excluded.args[0]}, which the description excludes'))
                     continue
@@ -458,8 +691,11 @@ class Emitter:
                     raise GenerationError(f'{name} in {registry.file}: {error}')
                 library = spec['library']
                 if self.lookup and name == self.lookup['command']:
-                    if [cil_type(t) for t in command.types] != ['nint'] or command.ret[0] not in ('ptr', 'callback'):
+                    if 'stub' not in self.lookup and ([cil_type(t) for t in command.types] != ['nint'] or command.ret[0] not in ('ptr', 'callback')):
                         raise GenerationError(f'the lookup function {name} must take a name and return a function pointer')
+                    self.commands.append((command, library))
+                    continue
+                if name in self.replace:
                     self.commands.append((command, library))
                     continue
                 if command.ret[0] == 'callback':
@@ -472,15 +708,87 @@ class Emitter:
                         if callback.problem:
                             raise GenerationError(f'the callback type {t[1]} cannot have reverse thunks: {callback.problem}')
                         self.thunked.add(t[1])
-        for name in list(self.defaults) + self.required + sorted(self.non_blocking):
+        self.find_wraps()
+        for name in list(self.defaults) + self.required + sorted(self.non_blocking) + sorted(self.replace) + sorted(self.after):
             if not any(command.name == name for command, _ in self.commands):
-                raise GenerationError(f'"{name}" in "defaults", "required" or "non-blocking" is not a proxied entry point')
+                raise GenerationError(f'"{name}" in "defaults", "required", "non-blocking", "replace" or "after" is not a proxied entry point')
         for command, _ in self.commands:
-            if command.name in self.non_blocking and any(t[0] == 'callback' for t in command.types):
+            if command.name in self.non_blocking and (any(t[0] == 'callback' for t in command.types) or command.name in self.wraps):
                 raise GenerationError(f'{command.name} takes a callback, so it cannot be "non-blocking"')
         for name in self.pools:
             if name not in self.model.callbacks:
                 raise GenerationError(f'"callbacks" names {name}, which no proxied entry point takes')
+
+    def callback_members(self, structure):
+        """(member, callback type) of a struct's members whose type is a function pointer type."""
+        result = []
+        for member in structure.members:
+            text = spaced(QUALIFIERS.sub(' ', member.text))
+            if '*' in text or '[' in text:
+                continue
+            try:
+                resolved = self.model.resolve(text)
+            except (GenerationError, ExcludedType):
+                continue
+            if resolved[0] == 'callback':
+                result.append((member.name, resolved[1]))
+        return result
+
+    def patch_info(self, name):
+        """The layout facts the patching code of a struct with callback members needs."""
+        if name not in self.patched:
+            structure = self.model.structure(name)
+            size, _, members = self.model.layout(name)
+            callbacks = []
+            for member, callback in self.callback_members(structure):
+                callbacks.append((member, members[member][0], callback))
+                if callback in self.pools:
+                    problem = self.model.callbacks[callback].problem
+                    if problem:
+                        raise GenerationError(f'the callback type {callback} cannot have reverse thunks: {problem}')
+                    self.thunked.add(callback)
+            stype = self.model.value(structure.stype) if structure.stype else None
+            self.patched[name] = (size, {member: offset for member, (offset, _) in members.items()}, callbacks, stype)
+        return self.patched[name]
+
+    def find_wraps(self):
+        """
+        Parameters that point to a struct carrying callbacks get them converted to reverse thunks for the call: a struct
+        with callback members (VkAllocationCallbacks) is copied and the copy patched; a struct whose pNext chain may carry
+        such structs (VkInstanceCreateInfo with a VkDebugUtilsMessengerCreateInfoEXT) has those nodes patched in place
+        and restored after the call.
+        """
+        structures = {}
+        for spec, registry in self.registries:
+            # Only the structs the selected features and extensions require: vk.xml also holds Vulkan SC's.
+            required = registry.selected(spec['apis'], 'type')
+            for name, structure in registry.structs.items():
+                if structure is not None and structure.members and (not required or name in required):
+                    structures.setdefault(name, structure)
+        extenders = {}
+        for name, structure in structures.items():
+            if self.callback_members(structure) and structure.stype:
+                for base in structure.extends:
+                    extenders.setdefault(base, []).append(name)
+        for command, _ in self.commands:
+            if command.name in self.replace or (self.lookup and command.name == self.lookup['command']):
+                continue
+            for index, (param, t) in enumerate(zip(command.params, command.types)):
+                text = spaced(QUALIFIERS.sub(' ', param.text))
+                if t[0] != 'ptr' or text.count('*') != 1 or '[' in text:
+                    continue
+                base = text.replace('*', '').replace('struct ', '').strip()
+                structure = structures.get(base)
+                if structure is None:
+                    continue
+                if self.callback_members(structure):
+                    self.patch_info(base)
+                    self.wraps.setdefault(command.name, []).append((index, 'copy', base))
+                elif base in extenders:
+                    for extender in extenders[base]:
+                        self.patch_info(extender)
+                    self.chains[base] = extenders[base]
+                    self.wraps.setdefault(command.name, []).append((index, 'chain', base))
 
     def library_field(self, name):
         return 'Library' + re.sub(r'\W', '_', name)
@@ -513,7 +821,7 @@ class Emitter:
         if self.non_blocking:
             w('')
             self.emit_non_blocking(w)
-        if self.thunked:
+        if self.thunked or self.patched:
             w('')
             self.emit_callbacks(w)
         return '\n'.join(out) + '\n'
@@ -528,9 +836,10 @@ class Emitter:
             w(f'    internal static readonly HostLibrary {self.library_field(library["name"])} = new({literal(self.name)}, {literal(library["name"])}, '
               f'{array(library.get("linux", []))}, {array(library.get("windows", []))}, {array(library.get("macos", []))}{preload});')
         fields = ', '.join(self.library_field(library['name']) for library in self.libraries)
-        w(f'    internal static readonly HostEntryPoints Host = new({literal(self.name)}, [{fields}]{", Lookup" if self.lookup else ""});')
+        bind = self.lookup.get('bind') if self.lookup else None
+        w(f'    internal static readonly HostEntryPoints Host = new({literal(self.name)}, [{fields}]{", " + (bind or "Lookup") if self.lookup else ""});')
         w('')
-        if self.lookup:
+        if self.lookup and not bind:
             command = self.lookup['command']
             library = self.lookup.get('library') or next(l for c, l in self.commands if c.name == command)
             w('    private static nint lookupFunction;')
@@ -587,7 +896,7 @@ class Emitter:
         for command, library in self.commands:
             self.emit_stub(w, command, library)
         for command, library, reason in self.unsupported:
-            params = ', '.join(f'{cil_type(t)} {csharp_name(n)}' for (n, _), t in zip(command.params, command.types))
+            params = ', '.join(f'{cil_type(t)} {csharp_name(param.name)}' for param, t in zip(command.params, command.types))
             w(f'    [CExport({literal(command.name)})]')
             w(f'    public static {cil_type(command.ret)} {command.name}({params})')
             w('    {')
@@ -599,26 +908,33 @@ class Emitter:
         w('}')
 
     def emit_stub(self, w, command, library):
-        names = [csharp_name(n) for n, _ in command.params]
+        names = [csharp_name(param.name) for param in command.params]
         params = ', '.join(f'{cil_type(t)} {n}' for n, t in zip(names, command.types))
         ret = cil_type(command.ret)
+        forward = ', '.join(names)
         w(f'    [CExport({literal(command.name)})]')
         if self.lookup and command.name == self.lookup['command']:
-            w(f'    public static nint {command.name}({params}) => {self.type_name}.ProcAddress({names[0]});')
+            target = self.lookup.get('stub') or f'{self.type_name}.ProcAddress'
+            w(f'    public static {ret} {command.name}({params}) => {target}({forward});')
+            w('')
+            return
+        if command.name in self.replace:
+            # Hand-written in the extension's own sources (vkGetDeviceProcAddr), with the stub's CIL parameters.
+            w(f'    public static {ret} {command.name}({params}) => {self.replace[command.name]}({forward});')
             w('')
             return
         slot = f'__{command.name}'
         field = self.library_field(library)
         non_blocking = command.name in self.non_blocking
+        wraps = self.wraps.get(command.name, [])
         w(f'    public static {ret} {command.name}({params})')
         w('    {')
         args = []
-        for name, t in zip(names, command.types):
+        for index, (name, t) in enumerate(zip(names, command.types)):
             if t[0] == 'callback':
-                if t[1] in self.thunked:
-                    args.append(f'Callbacks.{t[1]}.Thunk({name})')
-                else:
-                    args.append(name)
+                args.append(f'Callbacks.{t[1]}.Thunk({name})' if t[1] in self.thunked else name)
+            elif any(wrap[0] == index and wrap[1] == 'copy' for wrap in wraps):
+                args.append(f'__copy{index}')
             else:
                 args.append(to_native(t, name))
         signature = ', '.join([native_type(t) for t in command.types] + [native_type(command.ret)])
@@ -629,7 +945,6 @@ class Emitter:
             # own: the JIT sets up a transition frame in the prologue of any method with an ordinary unmanaged call,
             # and the NativeAOT compiler can merge two calls of one pointer that differ only in the transition.
             fast = f'((delegate* unmanaged[SuppressGCTransition]<{signature}>)__g)({", ".join(args)})'
-            forward = ', '.join(names)
             w(f'        nint __g = {slot}_non_blocking;')
             w(f'        if (__g != 0) {"{ " + fast + "; return; }" if ret == "void" else "return " + to_managed(command.ret, fast) + ";"}')
             w(f'        {"" if ret == "void" else "return "}{command.name}_transition({forward});')
@@ -655,9 +970,32 @@ class Emitter:
         for name, t in zip(names, command.types):
             if t[0] == 'callback' and t[1] not in self.thunked:
                 w(f'        if ({name} != 0) {self.type_name}.Unsupported({literal(command.name + ": the native extension " + self.name + " has no reverse thunks for " + t[1] + " callbacks, so it can pass only a null one")});')
+        # Callbacks inside the structures the parameters point to become reverse thunks for the call.
+        chained = [wrap for wrap in wraps if wrap[1] == 'chain']
+        if chained:
+            w('        CallbackPatch __patch = default;')
+        for index, kind, structure in wraps:
+            if kind == 'copy':
+                size = self.patched[structure][0]
+                w(f'        byte* __storage{index} = stackalloc byte[{size}];')
+                w(f'        nint __copy{index} = Callbacks.Copy_{structure}({names[index]}, (nint)__storage{index});')
+            else:
+                w(f'        Callbacks.Chain_{structure}({names[index]}, ref __patch);')
         call = f'((delegate* unmanaged<{signature}>)__f)({", ".join(args)})'
+        hook = self.after.get(command.name)
         if ret == 'void':
             w(f'        {call};')
+            if chained:
+                w('        __patch.Restore();')
+            if hook:
+                w(f'        {hook}({forward});')
+        elif chained or hook:
+            w(f'        {ret} __result = {to_managed(command.ret, call)};')
+            if chained:
+                w('        __patch.Restore();')
+            if hook:
+                w(f'        {hook}(__result{", " + forward if forward else ""});')
+            w('        return __result;')
         else:
             w(f'        return {to_managed(command.ret, call)};')
         w('    }')
@@ -733,6 +1071,43 @@ class Emitter:
             body = invoke if callback.ret[0] == 'void' else to_native(callback.ret, invoke)
             w(f'        private static {ret} Call(nint target{call_params}) => {body};')
             w('    }')
+        for name, (size, members, callbacks, stype) in sorted(self.patched.items()):
+            w('')
+            w(f'    /// <summary>{name} ({size} bytes): its callback members become reverse thunks; offsets in the portable layout.</summary>')
+            w(f'    internal static void Patch_{name}(nint node, ref CallbackPatch patch)')
+            w('    {')
+            for member, offset, callback in callbacks:
+                if callback in self.thunked:
+                    w(f'        if (*(nint*)(node + {offset}) is nint {member} and not 0) patch.Set(node + {offset}, {callback}.Thunk({member}));')
+                else:
+                    message = f'{name}.{member}: the native extension {self.name} has no reverse thunks for {callback} callbacks, so it can pass only a null one'
+                    w(f'        if (*(nint*)(node + {offset}) != 0) {self.type_name}.Unsupported({literal(message)});')
+            w('    }')
+            w('')
+            w(f'    /// <summary>A copy of a {name} with reverse thunks for its callbacks, in the given storage; 0 for 0.</summary>')
+            w(f'    internal static nint Copy_{name}(nint source, nint copy)')
+            w('    {')
+            w('        if (source == 0) return 0;')
+            w(f'        System.Buffer.MemoryCopy((void*)source, (void*)copy, {size}, {size});')
+            w('        CallbackPatch patch = default;')
+            w(f'        Patch_{name}(copy, ref patch);')
+            w('        return copy;')
+            w('    }')
+        for base, extenders in sorted(self.chains.items()):
+            _, _, members = self.model.layout(base)
+            w('')
+            w(f'    /// <summary>The nodes of a {base}\'s pNext chain that carry callbacks, patched in place for the call.</summary>')
+            w(f'    internal static void Chain_{base}(nint head, ref CallbackPatch patch)')
+            w('    {')
+            w('        if (head == 0) return;')
+            w(f'        for (nint node = *(nint*)(head + {members["pNext"][0]}); node != 0; node = *(nint*)(node + 8))')
+            w('        {')
+            for extender in extenders:
+                if self.patched[extender][1].get('pNext') != 8 or self.patched[extender][1].get('sType') != 0:
+                    raise GenerationError(f'{extender} does not start with sType and pNext')
+                w(f'            if (*(int*)node == {self.patched[extender][3]}) Patch_{extender}(node, ref patch);')
+            w('        }')
+            w('    }')
         w('}')
 
     def project(self, assembly):
@@ -780,7 +1155,7 @@ def check_file(description, group, emitter, registries):
     for spec, registry in registries:
         if not apis & set(spec['apis']):
             continue
-        for element in registry.type_elements:
+        for element in (registry.type_elements if group.get('types', True) else []):
             text = ''.join(part if isinstance(part, str) else '' for part in element.itertext())
             if element.find('apientry') is not None:
                 text = ''
@@ -795,9 +1170,16 @@ def check_file(description, group, emitter, registries):
         for command, _ in emitter.commands + [(c, l) for c, l, _ in emitter.unsupported]:
             if command.registry is not registry or command.name not in selected:
                 continue
-            params = ', '.join(' '.join(f'{text} {name}'.split()) for name, text in command.params) or 'void'
+            params = ', '.join(param.declaration for param in command.params) or 'void'
             lines.append(f'{" ".join(command.ret_text.split())} {command.name}({params});')
             names.append(command.name)
+    # The portable layout the structure patching assumes, checked against the headers' (NX-10).
+    if group.get('layouts'):
+        for name, (size, members, callbacks, _) in sorted(emitter.patched.items()):
+            lines.append(f'_Static_assert(sizeof({name}) == {size}, "the size of {name}");')
+            for member in ['sType', 'pNext'] + [callback[0] for callback in callbacks]:
+                if member in members:
+                    lines.append(f'_Static_assert(__builtin_offsetof({name}, {member}) == {members[member]}, "{name}.{member}");')
     symbol = re.sub(r'\W', '_', group['name'])
     lines.append(f'__attribute__((used)) static void (*const llvmnet_check_{symbol}[])(void) = {{')
     lines += [f'    (void (*)(void)){name},' for name in names]
@@ -817,7 +1199,8 @@ def generate(arguments):
     registries = []
     for spec in description['registries']:
         path = located(spec['path'], base, sources)
-        registries.append((spec, Registry(spec, path, description.get('types', {}))))
+        registries.append((spec, Registry(spec, path, description.get('types', {}), description.get('platforms', []),
+                                          description.get('provisional', False), description.get('exclude-extensions', []))))
     model = Model(description, [registry for _, registry in registries])
     emitter = Emitter(description, model, registries, arguments.llvmnet_version)
     emitter.select()
@@ -833,6 +1216,8 @@ def generate(arguments):
     # The generated project stands alone: no Directory.Build.props or .targets of a parent directory applies.
     write(os.path.join(project, 'Directory.Build.props'), '<Project />\n')
     write(os.path.join(project, 'Directory.Build.targets'), '<Project />\n')
+    for source in description.get('sources', []):
+        shutil.copyfile(located(source, base, sources), os.path.join(project, os.path.basename(source)))
     headers = []
     for entry in description.get('headers', []):
         root = located(entry['from'], base, sources)
