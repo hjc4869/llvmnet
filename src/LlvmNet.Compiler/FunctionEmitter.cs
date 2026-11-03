@@ -95,7 +95,8 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Pop);
             locals[Llvm.LLVMGetParam(function, index)] = copy;
         }
-        AllocateFunctionLocals(valueCount > 32768 && jumpSites.Count == 0);
+        if (jumpSites.Count == 0 && valueCount is > 512 and <= 32768) ShareFunctionLocals();
+        else AllocateFunctionLocals(valueCount > 32768 && jumpSites.Count == 0);
         if (scopedStack || hasAllocations && jumpSites.Count != 0 || arenaFrame)
         {
             // The thread's alloca arena top on entry, restored on every exit (BE-17).
@@ -982,6 +983,155 @@ internal sealed class FunctionEmitter : ValueEmitter
     {
         Il.Emit(OpCodes.Ldc_I4_0);
         Il.Emit(OpCodes.Ceq);
+    }
+
+    /// <summary>
+    /// Gives each instruction value a local, shared by values of one CIL type whose live ranges do not meet. RyuJIT
+    /// keeps at most 1024 locals of a method in registers (JitMaxLocalsToTrack) and stops inlining from about 920
+    /// (90% of that), so a local for each value made functions of more than a thousand instructions several times
+    /// slower, vectorized ones the most (SV-05). A live range is the span, in emission order, of the value's
+    /// definition, its uses and the blocks it is live into or out of (SSA liveness); a phi's starts at the edges
+    /// that store it. Ranges that share a position conflict, so an instruction's result never shares a local with its
+    /// operands, as an instruction may store part of its result before it has read all of them. The emitter reads the
+    /// operands of a comparison, a shuffle or an insertelement where those are used (Order, LoadMask, SplatScalar), so
+    /// they count as used there too. Only functions of more than 512
+    /// values share: RyuJIT allocates registers per local, so values sharing one share an allocation, which added
+    /// moves to small hot loops (heapsort and lpbench 10 to 15% slower). A function with setjmp keeps a local for
+    /// each value, as the jump dispatch re-enters the body at its call sites.
+    /// </summary>
+    private void ShareFunctionLocals()
+    {
+        nint[] blocks = [.. Llvm.Blocks(function)];
+        var blockIndex = new Dictionary<nint, int>();
+        var valueIndex = new Dictionary<nint, int>();
+        var values = new List<nint>();
+        var home = new List<int>();
+        var low = new List<int>();
+        var high = new List<int>();
+        int[] start = new int[blocks.Length], end = new int[blocks.Length];
+        int position = 0;
+        for (int block = 0; block < blocks.Length; block++)
+        {
+            blockIndex.Add(blocks[block], block);
+            start[block] = position;
+            foreach (nint instruction in Llvm.Instructions(blocks[block]))
+            {
+                if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0)
+                {
+                    valueIndex.Add(instruction, values.Count);
+                    values.Add(instruction);
+                    home.Add(block);
+                    low.Add(position);
+                    high.Add(position);
+                }
+                position++;
+            }
+            end[block] = position - 1;
+        }
+        void Extend(int value, int at)
+        {
+            low[value] = Math.Min(low[value], at);
+            high[value] = Math.Max(high[value], at);
+        }
+        // Uses in another block than the definition's are the ones liveness carries between blocks.
+        var uses = new List<(int Value, int Block)>();
+        var seen = new HashSet<nint>();
+        void Use(nint operand, int block, int at)
+        {
+            if (!valueIndex.TryGetValue(operand, out int value)) return;
+            Extend(value, at);
+            if (block != home[value]) uses.Add((value, block));
+            if (Llvm.LLVMGetInstructionOpcode(operand) is 42 or 43 or 51 or 52 && seen.Add(operand))
+                for (int index = 0; index < Llvm.LLVMGetNumOperands(operand); index++)
+                    Use(Llvm.LLVMGetOperand(operand, (uint)index), block, at);
+        }
+        int[][] successors = new int[blocks.Length][];
+        for (int block = 0; block < blocks.Length; block++)
+        {
+            int at = start[block];
+            nint terminator = 0;
+            foreach (nint instruction in Llvm.Instructions(blocks[block]))
+            {
+                terminator = instruction;
+                if (Llvm.LLVMGetInstructionOpcode(instruction) == 44)
+                {
+                    int phi = valueIndex[instruction];
+                    for (uint index = 0; index < Llvm.LLVMCountIncoming(instruction); index++)
+                    {
+                        // The predecessor's edge loads the incoming value and stores the phi's local.
+                        int from = blockIndex[Llvm.LLVMGetIncomingBlock(instruction, index)];
+                        Extend(phi, end[from]);
+                        seen.Clear();
+                        Use(Llvm.LLVMGetIncomingValue(instruction, index), from, end[from]);
+                    }
+                }
+                else
+                {
+                    seen.Clear();
+                    for (int index = 0; index < Llvm.LLVMGetNumOperands(instruction); index++)
+                        Use(Llvm.LLVMGetOperand(instruction, (uint)index), block, at);
+                }
+                at++;
+            }
+            successors[block] = [.. Enumerable.Range(0, (int)Llvm.LLVMGetNumSuccessors(terminator)).Select(index => blockIndex[Llvm.LLVMGetSuccessor(terminator, (uint)index)])];
+        }
+        // Liveness of those values, as bit sets over them, from the blocks that use them back to their definitions.
+        int[] global = [.. uses.Select(use => use.Value).Distinct()];
+        var bit = new Dictionary<int, int>();
+        for (int index = 0; index < global.Length; index++) bit.Add(global[index], index);
+        int words = (global.Length + 63) / 64;
+        ulong[][] used = new ulong[blocks.Length][], defined = new ulong[blocks.Length][], liveIn = new ulong[blocks.Length][], liveOut = new ulong[blocks.Length][];
+        for (int block = 0; block < blocks.Length; block++)
+        {
+            used[block] = new ulong[words];
+            defined[block] = new ulong[words];
+            liveIn[block] = new ulong[words];
+            liveOut[block] = new ulong[words];
+        }
+        foreach ((int value, int block) in uses) used[block][bit[value] >> 6] |= 1UL << bit[value];
+        foreach (int value in global) defined[home[value]][bit[value] >> 6] |= 1UL << bit[value];
+        for (bool changed = true; changed;)
+        {
+            changed = false;
+            for (int block = blocks.Length - 1; block >= 0; block--)
+            {
+                ulong[] output = liveOut[block], input = liveIn[block];
+                foreach (int successor in successors[block])
+                    for (int word = 0; word < words; word++) output[word] |= liveIn[successor][word];
+                for (int word = 0; word < words; word++)
+                {
+                    ulong next = (used[block][word] | output[word]) & ~defined[block][word];
+                    if (next == input[word]) continue;
+                    input[word] = next;
+                    changed = true;
+                }
+            }
+        }
+        for (int block = 0; block < blocks.Length; block++)
+            for (int index = 0; index < global.Length; index++)
+            {
+                if ((liveIn[block][index >> 6] & 1UL << index) != 0) Extend(global[index], start[block]);
+                if ((liveOut[block][index >> 6] & 1UL << index) != 0) Extend(global[index], end[block]);
+            }
+        // Linear scan: a value takes a local of its type that the values before it no longer use.
+        var available = new Dictionary<Type, Stack<LocalBuilder>>();
+        var active = new PriorityQueue<int, int>();
+        foreach (int value in Enumerable.Range(0, values.Count).OrderBy(value => low[value]))
+        {
+            while (active.TryPeek(out int expired, out int last) && last < low[value])
+            {
+                active.Dequeue();
+                LocalBuilder released = locals[values[expired]];
+                if (!available.TryGetValue(released.LocalType, out Stack<LocalBuilder>? free)) available.Add(released.LocalType, free = new());
+                free.Push(released);
+            }
+            Type managed = Types.Map(Llvm.LLVMTypeOf(values[value]));
+            LocalBuilder local = available.TryGetValue(managed, out Stack<LocalBuilder>? pool) && pool.TryPop(out LocalBuilder? previous) ? previous : Il.DeclareLocal(managed);
+            if (local.LocalIndex >= ushort.MaxValue)
+                throw new NotSupportedException($"Function {Llvm.Name(function)} exceeds the CIL local-variable limit.");
+            locals[values[value]] = local;
+            active.Enqueue(value, high[value]);
+        }
     }
 
     private void AllocateFunctionLocals(bool reuse)
