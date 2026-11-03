@@ -75,3 +75,13 @@ ANGLE's unmodified GL backend, the survey's portable `libGLESv2_static.a` (chrom
 | NativeAOT executable (13.0 MB) | 11.8 s, 1.33 GB | `gles` and `gl` backends: the native pixels |
 
 Not done in this item: the weekly job that rebuilds ANGLE and runs its smoke program. It depends on WG-07, whose pinned Skia and ANGLE builds are still the survey's local scripts, so it is recorded with WG-07.
+
+## M10 exit criteria
+
+| Criterion | Result |
+| --- | --- |
+| NX-02 to NX-06 done | `3f785ca`, `f86eddd`, `0483344`, `b354111`, `a425a6e` |
+| A program using `gles` renders the native pixels on Linux x64, Windows x64 and macOS ARM64, JIT and NativeAOT | yes, on this host and through the `tests/xp/` bundle on `fluorite` and `mainmac` (above); in CI it needs the GitHub repository (FD-19), and the Windows and macOS runners need an ANGLE copy named by `LLVMNET_EXT_GLES_DIR` |
+| Programs without extensions are byte-identical to before | the 51 portable fixtures of `tests/xp/fixtures.tsv` (C, C++ and Fortran) compiled by master's compiler (`941987e`) and by this branch's, both against this branch's sysroot with `gles` installed, are identical byte for byte once both compilers carry the same version stamp (`llvmnet.version` names the commit, so images from any two commits differ in it and in the image identity derived from the contents); the sysroot archives of both builds, 1,518 members, are identical after normalizing the build directory, except the five members NX-02 replaced (`dlopen`, `__dlsym`, `dlclose`, `dlerror`, `dladdr`) |
+| The ABI freeze test passes unchanged | yes; the header stamp is unchanged, because `<llvmnet/ext.h>` and the extensions' headers are outside the frozen set |
+| Core and toolchain gate | 103 of 103 tests pass (`tests/run.sh --tag core --tag toolchain --exclude-tag slow`, 291 s), with the two new tests `ext-gen` and `ext-gles` |
