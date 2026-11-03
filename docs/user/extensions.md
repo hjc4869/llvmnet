@@ -92,7 +92,7 @@ A .NET application can own the window and let portable code draw into it, as an 
 - **One NativeAOT executable.** The application's project references the image, `LlvmNet.Runtime.dll` and the extension's assembly, roots the image with `<TrimmerRootAssembly>`, and finds the entry point by reflection (`Assembly.Load` of the image's name, then `EntryPoint`). C# cannot call the image directly: the image is built against `System.Private.CoreLib`, which C# does not resolve beside the reference assemblies. `tests/extensions/skia/host-aot/` is such a project.
 - **A child process.** X11 windows and `HWND`s work across processes, so the application can also start the renderer, a NativeAOT executable or `dotnet image.dll`, and pass it the handles. A `CALayer *` does not.
 - **Scale.** On a Retina display a layer's surface has more pixels than the window has points. `eglQuerySurface` reports the pixel size, and the program draws scaled to it, as Avalonia does.
-- **Windows sessions.** Direct3D cannot present to a window in a session without a desktop, such as an SSH session: ANGLE reports `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` and `eglCreateWindowSurface` fails. Offscreen surfaces work there.
+- **Windows sessions.** Direct3D cannot present to a window in a session without a desktop, such as an SSH session: ANGLE reports `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` and `eglCreateWindowSurface` fails. Offscreen surfaces work there, and a desktop session presents to the window.
 
 ANGLE exposes extensions of its own beside the Khronos ones, and Skia requires the ones ANGLE advertises: `GL_CHROMIUM_bind_uniform_location`, for one. `gles` proxies the entry points of ANGLE's registry too, so Skia's GL interface validates on ANGLE as it does natively.
 

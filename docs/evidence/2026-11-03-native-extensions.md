@@ -184,7 +184,8 @@ Skia from AvaloniaStatic's SkiaSharp 4.153.1 tree (the SkiaSharp C API included)
 | macOS ARM64, ANGLE over Metal (Visual Studio Code's Electron), an `NSWindow` the host created over SSH | portable renderer in the host's process (JIT); host and renderer as one NativeAOT executable published on the Mac | the layer's surface is 960x720 pixels for the 480x360 window (Retina); both forms present eight frames with the same frame hash (`6c344be57edde662`); 257 of 691,200 pixels differ from the raster reference by more than 32 |
 | macOS ARM64, ANGLE over Metal, pbuffer | portable JIT | raster hash `d1704f03d5e792c3`, as on Linux; 54 pixels apart from the GPU frame |
 | Windows x64, ANGLE over Direct3D 11 (Intel Arc A380), pbuffer | portable JIT | raster hash `d1704f03d5e792c3`, as on Linux; 3 pixels apart from the GPU frame (largest difference 37) |
-| Windows x64, a Win32 window the host created over SSH | portable JIT in the host's process; one NativeAOT executable published on Windows | ANGLE cannot create the swap chain: `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` in a session without a desktop, then `EGL_CONTEXT_LOST`; not run in a desktop session |
+| Windows x64, a Win32 window the host created over SSH | portable JIT in the host's process; one NativeAOT executable published on Windows | ANGLE cannot create the swap chain: `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` in a session without a desktop, then `EGL_CONTEXT_LOST` |
+| Windows x64, ANGLE over Direct3D 11, a Win32 window the host created in the console session (run by the owner, `tests/extensions/skia/run.sh`) | portable JIT in the host's process; one NativeAOT executable published on Windows | both present eight frames with the pbuffer run's frame hash (`04e60d915aad0c4c`) and the same raster hash and pixels |
 
 The flat pixels the renderer samples are the same on every host and display. The GPU frames differ between drivers only at antialiased edges and in blurs.
 
@@ -198,7 +199,7 @@ Frame times on Linux under Xvfb (llvmpipe, 480x360, one run each of `tests/ext-s
 | portable, NativeAOT child | 44.3 ms | 1.37 ms |
 | portable, one NativeAOT executable with the host | 51.2 ms | 1.25 ms |
 
-On macOS the one NativeAOT executable took 18.7 ms for the first frame and 0.89 ms for each later one at 960x720; the JIT in the host's process 390 ms and 1.21 ms.
+On macOS the one NativeAOT executable took 18.7 ms for the first frame and 0.89 ms for each later one at 960x720; the JIT in the host's process 390 ms and 1.21 ms. On Windows, in the console session at 480x360, the one NativeAOT executable took 94 ms and 2.57 ms, and the JIT in the host's process 637 ms and 2.58 ms.
 
 What the scenario found:
 
