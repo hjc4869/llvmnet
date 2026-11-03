@@ -1,0 +1,16 @@
+GLFW 3.4.0, version string 3.4
+previous error callback: none
+error callback returned by the next setter: the program's own
+platform: null
+error callback: 0x10003 Invalid window hint 0x00012345
+errors so far: 1
+framebuffer size callback: 640x480
+window size callback: 640x480, user pointer kept
+window position callback: 10,20
+window: 640x480 at 10,20, title kept
+size callback returned by the next setter: the program's own
+should close: yes
+monitor Null SuperNoop 0: 1920x1080 at 60 Hz, 8-8-8 bits
+gamma ramp: 256 entries, last red 65535
+timer: set to 100 s, reads at least 100 s
+allocator: used yes, every allocation freed yes

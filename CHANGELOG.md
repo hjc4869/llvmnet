@@ -61,6 +61,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - `docs/user/extensions.md` (using a native extension) and `docs/dev/extensions.md` (writing one) (NX-06).
 - `LLVMNET_EXT_<NAME>_NON_BLOCKING=1` lets the entry points an extension marks non-blocking skip the GC transition: `glGetError` costs 2.2 ns instead of 3.8 (NativeAOT) or 5.1 (JIT) on Mesa (NX-11).
 - The `vulkan` native extension: Vulkan 1.0 to 1.4 and its extensions without the window-system ones, through the Khronos loader, MoltenVK or SwiftShader (`-lvulkan`), with application allocation callbacks and debug messengers, also in `pNext` chains; `tests/ext-vulkan.sh` and the `vulkan` fixture of the `tests/xp/` bundle check it (NX-10).
+- `scripts/ext-gen.py` reads C headers through Clang's JSON AST for APIs without a registry (validated on GLFW 3.4), and a callback the host returns becomes the program's function again (NX-09).
 - A host library can call a portable program back on a thread it started itself: the first callback there gives the thread musl's thread state (`errno`, stdio, `malloc`, thread-local variables, `pthread_self`), released after the thread ends (NX-08).
 
 ### Changed

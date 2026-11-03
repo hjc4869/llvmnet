@@ -69,7 +69,8 @@ build_extension() {
     fi
     rm -rf "$build"
     mkdir -p "$build"
-    python3 -I "$generator" generate "$description" --output "$generated" --llvmnet-version "$version" "${sources[@]}" >"$build/generate.log" ||
+    python3 -I "$generator" generate "$description" --output "$generated" --llvmnet-version "$version" --compiler "$llvmnet" "${sources[@]}" \
+        >"$build/generate.log" ||
         { cat "$build/generate.log" >&2; return 1; }
     local assembly
     assembly="$(basename "$generated"/project/*.csproj .csproj)"

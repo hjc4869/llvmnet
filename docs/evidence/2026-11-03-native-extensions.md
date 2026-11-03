@@ -133,3 +133,15 @@ Images that use no extension are unaffected: the attachment is linked only with 
 | macOS ARM64, `mainmac`: SwiftShader (`libvk_swiftshader.dylib` from Visual Studio Code's Electron), no loader | the bundle's portable JIT image and NativeAOT executable | 10, all freed | none (no loader); the submitted message reaches the chained messenger instead of the created one, because SwiftShader attaches only the messenger it gets at instance creation (its `Instance::submitDebugUtilsMessage`), which the test accepts |
 
 On SwiftShader every function binds through `vkGetInstanceProcAddr`, with no instance for the global functions and with the one the program created for the rest, since the library exports four symbols. With lavapipe the allocation callbacks also run on the driver's queue thread, which gets musl thread state from NX-08. The whole `tests/xp/` bundle passed on both other hosts with the new fixtures (64 runs on each).
+
+## NX-09: extensions from C headers
+
+The generator reads C headers through the JSON AST of llvmnet's Clang for the portable target (`kind: "headers"` in a description). `tests/extensions/glfw/extension.json` describes GLFW 3.4 (pinned) by its header, `GLFW/glfw3.h` with `GLFW_INCLUDE_NONE`, and the functions named `glfw*`:
+
+| What | Result |
+| --- | --- |
+| Generation | 119 entry points, all verified against the header as llvmnet compiles it, plus `glfwGetProcAddress`, which returns a host function pointer and fails when called; 23 callback types with reverse thunks; the `GLFWallocator` structure of callbacks copied with thunks, its 32-byte layout asserted; 0.2 s |
+| `tests/extensions/glfw.c` on GLFW's null platform, built natively from the same source (CMake, null platform only) | native, portable JIT, NativeAOT and system mode print the same 16 lines: the allocator's callbacks (every allocation freed), the error callback (`0x10003 Invalid window hint`), window, framebuffer and position callbacks with the user pointer, the callbacks the setters return (the program's own again), the null monitor's video mode (1920x1080 at 60 Hz) and gamma ramp, the timer |
+| A header with a variadic function and a structure passed by value | the variadic function is left out with the reason; the structure stops the generation (`var_point in variadic.h: struct point is passed by value`) until `exclude` names the function |
+
+A setter's returned callback goes back to the program's function through the thunk pool (`NativeCallbacks.Target`); a host function pointer that is not one of the thunks ends the program with a message.

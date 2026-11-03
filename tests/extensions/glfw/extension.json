@@ -1,0 +1,56 @@
+{
+  "name": "glfw",
+  "version": "3.4.0",
+  "summary": "GLFW 3.4, read from its C header (tests/ext-headers.sh, NX-09)",
+  "registries": [
+    {
+      "kind": "headers",
+      "include-path": "glfw:include",
+      "header": "GLFW/glfw3.h",
+      "defines": ["GLFW_INCLUDE_NONE"],
+      "include": ["glfw*"],
+      "apis": ["glfw"],
+      "library": "GLFW"
+    }
+  ],
+  "libraries": [
+    {
+      "name": "GLFW",
+      "linux": ["libglfw.so.3"],
+      "windows": ["glfw3.dll"],
+      "macos": ["libglfw.3.dylib"],
+      "dlopen": ["libglfw.so.3", "libglfw.so"]
+    }
+  ],
+  "link": ["glfw"],
+  "callbacks": {
+    "GLFWallocatefun": 4,
+    "GLFWreallocatefun": 4,
+    "GLFWdeallocatefun": 4,
+    "GLFWerrorfun": 4,
+    "GLFWwindowposfun": 4,
+    "GLFWwindowsizefun": 4,
+    "GLFWwindowclosefun": 4,
+    "GLFWwindowrefreshfun": 4,
+    "GLFWwindowfocusfun": 4,
+    "GLFWwindowiconifyfun": 4,
+    "GLFWwindowmaximizefun": 4,
+    "GLFWframebuffersizefun": 4,
+    "GLFWwindowcontentscalefun": 4,
+    "GLFWmousebuttonfun": 4,
+    "GLFWcursorposfun": 4,
+    "GLFWcursorenterfun": 4,
+    "GLFWscrollfun": 4,
+    "GLFWkeyfun": 4,
+    "GLFWcharfun": 4,
+    "GLFWcharmodsfun": 4,
+    "GLFWdropfun": 4,
+    "GLFWmonitorfun": 4,
+    "GLFWjoystickfun": 4
+  },
+  "defaults": { "glfwInit": "0" },
+  "required": ["glfwInit", "glfwGetVersion"],
+  "headers": [{ "from": "glfw:include", "files": ["GLFW/glfw3.h"] }],
+  "licenses": [{ "from": "glfw:LICENSE.md", "as": "LICENSE.md" }],
+  "checks": [{ "name": "glfw", "apis": ["glfw"], "includes": ["GLFW/glfw3.h"], "defines": ["GLFW_INCLUDE_NONE"], "types": false, "layouts": true }]
+}

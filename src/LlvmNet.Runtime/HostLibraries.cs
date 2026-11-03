@@ -253,6 +253,18 @@ public static unsafe class NativeCallbacks
         NativeExtension.Fail($"the native extension {extension} has entry points for {targets.Length} distinct {type} callbacks, and the program passed another");
         return -1;
     }
+
+    /// <summary>
+    /// The program's function behind a reverse thunk the host returned (a previous callback, as GLFW's setters return
+    /// it); ends the process with a message for a function pointer that is not one of the thunks.
+    /// </summary>
+    public static nint Target(nint[] targets, nint[] thunks, nint thunk, string extension, string type)
+    {
+        for (int index = 0; index < thunks.Length; index++)
+            if (thunks[index] == thunk) return Volatile.Read(ref targets[index]);
+        NativeExtension.Fail($"the host returned a {type} function pointer that is not one the program passed, which a portable program cannot call (native extension {extension})");
+        return 0;
+    }
 }
 
 /// <summary>

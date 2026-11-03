@@ -26,12 +26,15 @@ signatures.json, so a type-mapping mistake fails the extension's build rather th
 the names of the pinned sources (scripts/sources.lock) the description uses. Output is deterministic.
 """
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -142,7 +145,10 @@ def to_native(ctype, value):
 
 
 def to_managed(ctype, value):
-    """Converts a host's C value to llvmnet's CIL form: narrow integers are kept zero-extended (docs/dev/architecture.md)."""
+    """Converts a host's C value to llvmnet's CIL form: narrow integers are kept zero-extended (docs/dev/architecture.md),
+    and a callback the host returns becomes the program's function its reverse thunk stands for."""
+    if ctype[0] == 'callback':
+        return f'Callbacks.{ctype[1]}.Target({value})'
     managed, native = cil_type(ctype), native_type(ctype)
     if ctype[0] == 'int' and ctype[1] < 32:
         unsigned = {8: 'byte', 16: 'ushort'}[ctype[1]]
@@ -440,6 +446,126 @@ class Registry:
         return [name for name in self.commands if name in names]
 
 
+def split_top_level(text):
+    """Splits a C parameter list at the commas outside parentheses."""
+    parts, depth, current = [], 0, ''
+    for character in text:
+        if character == ',' and depth == 0:
+            parts.append(current)
+            current = ''
+            continue
+        depth += character == '('
+        depth -= character == ')'
+        current += character
+    if current.strip():
+        parts.append(current)
+    return [part.strip() for part in parts]
+
+
+def function_pointer(text):
+    """(return text, [Param]) of a function pointer type as Clang prints it, 'void *(*)(size_t, void *)', or None."""
+    match = re.match(r'^(.*?)\(\s*\*\s*\)\s*\((.*)\)$', text.strip())
+    if not match:
+        return None
+    params = split_top_level(match.group(2))
+    if params == ['void']:
+        params = []
+    return match.group(1).strip(), [Param(f'p{index}', param) for index, param in enumerate(params)]
+
+
+def return_text(function_type):
+    """The return type of a function type as Clang prints it, 'GLFWerrorfun (GLFWerrorfun)'."""
+    depth = 0
+    for index in range(len(function_type) - 1, -1, -1):
+        depth += function_type[index] == ')'
+        depth -= function_type[index] == '('
+        if depth == 0:
+            return function_type[:index].strip()
+    raise GenerationError(f'cannot read the function type {function_type!r}')
+
+
+class HeaderStructure:
+    """A struct or union of a C header, from Clang's AST, in the shape of a registry's Structure."""
+
+    def __init__(self, name, node):
+        self.name = name
+        self.union = node.get('tagUsed') == 'union'
+        self.members = []
+        self.bitfields = False
+        for field in node.get('inner', []):
+            if field.get('kind') == 'FieldDecl':
+                self.bitfields |= bool(field.get('isBitfield'))
+                self.members.append(Param(field.get('name') or f'm{len(self.members)}', field['type']['qualType']))
+        self.stype = None
+        self.extends = []
+
+
+class HeaderRegistry:
+    """
+    C headers read through Clang's JSON AST (NX-09), for APIs without a registry: the external functions whose names
+    the description includes, and the typedefs, records and enums the headers declare. The headers are compiled for the
+    portable target by llvmnet itself, so the types are those portable programs see.
+    """
+
+    def __init__(self, spec, ast, header):
+        self.spec = spec
+        self.file = os.path.basename(header)
+        with open(header, 'rb') as stream:
+            self.sha256 = hashlib.sha256(stream.read()).hexdigest()
+        self.apis = set(spec['apis'])
+        self.typedefs, self.callbacks, self.structs, self.handles, self.enums, self.opaque = {}, {}, {}, set(), set(), {}
+        self.type_elements = []
+        self.values = {}
+        self.commands = {}
+        self.variadic = []
+        include, exclude = spec.get('include', ['*']), spec.get('exclude', [])
+        for node in ast.get('inner', []):
+            kind, name = node.get('kind'), node.get('name')
+            if not name:
+                continue
+            if kind == 'TypedefDecl':
+                text = node['type']['qualType']
+                pointer = function_pointer(text)
+                if pointer:
+                    self.callbacks[name] = pointer
+                else:
+                    self.typedefs[name] = text
+            elif kind == 'RecordDecl':
+                if node.get('completeDefinition'):
+                    self.structs[name] = HeaderStructure(name, node)
+                else:
+                    self.structs.setdefault(name, None)
+            elif kind == 'EnumDecl':
+                self.enums.add(name)
+            elif kind == 'FunctionDecl':
+                if node.get('storageClass') == 'static' or node.get('inline') or name in self.commands:
+                    continue
+                if not any(fnmatch.fnmatchcase(name, pattern) for pattern in include) or any(fnmatch.fnmatchcase(name, pattern) for pattern in exclude):
+                    continue
+                if node.get('variadic'):
+                    self.variadic.append(name)
+                    continue
+                params = [Param(param.get('name') or f'p{index}', param['type']['qualType'])
+                          for index, param in enumerate(child for child in node.get('inner', []) if child.get('kind') == 'ParmVarDecl')]
+                self.commands[name] = Command(name, return_text(node['type']['qualType']), params, self)
+
+    def selected(self, apis, kind='command'):
+        return list(self.commands) if kind == 'command' else set()
+
+
+def header_ast(compiler, include, header, defines):
+    """Clang's JSON AST of a file that includes the header, compiled by llvmnet for the portable target."""
+    with tempfile.TemporaryDirectory() as directory:
+        source = os.path.join(directory, 'headers.c')
+        with open(source, 'w', encoding='utf-8') as stream:
+            stream.write(''.join(f'#define {define} 1\n' for define in defines) + f'#include <{header}>\n')
+        result = subprocess.run([compiler, '-fsyntax-only', '-Xclang', '-ast-dump=json', '-I', include, source],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            raise GenerationError(f'{compiler} cannot compile {header}:\n{result.stderr[-2000:]}')
+        return json.loads(result.stdout)
+
+
 class Model:
     """Resolves every selected command's C types against the registries' typedefs and the description's overrides."""
 
@@ -469,10 +595,18 @@ class Model:
         return None
 
     def structure(self, name):
-        found = self.lookup(name)
-        while found and found[0] == 'typedef':
-            found = self.lookup(spaced(QUALIFIERS.sub(' ', found[1])).replace('struct ', ''))
-        return found[1] if found and found[0] == 'struct' else None
+        """The struct or union a name denotes, through typedefs; C headers name both after the tag (GLFWallocator)."""
+        seen = set()
+        while name not in seen:
+            seen.add(name)
+            for registry in self.registries:
+                if registry.structs.get(name) is not None:
+                    return registry.structs[name]
+            found = self.lookup(name)
+            if not found or found[0] != 'typedef':
+                return None
+            name = re.sub(r'^(struct|union) ', '', spaced(QUALIFIERS.sub(' ', found[1])))
+        return None
 
     def value(self, name):
         for registry in self.registries:
@@ -613,7 +747,9 @@ def load_description(path):
                 raise GenerationError(f'{path}: library {library["name"]} preloads {dependency}, which must be listed before it')
     for registry in description['registries']:
         if registry.get('library') not in names:
-            raise GenerationError(f'{path}: registry {registry.get("path")} names no library of "libraries"')
+            raise GenerationError(f'{path}: registry {registry.get("path") or registry.get("header")} names no library of "libraries"')
+        if registry.get('kind') == 'headers' and not (registry.get('header') and registry.get('include-path')):
+            raise GenerationError(f'{path}: a registry of kind "headers" has "header" and "include-path"')
     if not any(library.get('dlopen') for library in description['libraries']):
         raise GenerationError(f'{path}: at least one library needs "dlopen" names, the names programs open it by')
     lookup = description.get('lookup')
@@ -698,9 +834,16 @@ class Emitter:
                 if name in self.replace:
                     self.commands.append((command, library))
                     continue
-                if command.ret[0] == 'callback':
+                if command.ret[0] == 'callback' and command.ret[1] not in self.pools:
                     self.unsupported.append((command, library, f'it returns a host function pointer ({command.ret[1]}), which a portable program cannot call'))
                     continue
+                if command.ret[0] == 'callback':
+                    # A callback the host returns (GLFW's setters return the previous one) is the program's own again
+                    # when it is one of the extension's reverse thunks.
+                    callback = self.model.callbacks[command.ret[1]]
+                    if callback.problem:
+                        raise GenerationError(f'the callback type {command.ret[1]} cannot have reverse thunks: {callback.problem}')
+                    self.thunked.add(command.ret[1])
                 self.commands.append((command, library))
                 for t in command.types:
                     if t[0] == 'callback' and t[1] in self.pools:
@@ -1058,6 +1201,8 @@ class Emitter:
             w(f'        private static readonly nint[] thunks = [{thunks}];')
             w('')
             w(f'        internal static nint Thunk(nint target) => target == 0 ? 0 : thunks[NativeCallbacks.Slot(targets, target, {literal(self.name)}, {literal(name)})];')
+            w('')
+            w(f'        internal static nint Target(nint thunk) => thunk == 0 ? 0 : NativeCallbacks.Target(targets, thunks, thunk, {literal(self.name)}, {literal(name)});')
             for i in range(size):
                 w('')
                 w('        [UnmanagedCallersOnly]')
@@ -1170,8 +1315,9 @@ def check_file(description, group, emitter, registries):
         for command, _ in emitter.commands + [(c, l) for c, l, _ in emitter.unsupported]:
             if command.registry is not registry or command.name not in selected:
                 continue
-            params = ', '.join(param.declaration for param in command.params) or 'void'
-            lines.append(f'{" ".join(command.ret_text.split())} {command.name}({params});')
+            if not isinstance(registry, HeaderRegistry):
+                params = ', '.join(param.declaration for param in command.params) or 'void'
+                lines.append(f'{" ".join(command.ret_text.split())} {command.name}({params});')
             names.append(command.name)
     # The portable layout the structure patching assumes, checked against the headers' (NX-10).
     if group.get('layouts'):
@@ -1198,12 +1344,22 @@ def generate(arguments):
     sources = dict(item.split('=', 1) for item in arguments.source or [])
     registries = []
     for spec in description['registries']:
+        if spec.get('kind') == 'headers':
+            if not arguments.compiler:
+                raise GenerationError(f'reading the C headers {spec["header"]} needs --compiler (llvmnet)')
+            include = located(spec['include-path'], base, sources)
+            ast = header_ast(arguments.compiler, include, spec['header'], spec.get('defines', []))
+            registries.append((spec, HeaderRegistry(spec, ast, os.path.join(include, spec['header']))))
+            continue
         path = located(spec['path'], base, sources)
         registries.append((spec, Registry(spec, path, description.get('types', {}), description.get('platforms', []),
                                           description.get('provisional', False), description.get('exclude-extensions', []))))
     model = Model(description, [registry for _, registry in registries])
     emitter = Emitter(description, model, registries, arguments.llvmnet_version)
     emitter.select()
+    for _, registry in registries:
+        for name in getattr(registry, 'variadic', []):
+            emitter.skipped.append((name, 'it is variadic: the portable va_list is not the host\'s'))
     output = os.path.abspath(arguments.output)
     if os.path.isdir(output):
         shutil.rmtree(output)
@@ -1320,8 +1476,9 @@ def list_sources(arguments):
     description = load_description(arguments.description)
     names = set()
     for spec in description['registries']:
-        if ':' in spec['path']:
-            names.add(spec['path'].split(':', 1)[0])
+        location = spec.get('path') or spec.get('include-path', '')
+        if ':' in location:
+            names.add(location.split(':', 1)[0])
     for entry in description.get('headers', []) + description.get('licenses', []):
         if ':' in entry['from']:
             names.add(entry['from'].split(':', 1)[0])
@@ -1336,6 +1493,7 @@ def main():
     generate_parser.add_argument('--output', required=True)
     generate_parser.add_argument('--llvmnet-version', required=True)
     generate_parser.add_argument('--source', action='append', metavar='NAME=DIR')
+    generate_parser.add_argument('--compiler', help='llvmnet, which reads C headers for descriptions that have them')
     verify_parser = commands.add_parser('verify')
     verify_parser.add_argument('output')
     verify_parser.add_argument('ir', nargs='+')

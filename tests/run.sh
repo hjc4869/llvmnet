@@ -99,6 +99,7 @@ missing() {
                     echo "libvulkan.so.1 or Mesa's lavapipe not found (install libvulkan1 and mesa-vulkan-drivers: scripts/ci/install-packages.sh)"; return
                 fi ;;
             rsync) command -v rsync >/dev/null || { echo "rsync not found (needed to fetch the FATE samples)"; return; } ;;
+            cmake) { command -v cmake && command -v ninja; } >/dev/null || { echo "cmake or ninja not found"; return; } ;;
             fuzz-build) { command -v cmake && command -v m4 && command -v clang++-22; } >/dev/null || { echo "cmake, m4 or clang++-22 not found (needed to build csmith and yarpgen)"; return; } ;;
             ffmpeg-cli) command -v ffmpeg >/dev/null || { echo "ffmpeg command-line tool not found (needed to generate media fixtures)"; return; } ;;
             openmp) [[ -f "${LLVMNET_OPENMP_PREFIX:-$root/artifacts/system-openmp}/lib/libomp.so.5" ]] || { echo "system OpenMP not staged; run scripts/install-system-openmp.sh"; return; } ;;

@@ -54,3 +54,4 @@ NativeAOT executables also embed the .NET runtime (MIT; include its `LICENSE.TXT
 | libc-test (C library conformance tests) | `7b95dfa` | MIT |
 | Khronos EGL-Registry and OpenGL-Registry (the `gles` native extension) | `e964211`, `6af574a` | Apache-2.0 (registry XML, EGL headers), MIT (GL headers) |
 | Khronos Vulkan-Headers (the `vulkan` native extension) | 1.4.367 | Apache-2.0 OR MIT |
+| GLFW (test fixture of `tests/ext-headers.sh`) | 3.4 | Zlib |
