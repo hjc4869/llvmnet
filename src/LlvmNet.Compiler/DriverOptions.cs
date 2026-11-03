@@ -127,6 +127,7 @@ internal static class DriverOptions
         new("--portable-sysroot", OptionKind.JoinedOrSeparate, Modes, "Use another portable sysroot instead of the toolchain's sysroot/" + PortableAbi.Tag, H, value: "<dir>"),
         new("--simd128", OptionKind.Flag, Modes, "Compile wasm_simd128.h intrinsics to Vector128 helper calls (docs/user/simd128.md)", H),
         new("--vector-lowering=", OptionKind.Joined, Hidden, "", H, value: "<auto|typed|scalar>"),
+        new("--vector-width=", OptionKind.Joined, Modes, "128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a 256-bit vector as one instruction where the host has AVX2 and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128", H, value: "<bits>"),
         // Managed and native libraries
         new("--cil-reference", OptionKind.JoinedOrSeparate, Managed, "Resolve calls to the public CExport methods of a managed library built with -shared, in the same mode", H, value: "<assembly>"),
         new("--system-library", OptionKind.JoinedOrSeparate, Managed, "System mode: a native shared library whose functions the program calls through generated bridges", H, value: "<library>"),

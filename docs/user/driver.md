@@ -87,6 +87,7 @@ Every option falls into one of four classes, per runtime mode:
 | `--runtime=<mode>` | portable (the default; ABI dotnet64-v2, runs on every supported .NET host) or system (the native Linux x86-64 ABI, system-linux-x64-v1) |
 | `--portable-sysroot=<dir>` | Use another portable sysroot instead of the toolchain's sysroot/dotnet64-v2 |
 | `--simd128` | Compile wasm_simd128.h intrinsics to Vector128 helper calls (docs/user/simd128.md) |
+| `--vector-width=<bits>` | 128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a 256-bit vector as one instruction where the host has AVX2 and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128 |
 
 ### Managed and native libraries
 

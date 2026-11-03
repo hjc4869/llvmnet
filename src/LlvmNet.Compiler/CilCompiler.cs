@@ -256,7 +256,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         ModuleBuilder cilModule = assembly.DefineDynamicModule("program");
         Program = cilModule.DefineType("Program", TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
         fieldHolders.Add(Program);
-        using var types = new TypeSystem(module, cilModule, options.Simd128, options.TypedVectors);
+        using var types = new TypeSystem(module, cilModule, options.Simd128, options.TypedVectors, options.VectorWidth);
         Types = types;
         if (options.TypedVectors)
             foreach ((string function, string? reason) in VectorEmitter.Legalize(types, module, options.VectorLowering == "auto"))

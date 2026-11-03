@@ -7,15 +7,15 @@ namespace LlvmNet;
 
 /// <summary>
 /// How a fixed-length vector of 8- to 64-bit integers, pointers, float, double or i1 is held in CIL by the typed
-/// vector lowering (ADR-16 Level 1): as fragments of <see cref="Vector128{T}"/>, one value when the vector has at most
-/// 128 bits (the unused upper lanes of a shorter one are undefined) and otherwise a struct with one field per
-/// fragment. Integer lanes are signed and pointers are 64-bit integers; operations reinterpret them where they need
-/// another view. An i1 vector is a mask: each lane all ones or zero, as wide as its lane count gives (128 bits over
-/// the lane count rounded up to a power of two, from 8 to 64 bits), whatever comparison produced it.
+/// vector lowering (ADR-16 Level 1): as fragments of <see cref="Vector128{T}"/> (or <see cref="Vector256{T}"/> with
+/// --vector-width=256), one value when the vector fits one fragment (the unused upper lanes of a shorter one are
+/// undefined) and otherwise a struct with one field per fragment. Integer lanes are signed and pointers are 64-bit integers; operations reinterpret them where they need
+/// another view. An i1 vector is a mask: each lane all ones or zero, as wide as its lane count gives (the fragment's
+/// bits over the lane count rounded up to a power of two, from 8 to 64 bits), whatever comparison produced it.
 /// </summary>
-internal sealed record VectorShape(int Lanes, Type Lane, int LaneBits, bool Mask, Type Fragment, Type Cil, FieldInfo[] Fields)
+internal sealed record VectorShape(int Lanes, Type Lane, int LaneBits, bool Mask, Type Fragment, Type Cil, FieldInfo[] Fields, int Bits)
 {
-    internal int PerFragment => 128 / LaneBits;
+    internal int PerFragment => Bits / LaneBits;
     internal int Fragments => Math.Max(1, Fields.Length);
 }
 
@@ -30,16 +30,19 @@ internal sealed class TypeSystem : IDisposable
     private readonly Dictionary<nint, Type> returns = [];
     private readonly Dictionary<(Type Lane, int Fragments), (Type Cil, FieldInfo[] Fields)> containers = [];
 
-    internal TypeSystem(nint llvmModule, ModuleBuilder module, bool simd128, bool typedVectors)
+    internal TypeSystem(nint llvmModule, ModuleBuilder module, bool simd128, bool typedVectors, int vectorBits = 128)
     {
         this.module = module;
         this.simd128 = simd128;
         this.typedVectors = typedVectors;
+        FragmentBits = vectorBits;
         layout = Llvm.LLVMCreateTargetData(Llvm.LLVMGetDataLayoutStr(llvmModule));
         if (Llvm.LLVMPointerSize(layout) != 8 || Llvm.LLVMByteOrder(layout) != 1 || !BitConverter.IsLittleEndian || IntPtr.Size != 8)
             throw new NotSupportedException("Only little-endian 64-bit LLVM modules and .NET hosts are supported.");
     }
 
+    /// <summary>The bits of a vector fragment: 128, or 256 with --vector-width=256.</summary>
+    internal int FragmentBits { get; }
     internal long Size(nint type) => checked((long)Llvm.LLVMABISizeOfType(layout, type));
     /// <summary>The bytes a load or store of the type touches, which for a vector of three lanes is less than its size.</summary>
     internal long StoreSize(nint type) => checked((long)Llvm.LLVMStoreSizeOfType(layout, type));
@@ -109,7 +112,7 @@ internal sealed class TypeSystem : IDisposable
             2 => typeof(float),
             3 => typeof(double),
             12 => typeof(long),
-            8 => Width(element) switch { 1 => MaskLane(lanes), 8 => typeof(sbyte), 16 => typeof(short), 32 => typeof(int), 64 => typeof(long), _ => null },
+            8 => Width(element) switch { 1 => MaskLane(lanes, FragmentBits), 8 => typeof(sbyte), 16 => typeof(short), 32 => typeof(int), 64 => typeof(long), _ => null },
             _ => null
         };
         shape = lane is null ? null : Shape(lanes, lane, Kind(element) == 8 && Width(element) == 1);
@@ -121,22 +124,22 @@ internal sealed class TypeSystem : IDisposable
     internal VectorShape Shape(int lanes, Type lane, bool mask)
     {
         int bits = LaneBits(lane);
-        int fragments = (lanes * bits + 127) / 128;
-        Type fragment = typeof(Vector128<>).MakeGenericType(lane);
+        int fragments = (lanes * bits + FragmentBits - 1) / FragmentBits;
+        Type fragment = (FragmentBits == 256 ? typeof(Vector256<>) : typeof(Vector128<>)).MakeGenericType(lane);
         if (fragments == 1)
-            return new VectorShape(lanes, lane, bits, mask, fragment, fragment, []);
+            return new VectorShape(lanes, lane, bits, mask, fragment, fragment, [], FragmentBits);
         if (!containers.TryGetValue((lane, fragments), out var container))
         {
-            TypeBuilder builder = module.DefineType($"__Vector{fragments}x{lane.Name}",
+            TypeBuilder builder = module.DefineType(FragmentBits == 256 ? $"__Vector256x{fragments}x{lane.Name}" : $"__Vector{fragments}x{lane.Name}",
                 TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.SequentialLayout, typeof(ValueType));
             FieldInfo[] fields = Enumerable.Range(0, fragments).Select(index => (FieldInfo)builder.DefineField($"F{index}", fragment, FieldAttributes.Public)).ToArray();
             containers[(lane, fragments)] = container = (builder.CreateType()!, fields);
         }
-        return new VectorShape(lanes, lane, bits, mask, fragment, container.Cil, container.Fields);
+        return new VectorShape(lanes, lane, bits, mask, fragment, container.Cil, container.Fields, FragmentBits);
     }
 
-    /// <summary>The lane of a mask of this many lanes: as wide as 128 bits shared among them, from 8 to 64 bits.</summary>
-    internal static Type MaskLane(int lanes) => Math.Clamp(128 / (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)lanes), 8, 64) switch
+    /// <summary>The lane of a mask of this many lanes: as wide as a fragment's bits shared among them, from 8 to 64 bits.</summary>
+    internal static Type MaskLane(int lanes, int fragmentBits) => Math.Clamp(fragmentBits / (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)lanes), 8, 64) switch
     {
         8 => typeof(sbyte),
         16 => typeof(short),

@@ -103,6 +103,24 @@ SV-03 lowers the remaining integer intrinsics and moves the reductions into the 
 
 The module pair has 22,377 cases in 1,541 probes (`vector-integer` 13,144, `vector-float` 9,233). With seed 20261103 they print what the natively compiled modules print, byte for byte: in system and portable mode with `--vector-lowering=typed` (nothing scalarized), in portable mode with the default lowering (which scalarizes the lane-access probes), with `DOTNET_EnableHWIntrinsic=0`, with `DOTNET_EnableAVX=0` and as NativeAOT. `tests/vector-semantics.sh` runs all of that in 22 s. The portable images, copied with the native output, match on Windows x64 (`fluorite`), macOS ARM64 (`mainmac`) and Linux ARM64 (the arm64 runtime container under qemu), each with and without hardware intrinsics, so NEON's comparison, conversion and minimum rules agree with x64's. `tests/vector-fuzz.sh`, in the nightly fuzz job, repeats the run for ten seeds that change the random lanes, reduction inputs and shuffle masks; seeds 1 to 4 passed. No case mismatched in any of these runs.
 
+## SV-06: 256-bit fragments
+
+`--vector-width=256` holds every vector in `Vector256<T>` fragments instead of `Vector128<T>`: the same lowering with twice the lanes per fragment, `Vector256`'s methods, and the 256-bit helpers of `LlvmNet.Runtime.Vectors` (by halves where `Vector256` has no operation). A reduction first combines a fragment's 128-bit halves, the same step, so its shuffles are `Vector128` ones. The vector probes (22,377 cases) match native at 256 bits under the JIT, with `DOTNET_EnableAVX=0`, with `DOTNET_EnableHWIntrinsic=0`, and as NativeAOT at the default instruction set and at `x86-64-v3`; so does the vector-extension fixture.
+
+The survey's seven kernels (`artifacts/simd-survey/autovec/kernels.c`, five times the repetitions of the survey), vectorized by Clang for AVX2 (`--runtime=system -O3 -march=x86-64-v3 -ffp-contract=off -fvectorize -fslp-vectorize`), timed with `scripts/ab-time.py 3`, seconds (median; the JIT's startup is about 0.035 s, NativeAOT's 0.003 s):
+
+| Kernel | native AVX2 | JIT 128 | JIT 256 | NativeAOT `x86-64-v3` 128 | NativeAOT `x86-64-v3` 256 | JIT 128 without AVX | JIT 256 without AVX |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| saxpy | 0.468 | 1.119 | 0.631 | 1.257 | 0.584 | 1.196 | 1.236 |
+| i32mix | 0.543 | 1.154 | 0.595 | 1.960 | 0.554 | 2.463 | 2.260 |
+| sad8 | 0.272 | 1.313 | 0.822 | 1.409 | 0.792 | 1.330 | 1.215 |
+| dot16 | 0.308 | 1.107 | 0.693 | 1.310 | 0.665 | 1.171 | 1.192 |
+| max8 | 0.100 | 0.216 | 0.146 | 0.237 | 0.112 | 0.212 | 3.676 |
+| fdot | 0.611 | 0.649 | 0.676 | 0.647 | 0.664 | 0.651 | 0.709 |
+| fdot8 | 0.745 | 0.972 | 0.775 | 1.013 | 0.798 | 0.968 | 1.057 |
+
+256-bit fragments gain 1.25 to 1.9 times over 128 where the host has AVX2, and put NativeAOT `x86-64-v3` at 1.02 to 1.25 times native AVX2 on the element-wise and float kernels; `sad8` and `dot16` stay 2.2 to 3 times native, the `psadbw`/`pmaddwd` idioms of SV-21. Without AVX most kernels run as at 128 bits, but not `max8`: there RyuJIT does not treat `Vector256` methods as intrinsics, and in `k_max8`, which LLVM unrolled into 3,200 instructions, it leaves 147 `As` and 73 `Max` calls uninlined (`DOTNET_JitDisasm`), 14 times slower than 128. On macOS ARM64 (`mainmac`, portable `-O3 -fvectorize`, 128-bit vectors), where `Vector256` is never accelerated, 256 costs 1.07 to 1.5 times 128 (saxpy 1.182 against 0.939 s, sad8 2.042 against 1.336). `--vector-width=256` is therefore for builds that target AVX2 hosts, as the plan intends with `--isa=x86-64-v3` (SV-08, SV-09), and 128 stays the default. The same ARM64 run puts the 128-bit JIT code at 1.5 times native NEON on saxpy, i32mix and max8.
+
 ## What it does not show
 
 - Speedups on real programs: the vectorizers stay off by default (ADR-11), and measuring the benchmark set and the survey's libraries with them on is SV-05. The kernels of the survey were not rerun.

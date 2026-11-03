@@ -17,6 +17,8 @@ internal sealed class CompilerOptions
     internal string VectorLowering { get; set; } = "auto";
     /// <summary>Whether vector IR is lowered to Vector128 (ADR-16 Level 1); --simd128 keeps its own representation until SV-07.</summary>
     internal bool TypedVectors => !Simd128 && VectorLowering != "scalar";
+    /// <summary>The bits of a typed vector fragment, 128 or 256 (--vector-width, SV-06).</summary>
+    internal int VectorWidth { get; set; } = 128;
     internal bool TrapMissingArguments { get; set; }
     internal bool DiagnoseLimits { get; set; }
     internal bool CheckIndirectCalls { get; set; }
@@ -145,6 +147,10 @@ internal sealed class Invocation
                 case "--runtime": break;
                 case "--portable-sysroot": PortableAbi.SysrootOverride = Path.GetFullPath(value); break;
                 case "--simd128": Options.Simd128 = true; break;
+                case "--vector-width=":
+                    if (value is not ("128" or "256")) throw new ArgumentException("--vector-width requires 128 or 256.");
+                    Options.VectorWidth = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+                    break;
                 case "--vector-lowering=":
                     if (value is not ("auto" or "typed" or "scalar")) throw new ArgumentException("--vector-lowering requires auto, typed or scalar.");
                     Options.VectorLowering = value;
