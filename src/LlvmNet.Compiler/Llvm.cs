@@ -17,6 +17,8 @@ internal static unsafe class Llvm
     internal static extern uint LowerConstrainedFloatingPoint(nint module);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_wrap_vector_invokes")]
     internal static extern uint WrapVectorInvokes(nint source);
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_scalarize_functions")]
+    internal static extern uint ScalarizeFunctions(nint* functions, uint count);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_add_native_thunk")]
     internal static extern void AddNativeThunk(nint shim, nint function, nint call, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
     [DllImport(Library)] internal static extern int LLVMWriteBitcodeToFile(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
@@ -132,6 +134,10 @@ internal static unsafe class Llvm
     [DllImport(Library)] internal static extern nint LLVMStructGetTypeAtIndex(nint type, uint index);
     [DllImport(Library)] internal static extern ulong LLVMGetArrayLength2(nint type);
     [DllImport(Library)] internal static extern uint LLVMGetVectorSize(nint type);
+    [DllImport(Library)] internal static extern ulong LLVMStoreSizeOfType(nint data, nint type);
+    [DllImport(Library)] internal static extern uint LLVMGetNumMaskElements(nint shuffle);
+    [DllImport(Library)] internal static extern int LLVMGetMaskValue(nint shuffle, uint element);
+    [DllImport(Library)] internal static extern uint LLVMGetFastMathFlags(nint instruction);
     [DllImport(Library)] internal static extern uint LLVMCountParamTypes(nint type);
     [DllImport(Library)] internal static extern void LLVMGetParamTypes(nint type, nint* parameters);
     [DllImport(Library)] internal static extern int LLVMIsFunctionVarArg(nint type);

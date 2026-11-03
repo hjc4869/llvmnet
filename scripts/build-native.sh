@@ -22,10 +22,10 @@ version="$("$llvm_config" --version)"
 [[ "${version%%.*}" == "$required_major" ]] || fail "$llvm_config reports LLVM $version; llvmnet $(<"$root/Directory.Build.props" grep -o '<VersionPrefix>[^<]*' | cut -d'>' -f2) requires LLVM $required_major."
 include_dir="$("$llvm_config" --includedir)"
 [[ -f "$include_dir/llvm-c/Core.h" && -f "$include_dir/llvm/Linker/Linker.h" ]] || fail "LLVM headers are missing from $include_dir."
-sources=("$root/native/constants.cpp" "$root/native/linker.cpp" "$root/native/abi.cpp" "$root/native/fp.cpp")
+sources=("$root/native/constants.cpp" "$root/native/linker.cpp" "$root/native/abi.cpp" "$root/native/fp.cpp" "$root/native/vectors.cpp")
 read -r -a include_flags <<<"$("$llvm_config" --cxxflags)"
 read -r -a link_flags <<<"$("$llvm_config" --ldflags)"
-read -r -a libraries <<<"$("$llvm_config" --libs core bitreader bitwriter irreader linker object)"
+read -r -a libraries <<<"$("$llvm_config" --libs core bitreader bitwriter irreader linker object passes)"
 mkdir -p "$output"
 library="$output/libllvmnet-llvm.so"
 stamp="$output/libllvmnet-llvm.stamp"

@@ -126,6 +126,7 @@ internal static class DriverOptions
         new("--runtime", OptionKind.JoinedOrSeparate, Modes, "portable (the default; ABI " + PortableAbi.Tag + ", runs on every supported .NET host) or system (the native Linux x86-64 ABI, system-linux-x64-v1)", H, value: "<mode>"),
         new("--portable-sysroot", OptionKind.JoinedOrSeparate, Modes, "Use another portable sysroot instead of the toolchain's sysroot/" + PortableAbi.Tag, H, value: "<dir>"),
         new("--simd128", OptionKind.Flag, Modes, "Compile wasm_simd128.h intrinsics to Vector128 helper calls (docs/user/simd128.md)", H),
+        new("--vector-lowering=", OptionKind.Joined, Hidden, "", H, value: "<auto|typed|scalar>"),
         // Managed and native libraries
         new("--cil-reference", OptionKind.JoinedOrSeparate, Managed, "Resolve calls to the public CExport methods of a managed library built with -shared, in the same mode", H, value: "<assembly>"),
         new("--system-library", OptionKind.JoinedOrSeparate, Managed, "System mode: a native shared library whose functions the program calls through generated bridges", H, value: "<library>"),
@@ -165,7 +166,7 @@ internal static class DriverOptions
         new("--print-host-limitations", OptionKind.Flag, Hidden, "", H),
         // Frontend options: the documented examples; every other option that starts with - is forwarded as well.
         new("-O", OptionKind.Joined, Frontend, "Optimization level. The default is -O1 without automatic vectorization (ADR-11); -O0 is accepted and -O3 fully tested", F, value: "<level>"),
-        new("-fvectorize", OptionKind.Flag, Frontend, "Enable loop vectorization (also -fslp-vectorize); the vector IR is scalarized to CIL", F),
+        new("-fvectorize", OptionKind.Flag, Frontend, "Enable loop vectorization (also -fslp-vectorize); the vector IR is lowered to Vector128 operations (ADR-16)", F),
         new("-fslp-vectorize", OptionKind.Flag, Hidden, "", F),
         new("-std=", OptionKind.Joined, Frontend, "Language standard; the defaults are the frontends' own (gnu17 for C, gnu++17 for C++, Fortran 2018)", F, value: "<standard>"),
         new("-g", OptionKind.Flag, Frontend, "Debug information: compiler diagnostics get file:line:col (also -gline-tables-only); emitted assemblies carry none yet (BE-28)", F),

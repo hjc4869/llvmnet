@@ -90,7 +90,7 @@ internal sealed class HostInterop : IDisposable
         if (wrappers.TryGetValue(key, out MethodInfo? cached)) return cached;
         string exportName = "llvmnet_host_" + wrappers.Count;
         Llvm.AddNativeThunk(shim, function, call, exportName);
-        Type returnType = compiler.Types.Map(Llvm.LLVMGetReturnType(signature));
+        Type returnType = compiler.Types.Return(Llvm.LLVMGetReturnType(signature));
         // The wrapper calls its P/Invoke method, which is private to their class.
         TypeBuilder holder = compiler.MethodHolder(2);
         MethodBuilder wrapper = holder.DefineMethod("__host_" + wrappers.Count + "_" + (assembly ? "assembly" : symbol),
@@ -138,7 +138,7 @@ internal sealed class HostInterop : IDisposable
         if (callbacks.TryGetValue(function, out MethodInfo? existing)) return existing;
         nint signature = Llvm.LLVMGlobalGetValueType(function);
         Type[] parameters = compiler.Types.Parameters(signature);
-        Type result = compiler.Types.Map(Llvm.LLVMGetReturnType(signature));
+        Type result = compiler.Types.Return(Llvm.LLVMGetReturnType(signature));
         bool variadic = Llvm.LLVMIsFunctionVarArg(signature) != 0;
         bool scalar(Type type) => type == typeof(int) || type == typeof(long) || type == typeof(float) || type == typeof(double) || type == typeof(nint) || type == typeof(void);
         bool aggregate = parameters.Any(type => !scalar(type)) || !scalar(result) ||

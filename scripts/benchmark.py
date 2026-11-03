@@ -51,8 +51,8 @@ llvmnet = root / "bin" / "llvmnet"
 benchmark_set = root / "tests" / "perf" / "benchmarks.tsv"
 default_baseline = root / "tests" / "perf" / "baseline.tsv"
 engines_all = ("native", "jit", "aot")
-# Both compilers get the same optimization pipeline: llvmnet's -O2 keeps automatic vectorization off (ADR-11,
-# vectors are scalarized, BE-31), so the native build turns it off too and the ratio measures the translation.
+# Both compilers get the same optimization pipeline: llvmnet's -O2 keeps automatic vectorization off (ADR-11; the
+# vectorized column is SV-05's), so the native build turns it off too and the ratio measures the translation.
 common_flags = ["-O2", "-fno-vectorize", "-fno-slp-vectorize", "-w"]
 # Thresholds (proposed for the owner in docs/plan/decisions.md): a benchmark regresses when its host-normalized time
 # grows by more than 25%, an engine when the geometric mean grows by more than 10%.

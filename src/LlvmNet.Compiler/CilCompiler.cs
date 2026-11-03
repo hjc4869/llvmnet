@@ -130,7 +130,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             : runtimeExports.TryGetValue(name, out MethodInfo? export) && (options.Runtime != "portable" || MuslVisible(name, export)) ? export : null;
         if (method is null) return null;
         Type[] parameters = method.GetParameters().Select(parameter => parameter.ParameterType).ToArray();
-        return Types.Map(Llvm.LLVMGetReturnType(signature)) == method.ReturnType && Types.Parameters(signature).SequenceEqual(parameters)
+        return Types.Return(Llvm.LLVMGetReturnType(signature)) == method.ReturnType && Types.Parameters(signature).SequenceEqual(parameters)
             ? null : $"{method.DeclaringType!.Name}.{method.Name} {CilSignature(method.ReturnType, parameters)}";
     }
 
@@ -228,7 +228,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             return Host.Resolve(function);
         if (Host is not null && HostInterop.Adapter(name) is MethodInfo adapter)
         {
-            if (Types.Map(Llvm.LLVMGetReturnType(signature)) != adapter.ReturnType ||
+            if (Types.Return(Llvm.LLVMGetReturnType(signature)) != adapter.ReturnType ||
                 !Types.Parameters(signature).SequenceEqual(adapter.GetParameters().Select(parameter => parameter.ParameterType)))
                 throw new NotSupportedException($"System runtime adapter ABI mismatch for {name}");
             Methods[function] = adapter;
@@ -238,7 +238,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             return Methods[function] = constructors;
         if (!runtimeExports.TryGetValue(name, out method) || options.Runtime == "portable" && !MuslVisible(name, method))
             throw new NotSupportedException($"Unresolved function: {name}");
-        if (Types.Map(Llvm.LLVMGetReturnType(signature)) != method.ReturnType ||
+        if (Types.Return(Llvm.LLVMGetReturnType(signature)) != method.ReturnType ||
             !Types.Parameters(signature).SequenceEqual(method.GetParameters().Select(parameter => parameter.ParameterType)))
             throw new NotSupportedException($"Runtime ABI mismatch for {name}: {Llvm.PrintType(signature)}");
         Methods[function] = method;
@@ -256,8 +256,13 @@ internal sealed class CilCompiler(CompilerOptions options)
         ModuleBuilder cilModule = assembly.DefineDynamicModule("program");
         Program = cilModule.DefineType("Program", TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
         fieldHolders.Add(Program);
-        using var types = new TypeSystem(module, cilModule, options.Simd128);
+        using var types = new TypeSystem(module, cilModule, options.Simd128, options.TypedVectors);
         Types = types;
+        if (options.TypedVectors)
+            foreach ((string function, string? reason) in VectorEmitter.Legalize(types, module, options.VectorLowering == "auto"))
+                if (options.Verbose)
+                    Console.Error.WriteLine(reason is null ? $"llvmnet: scalarized {function}, whose vector code moves more lanes than it computes on"
+                        : $"llvmnet: scalarized the vector code of {function} ({reason})");
         constructors = Program.DefineMethod("__llvmnet_run_constructors", MethodAttributes.Public | MethodAttributes.Static, typeof(void), Type.EmptyTypes);
         // In portable mode musl's start object calls main and exit and runs constructors after __init_libc.
         libcMain = Llvm.LLVMGetNamedFunction(module, "__llvmnet_libc_main");
@@ -309,7 +314,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             try
             {
                 method = (exported ? Program : MethodHolder()).DefineMethod(Llvm.Name(function), (exported ? MethodAttributes.Public : MethodAttributes.Assembly) | MethodAttributes.Static,
-                    Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
+                    Types.Return(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
             }
             catch (Exception error) { throw CompilationError.InFunction(error, function); }
             if (exported) method.SetCustomAttribute(new CustomAttributeBuilder(typeof(CExportAttribute).GetConstructor([typeof(string)])!, [Llvm.Name(function)]));

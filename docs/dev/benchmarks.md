@@ -11,7 +11,7 @@
 - **suite**: free programs from `llvm-test-suite` (`scripts/fetch-sources.sh` pins it): SingleSource benchmarks, Olden, Ptrdist, MiBench, tramp3d-v4, Bullet, mafft and nbench.
 - **ffmpeg**: the decode harness of the ffmpeg integration build (`tests/ffmpeg/decode.c`) on two clips the harness generates with the system ffmpeg from its own test pattern (1080p HEVC 10-bit and H.264, 240 frames), with one and four decoder threads. Native is the system-mode bitcode compiled by `clang-22`, as `scripts/build-ffmpeg.sh` builds it.
 
-Both compilers get `-O2 -fno-vectorize -fno-slp-vectorize`: llvmnet scalarizes vectors ([ADR-10](../plan/decisions.md#adr-10-simd-strategy)), so turning the vectorizer off on both sides makes the ratio measure the translation rather than the vectorizer. Native programs link against glibc.
+Both compilers get `-O2 -fno-vectorize -fno-slp-vectorize`: llvmnet keeps the vectorizers off by default ([ADR-11](../plan/decisions.md#adr-11-driver-defaults); the vectorized column is SV-05's), so turning them off on both sides makes the ratio measure the translation rather than the vectorizer. Native programs link against glibc.
 
 ## Method
 

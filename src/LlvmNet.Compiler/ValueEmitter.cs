@@ -9,6 +9,9 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
     protected readonly CilCompiler Compiler = compiler;
     protected readonly ILGenerator Il = il;
     protected TypeSystem Types => Compiler.Types;
+    private VectorEmitter? vectors;
+    /// <summary>The typed vector lowering of this method's IL (ADR-16 Level 1).</summary>
+    internal VectorEmitter Vectors => vectors ??= new VectorEmitter(this, Il, Types);
 
     internal virtual void Load(nint value)
     {
@@ -89,6 +92,8 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
             Zero(type);
         else if (Llvm.LLVMIsAConstantExpr(value) != 0)
             Expression(value, Llvm.LLVMGetConstOpcode(value));
+        else if (Types.Vector(type) is VectorShape shape)
+            Vectors.Constant(value, shape);
         else if (TypeSystem.IsAggregate(type))
         {
             Il.Emit(OpCodes.Ldsfld, Compiler.Constant(value));
@@ -104,7 +109,7 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
         {
             nint signature = Llvm.LLVMGlobalGetValueType(function);
             Il.Emit(OpCodes.Ldftn, target);
-            Il.Emit(OpCodes.Ldstr, CilCompiler.CilSignature(Types.Map(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature)));
+            Il.Emit(OpCodes.Ldstr, CilCompiler.CilSignature(Types.Return(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature)));
             Il.Emit(OpCodes.Ldstr, Llvm.Demangle(Llvm.Name(function)));
             Il.Emit(OpCodes.Call, typeof(IndirectCalls).GetMethod(nameof(IndirectCalls.Register))!);
         }
@@ -189,6 +194,11 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
 
     internal void ReadMemory(nint type, bool isVolatile = false)
     {
+        if (Types.Vector(type) is VectorShape shape)
+        {
+            Vectors.Read(type, shape, isVolatile);
+            return;
+        }
         if (TypeSystem.Kind(type) == 4)
         {
             Il.Emit(OpCodes.Call, typeof(Float80).GetMethod(nameof(Float80.Read))!);
@@ -227,6 +237,11 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
 
     internal void StoreMemory(nint type, bool isVolatile = false)
     {
+        if (Types.Vector(type) is VectorShape shape)
+        {
+            Vectors.Write(type, shape, isVolatile);
+            return;
+        }
         if (TypeSystem.Kind(type) == 4)
         {
             if (isVolatile) Il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.MemoryBarrier))!);
@@ -286,6 +301,11 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
         nint left = Llvm.LLVMGetOperand(value, 0);
         nint right = Llvm.LLVMGetOperand(value, 1);
         nint type = Llvm.LLVMTypeOf(left);
+        if (Types.Vector(type) is not null)
+        {
+            Vectors.Binary(value, opcode);
+            return;
+        }
         if (TypeSystem.Width(type) > 64)
         {
             Load(left);
@@ -338,6 +358,11 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
         nint source = Llvm.LLVMGetOperand(value, 0);
         nint sourceType = Llvm.LLVMTypeOf(source);
         nint destinationType = Llvm.LLVMTypeOf(value);
+        if (Types.Vector(sourceType) is not null || Types.Vector(destinationType) is not null)
+        {
+            Vectors.Cast(value, opcode);
+            return;
+        }
         Type destination = Types.Map(destinationType);
         Load(source);
         if (opcode == 41)

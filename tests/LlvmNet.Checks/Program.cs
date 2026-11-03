@@ -105,6 +105,67 @@ try
         if (found == 0) throw new InvalidOperationException($"No method named {methodName} in {opcodePath}.");
         return 0;
     }
+    if (args is ["vector-calls", string vectorPath])
+    {
+        // Calls into System.Runtime.Intrinsics' Vector64/128/256 and LlvmNet.Runtime.Vectors, by method name: what the typed
+        // vector lowering (ADR-16 Level 1) emitted for an image, for checks that vector IR ran as vector code.
+        using FileStream stream = File.OpenRead(vectorPath);
+        using var image = new PEReader(stream);
+        MetadataReader metadata = image.GetMetadataReader();
+        var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        string TypeName(EntityHandle type)
+        {
+            if (type.Kind == HandleKind.TypeSpecification)
+            {
+                BlobReader signature = metadata.GetBlobReader(metadata.GetTypeSpecification((TypeSpecificationHandle)type).Signature);
+                if (signature.ReadSignatureTypeCode() != SignatureTypeCode.GenericTypeInstance) return "";
+                signature.ReadSignatureTypeCode();
+                type = signature.ReadTypeHandle();
+            }
+            if (type.Kind != HandleKind.TypeReference) return "";
+            TypeReference reference = metadata.GetTypeReference((TypeReferenceHandle)type);
+            return metadata.GetString(reference.Namespace) + "." + metadata.GetString(reference.Name);
+        }
+        foreach (MethodDefinitionHandle handle in metadata.MethodDefinitions)
+        {
+            MethodDefinition method = metadata.GetMethodDefinition(handle);
+            if (method.RelativeVirtualAddress == 0) continue;
+            BlobReader il = image.GetMethodBody(method.RelativeVirtualAddress).GetILReader();
+            while (il.RemainingBytes > 0)
+            {
+                ushort value = il.ReadByte();
+                if (value == 0xFE) value = (ushort)(0xFE00 | il.ReadByte());
+                var opcode = (System.Reflection.Emit.OpCode)typeof(System.Reflection.Emit.OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static)
+                    .Select(field => field.GetValue(null)!).First(candidate => (ushort)((System.Reflection.Emit.OpCode)candidate).Value == value);
+                if (value is 0x28 or 0x6F)
+                {
+                    EntityHandle target = MetadataTokens.EntityHandle(il.ReadInt32());
+                    if (target.Kind == HandleKind.MethodSpecification) target = metadata.GetMethodSpecification((MethodSpecificationHandle)target).Method;
+                    if (target.Kind != HandleKind.MemberReference) continue;
+                    MemberReference member = metadata.GetMemberReference((MemberReferenceHandle)target);
+                    string owner = TypeName(member.Parent);
+                    if (owner.StartsWith("System.Runtime.Intrinsics.Vector", StringComparison.Ordinal) || owner == "LlvmNet.Runtime.Vectors")
+                    {
+                        string name = (owner == "LlvmNet.Runtime.Vectors" ? "Vectors." : "") + metadata.GetString(member.Name);
+                        counts[name] = counts.GetValueOrDefault(name) + 1;
+                    }
+                    continue;
+                }
+                il.Offset += opcode.OperandType switch
+                {
+                    System.Reflection.Emit.OperandType.InlineNone => 0,
+                    System.Reflection.Emit.OperandType.ShortInlineBrTarget or System.Reflection.Emit.OperandType.ShortInlineI or
+                        System.Reflection.Emit.OperandType.ShortInlineVar => 1,
+                    System.Reflection.Emit.OperandType.InlineVar => 2,
+                    System.Reflection.Emit.OperandType.InlineI8 or System.Reflection.Emit.OperandType.InlineR => 8,
+                    System.Reflection.Emit.OperandType.InlineSwitch => 4 * il.ReadInt32(),
+                    _ => 4
+                };
+            }
+        }
+        Console.WriteLine($"vector-calls: {counts.Values.Sum()}" + (counts.Count == 0 ? "" : " (" + string.Join(", ", counts.Select(entry => $"{entry.Key} {entry.Value}")) + ")"));
+        return 0;
+    }
     if (args is ["inspect-signatures", string signaturePath])
     {
         using FileStream stream = File.OpenRead(signaturePath);
@@ -178,7 +239,7 @@ try
         }
         return 0;
     }
-    Console.Error.WriteLine("Usage: LlvmNet.Checks compare-numeric expected actual absolute-tolerance | inspect assembly.dll | jit-all path... | inspect-methods assembly.dll name-filter | il-opcodes assembly.dll method | inspect-signatures assembly.dll | simd128-probe inputs.bin");
+    Console.Error.WriteLine("Usage: LlvmNet.Checks compare-numeric expected actual absolute-tolerance | inspect assembly.dll | jit-all path... | inspect-methods assembly.dll name-filter | il-opcodes assembly.dll method | inspect-signatures assembly.dll | vector-calls assembly.dll | simd128-probe inputs.bin");
     return 2;
 }
 catch (Exception error)

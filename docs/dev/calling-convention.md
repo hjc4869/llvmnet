@@ -13,7 +13,9 @@ This page states which caller/callee signature differences llvmnet accepts. It f
 | `ptr` (any address space) | native `int` |
 | `float`, `double` | `float32`, `float64` |
 | `x86_fp80` | `LlvmNet.Runtime.Float80` |
-| structs, arrays, vectors | a generated explicit-layout value type per LLVM type (`Vector128<byte>` for 128-bit vectors under `--simd128`) |
+| structs, arrays | a generated explicit-layout value type per LLVM type |
+| vectors of 8- to 64-bit integers, pointers, `float`, `double`, `i1` | `Vector128<T>` up to 128 bits, a struct of `Vector128<T>` fields beyond (ADR-16 Level 1); a result of at most 16 bytes returns as the explicit-layout value type of its bytes; `Vector128<byte>` for 128-bit vectors under `--simd128` |
+| other vectors (`i24`, `i128`, `x86_fp80` lanes) | a generated explicit-layout value type per LLVM type |
 | variadic function | the fixed parameters plus one trailing native `int` pointing at the software `va_list` area |
 
 The `va_list` area mirrors x86-64's: a register save area of six 8-byte general slots and eight 16-byte floating-point slots, then an overflow area, with the `__va_list_tag` the callee's `va_start` copies in front. Clang lowers `va_arg` to the x86-64 rules, so the caller (`src/LlvmNet.Compiler/VarArgEmitter.cs`) places each variadic argument as the System V ABI classifies it: integers and pointers in general slots, `float` and `double` in floating-point slots, `long double` and aggregates passed `byval` in the overflow area, and a small aggregate, which Clang passes as its eightbytes (`{ i64, double }`), in one slot per eightbyte when they all fit, otherwise in the overflow area. `tests/varargs-aggregates.sh` compares the result with native.

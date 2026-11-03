@@ -9,6 +9,14 @@ internal sealed class CompilerOptions
     internal bool Verbose { get; set; }
     internal bool NativeAot { get; set; }
     internal bool Simd128 { get; set; }
+    /// <summary>
+    /// The hidden --vector-lowering choice, for comparisons and tests: auto (the default) lowers vector code to Vector128
+    /// except in the functions VectorEmitter.Legalize scalarizes, typed scalarizes only what the lowering cannot
+    /// translate, and scalar scalarizes every vector, as llvmnet did before the typed lowering.
+    /// </summary>
+    internal string VectorLowering { get; set; } = "auto";
+    /// <summary>Whether vector IR is lowered to Vector128 (ADR-16 Level 1); --simd128 keeps its own representation until SV-07.</summary>
+    internal bool TypedVectors => !Simd128 && VectorLowering != "scalar";
     internal bool TrapMissingArguments { get; set; }
     internal bool DiagnoseLimits { get; set; }
     internal bool CheckIndirectCalls { get; set; }
@@ -137,6 +145,10 @@ internal sealed class Invocation
                 case "--runtime": break;
                 case "--portable-sysroot": PortableAbi.SysrootOverride = Path.GetFullPath(value); break;
                 case "--simd128": Options.Simd128 = true; break;
+                case "--vector-lowering=":
+                    if (value is not ("auto" or "typed" or "scalar")) throw new ArgumentException("--vector-lowering requires auto, typed or scalar.");
+                    Options.VectorLowering = value;
+                    break;
                 case "--cil-reference": Options.CilReferences.Add(Path.GetFullPath(value)); break;
                 case "--system-library": Options.SystemLibraries.Add(value); break;
                 case "--extension": ExtensionNames.Add(value); break;
@@ -469,8 +481,11 @@ internal static class Driver
                 if (Llvm.LLVMWriteBitcodeToFile(prepared.Handle, linked) != 0)
                     throw new IOException("Cannot write the legalized module.");
             }
-            string scalarizer = options.Simd128 ? "scalarizer" : "scalarizer<load-store>";
-            string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,expand-reductions,scalarize-masked-mem-intrin,{scalarizer}),globaldce,verify";
+            // The typed vector lowering keeps vector code whole and scalarizes only the functions it does not translate
+            // (VectorEmitter.Legalize); --simd128 keeps 128-bit loads and stores whole, and without either every vector
+            // operation becomes scalar code.
+            string scalarizer = options.Simd128 ? ",scalarizer" : options.TypedVectors ? "" : ",scalarizer<load-store>";
+            string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,expand-reductions,scalarize-masked-mem-intrin{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
             if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (options.Runtime == "portable" ? ",__llvmnet_libc_main,__llvmnet_register_finalizer,__llvmnet_cxx_can_catch" : "") +
                 (options.Extensions.Count != 0 && options.Runtime == "portable" ? ",__llvmnet_attach_thread,__llvmnet_detach_thread" : ""));
