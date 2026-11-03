@@ -69,7 +69,7 @@ internal sealed class CilCompiler(CompilerOptions options)
     private bool MuslVisible(string name, MethodInfo method)
     {
         Type owner = method.DeclaringType!;
-        if (owner == typeof(HostSyscalls) || owner == typeof(NonLocalJumps) || owner == typeof(Simd128))
+        if (owner == typeof(HostSyscalls) || owner == typeof(NonLocalJumps) || owner == typeof(Simd128) || owner == typeof(NativeExtensions))
             return true;
         if (owner != typeof(Cxx)) return managedImports.Contains(name);
         // The bridge handles throwing, catching and termination (docs/dev/cxx-eh-bridge.md); libc++abi and musl supply
@@ -268,6 +268,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         if (options.Simd128)
             foreach (string name in runtimeExports.Keys.Where(name => name.StartsWith("__llvmnet_simd128_", StringComparison.Ordinal)))
                 managedImports.Add(name);
+        // <llvmnet/ext.h> answers from the runtime in both modes, not from a native library in system mode.
+        managedImports.UnionWith(["llvmnet_ext_available", "llvmnet_ext_library"]);
         ConstructorInfo metadataAttribute = typeof(AssemblyMetadataAttribute).GetConstructor([typeof(string), typeof(string)])!;
         assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.abi", options.AbiTag]));
         assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.version", BuildInfo.Version]));
@@ -292,8 +294,9 @@ internal sealed class CilCompiler(CompilerOptions options)
         }
         foreach (ExtensionPackage extension in options.Extensions)
             extensionProviders.Add(ExtensionProvider(extension));
-        if (options.Extensions.Count != 0)
-            assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.extensions", string.Join(", ", options.Extensions.Select(extension => extension.Tag))]));
+        if (options.Extensions.Count + options.SystemExtensions.Count != 0)
+            assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.extensions",
+                string.Join(", ", options.Extensions.Concat(options.SystemExtensions).Select(extension => extension.Tag))]));
         foreach (nint function in Llvm.Functions(module))
         {
             if (Llvm.LLVMIsDeclaration(function) != 0)
@@ -599,6 +602,13 @@ internal sealed class CilCompiler(CompilerOptions options)
         {
             il.Emit(OpCodes.Newobj, provider);
             il.Emit(OpCodes.Call, typeof(NativeExtensions).GetMethod(nameof(NativeExtensions.Register))!);
+        }
+        // In system mode the loader has linked the extension's libraries; <llvmnet/ext.h> still answers for it.
+        foreach (ExtensionPackage extension in options.SystemExtensions)
+        {
+            il.Emit(OpCodes.Ldstr, extension.Name);
+            il.Emit(OpCodes.Ldstr, string.Join(" ", extension.Linux));
+            il.Emit(OpCodes.Call, typeof(NativeExtensions).GetMethod(nameof(NativeExtensions.RegisterSystem))!);
         }
         // When linked, libc++abi's catch matcher (ports/libcxxabi/llvmnet-catch.cpp) decides which handlers catch an exception.
         nint catchMatcher = Llvm.LLVMGetNamedFunction(module, "__llvmnet_cxx_can_catch");

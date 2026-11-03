@@ -1,3 +1,7 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
+using System.Text;
+
 namespace LlvmNet.Runtime;
 
 /// <summary>
@@ -22,6 +26,14 @@ public abstract class NativeExtension
         Libraries = [.. libraries];
     }
 
+    /// <summary>An extension that serves no dlopen name (<see cref="SystemModeExtension"/>).</summary>
+    private protected NativeExtension(string name)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        Name = name;
+        Libraries = [];
+    }
+
     public string Name { get; }
 
     public IReadOnlyList<string> Libraries { get; }
@@ -39,6 +51,43 @@ public abstract class NativeExtension
     /// would natively. Translated code calls the pointer with the CIL signature of the C prototype it was cast to.
     /// </summary>
     public abstract nint Resolve(string library, string symbol);
+
+    /// <summary>
+    /// Why the extension cannot be used on this host (a host library that does not load, a required function it does not
+    /// provide), or null when it can; llvmnet_ext_available reports it, and it may load the host libraries. The default
+    /// is for extensions whose stubs need no host library.
+    /// </summary>
+    public virtual string? Unavailable() => null;
+
+    /// <summary>What the extension loaded (one line per host library with its path) or why it could not, for
+    /// llvmnet_ext_library.</summary>
+    public virtual string Report() => Unavailable() ?? $"{Name}: no host library";
+
+    /// <summary>
+    /// Ends the process with one line on standard error, "llvmnet: " and the message, and exit status 127, as a native
+    /// loader does when a library or a lazily bound function is missing; extension stubs call it when their host function
+    /// is not available and they have no default implementation.
+    /// </summary>
+    [DoesNotReturn]
+    public static void Fail(string message)
+    {
+        Console.Out.Flush();
+        Console.Error.WriteLine("llvmnet: " + message);
+        Environment.Exit(127);
+        throw new InvalidOperationException(message);
+    }
+}
+
+/// <summary>
+/// A native extension linked into a system-mode image (--extension in system mode), where the program calls the host
+/// libraries through generated bridges and the system loader has loaded them before the program started; it serves no
+/// dlopen name and is registered so that llvmnet_ext_available and llvmnet_ext_library answer as in portable mode.
+/// </summary>
+public sealed class SystemModeExtension(string name, string libraries) : NativeExtension(name)
+{
+    public override nint Resolve(string library, string symbol) => 0;
+
+    public override string Report() => $"{Name}: linked in system mode with {libraries}";
 }
 
 /// <summary>The registry of the native extensions that serve dlopen in this process.</summary>
@@ -65,9 +114,56 @@ public static class NativeExtensions
         }
     }
 
+    /// <summary>Registers a system-mode image's extension (<see cref="SystemModeExtension"/>); emitted image initializers
+    /// call this with the extension's name and its Linux libraries.</summary>
+    public static void RegisterSystem(string name, string libraries) => Register(new SystemModeExtension(name, libraries));
+
     /// <summary>The registered extension that serves a library name, or null.</summary>
     internal static NativeExtension? Find(string library)
     {
         lock (gate) return registered.FirstOrDefault(extension => extension.Libraries.Contains(library));
+    }
+
+    /// <summary>The registered extension of a name, or null.</summary>
+    internal static NativeExtension? Named(string name)
+    {
+        lock (gate) return registered.FirstOrDefault(extension => extension.Name == name);
+    }
+
+    private static readonly Dictionary<string, nint> reports = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// int llvmnet_ext_available(const char *name) (&lt;llvmnet/ext.h&gt;): 1 when the program is linked with the native
+    /// extension of that name and the extension can be used on this host, which loads its host libraries; else 0.
+    /// </summary>
+    [CExport("llvmnet_ext_available")]
+    public static int Available(nint name)
+    {
+        if (name == 0 || Named(Marshal.PtrToStringUTF8(name)!) is not NativeExtension extension) return 0;
+        try { return extension.Unavailable() is null ? 1 : 0; }
+        catch (Exception error) when (error is not OutOfMemoryException) { return 0; }
+    }
+
+    /// <summary>
+    /// const char *llvmnet_ext_library(const char *name) (&lt;llvmnet/ext.h&gt;): what the named extension loaded or why it
+    /// could not, one line per host library, in a string that stays valid until the process ends; NULL when the program is
+    /// not linked with the extension.
+    /// </summary>
+    [CExport("llvmnet_ext_library")]
+    public static unsafe nint Library(nint name)
+    {
+        if (name == 0 || Named(Marshal.PtrToStringUTF8(name)!) is not NativeExtension extension) return 0;
+        string report;
+        try { report = extension.Report(); }
+        catch (Exception error) when (error is not OutOfMemoryException) { report = $"{extension.Name}: {error.Message}"; }
+        lock (reports)
+        {
+            if (reports.TryGetValue(report, out nint existing)) return existing;
+            byte[] bytes = Encoding.UTF8.GetBytes(report + "\0");
+            nint copy = (nint)NativeMemory.Alloc((nuint)bytes.Length);
+            bytes.CopyTo(new Span<byte>((void*)copy, bytes.Length));
+            reports.Add(report, copy);
+            return copy;
+        }
     }
 }

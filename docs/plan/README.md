@@ -246,7 +246,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M7 | 0.7 | exit items done; signed packages from a tag need the repository on GitHub (FD-19) | 0 | 2026-10-31 |
 | M8 | 0.7 | exit items done (PF-01, PF-02, benchmark table published); the first GitHub run of the nightly benchmark job needs FD-19. P1: PF-03, 04, 05, 08, 10, 11, 13, 14, 16 done, PF-06, PF-07 and PF-15 in progress | 0 | 2026-11-02 |
 | M9 | 1.0-rc | in progress: WG-02, 03, 04, 05, 09 done, WG-01 at 99.1% portable and 98.8% system (target 99%), WG-06 not run (FD-21); RL-02, 05, 08, 09 done; two nightlies on a release candidate need GitHub (FD-19) | 2 (WG-01, WG-06) | 2026-11-01 |
-| M10 | before 1.0 | ADR-15 accepted (NX); NX-02 (`dlopen` over registered extensions) and NX-03 (extension packages, `--extension`) done as compatible additions to `dotnet64-v2`; the generator and `gles` (NX-04, NX-05) are next | 0 | 2026-11-03 |
+| M10 | before 1.0 | ADR-15 accepted (NX-01); NX-02 (`dlopen` over registered extensions), NX-03 (extension packages, `--extension`) and NX-04 (the generator, `scripts/build-extensions.sh`) done; `gles` (NX-05) and the documentation (NX-06) are next | 0 | 2026-11-03 |
 | M11 | before 1.0 | ADR-16 accepted (SV); survey done, nothing implemented | 0 | 2026-11-03 |
 
 ### M0: Foundations

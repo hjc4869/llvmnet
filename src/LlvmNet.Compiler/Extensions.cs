@@ -23,6 +23,12 @@ internal sealed record ExtensionPackage(string Name, string Version, string Dire
 
 internal static partial class Extensions
 {
+    /// <summary>
+    /// The directory of &lt;llvmnet/ext.h&gt;, which declares llvmnet_ext_available and llvmnet_ext_library: on the include
+    /// path in both modes, outside the frozen dotnet64-v2 header set.
+    /// </summary>
+    internal static string InterfaceInclude => Path.Combine(Toolchain.Root, "sysroot", "extensions", "include");
+
     /// <summary>The portable sysroot's ext/ directory; system mode reads the toolchain's own.</summary>
     internal static string Root => Path.Combine(PortableAbi.Sysroot, "ext");
 
@@ -102,7 +108,8 @@ internal static partial class Extensions
         foreach (string header in package.Headers.Where(header => !File.Exists(Path.Combine(package.Include, header))))
             problems.Add($"its header {header} is missing from {package.Include}");
         foreach (string header in Headers(package))
-            if (File.Exists(Path.Combine(PortableAbi.Sysroot, "include", header)) || File.Exists(Path.Combine(PortableAbi.Sysroot, "include", "c++", "v1", header)))
+            if (File.Exists(Path.Combine(PortableAbi.Sysroot, "include", header)) || File.Exists(Path.Combine(PortableAbi.Sysroot, "include", "c++", "v1", header)) ||
+                File.Exists(Path.Combine(InterfaceInclude, header)))
                 problems.Add($"its header {header} clashes with the sysroot's {header}");
         foreach (string library in package.Link.Where(SysrootLibraries().Contains))
             problems.Add($"-l{library} clashes with the sysroot's library of that name");

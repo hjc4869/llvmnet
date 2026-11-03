@@ -19,6 +19,8 @@ internal sealed class CompilerOptions
     internal List<string> CilReferences { get; } = [];
     /// <summary>Native extensions an image links (portable mode): referenced, registered at start and listed in its metadata.</summary>
     internal List<ExtensionPackage> Extensions { get; } = [];
+    /// <summary>Native extensions a system-mode image links: their Linux libraries, registered by name and listed in its metadata.</summary>
+    internal List<ExtensionPackage> SystemExtensions { get; } = [];
 }
 
 /// <summary>One link input: a source or object with the language in effect for it (from -x), or an archive with its whole-archive state.</summary>
@@ -292,6 +294,7 @@ internal static class Driver
                 preprocessing.AddRange(["-o", invocation.Output]);
             bool fortranInput = driver == "flang" || inputs.Any(IsFortran);
             if (options.Runtime == "portable") preprocessing.InsertRange(0, PortableAbi.Arguments(frontend, fortranInput, driver == "clang++" || inputs.Any(IsCpp)));
+            else if (!fortranInput) preprocessing.InsertRange(0, ["-idirafter", Extensions.InterfaceInclude]);
             if (driver == "clang++") preprocessing.Insert(0, "--driver-mode=g++");
             return Toolchain.Run(fortranInput ? flang : clang, preprocessing, verbose, options.Runtime == "portable");
         }
@@ -335,6 +338,8 @@ internal static class Driver
                 if (driver == "clang++") command.Add("--driver-mode=g++");
                 // LLVM IR gets the mode's target and macros only; its headers and feature macros do not apply.
                 if (options.Runtime == "portable") command.AddRange(ir ? PortableAbi.Arguments(frontend, true, false) : PortableAbi.Arguments(frontend, fortran, cpp));
+                // <llvmnet/ext.h> after the host's headers, so that it shadows nothing.
+                else if (!fortran && !ir) command.AddRange(["-idirafter", Extensions.InterfaceInclude]);
                 if (fortran)
                 {
                     if (!invocation.ModuleDirectoryGiven)
@@ -391,6 +396,7 @@ internal static class Driver
                 {
                     if (extension.Linux.Count == 0) throw new InvalidOperationException($"native extension '{extension.Name}' names no Linux library for system mode.");
                     options.SystemLibraries.AddRange(extension.Linux.Except(options.SystemLibraries));
+                    options.SystemExtensions.Add(extension);
                     continue;
                 }
                 options.CilReferences.Add(extension.Assembly);

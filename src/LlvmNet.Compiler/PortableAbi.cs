@@ -50,7 +50,7 @@ internal static class PortableAbi
             // clang++ defines _GNU_SOURCE on Linux targets and libc++ relies on it; the portable target is freestanding.
             result.AddRange(["-D_GNU_SOURCE", "-nostdinc++", "-isystem", cppInclude]);
         }
-        result.AddRange(["-isystem", include]);
+        result.AddRange(["-isystem", include, "-isystem", Extensions.InterfaceInclude]);
         foreach (string directory in Extensions.IncludeDirectories())
             result.AddRange(["-isystem", directory]);
         string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");

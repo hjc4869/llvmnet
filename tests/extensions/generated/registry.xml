@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A synthetic API registry in the Khronos format (tests/ext-gen.sh, NX-04): every kind of type and entry point the
+     generator handles, for one API, gen, in two host libraries. include/llvmnet-gen.h is its header. -->
+<registry>
+    <types>
+        <type name="stdint">#include &lt;stdint.h&gt;</type>
+        <type requires="stdint">typedef int8_t <name>GENbyte</name>;</type>
+        <type requires="stdint">typedef uint8_t <name>GENubyte</name>;</type>
+        <type requires="stdint">typedef int16_t <name>GENshort</name>;</type>
+        <type requires="stdint">typedef uint16_t <name>GENushort</name>;</type>
+        <type>typedef int <name>GENint</name>;</type>
+        <type>typedef unsigned int <name>GENuint</name>;</type>
+        <type requires="stdint">typedef int64_t <name>GENint64</name>;</type>
+        <type requires="stdint">typedef uint64_t <name>GENuint64</name>;</type>
+        <type requires="stdint">typedef intptr_t <name>GENintptr</name>;</type>
+        <type requires="stdint">typedef uintptr_t <name>GENsizeiptr</name>;</type>
+        <type>typedef int <name>GENsizei</name>;</type>
+        <type>typedef float <name>GENfloat</name>;</type>
+        <type>typedef double <name>GENdouble</name>;</type>
+        <type>typedef char <name>GENchar</name>;</type>
+        <type>typedef struct GENobject_T *<name>GENobject</name>;</type>
+        <type name="GENplatform">#ifdef _WIN32
+typedef void *GENplatform;
+#else
+typedef unsigned int GENplatform;
+#endif</type>
+        <type>typedef GENint (*<name>GENcallback</name>)(GENint value, GENubyte flag, GENshort level, void *user);</type>
+        <type>typedef void (*<name>GENlogproc</name>)(const GENchar *message, GENshort level);</type>
+        <type>typedef void (*<name>GENotherproc</name>)(void);</type>
+        <type>typedef void (*<name>GENproc</name>)(void);</type>
+    </types>
+    <commands>
+        <command><proto><ptype>GENint</ptype> <name>genAdd</name></proto><param><ptype>GENint</ptype> <name>a</name></param><param><ptype>GENint</ptype> <name>b</name></param></command>
+        <command><proto><ptype>GENubyte</ptype> <name>genLow</name></proto><param><ptype>GENuint</ptype> <name>value</name></param></command>
+        <command><proto><ptype>GENbyte</ptype> <name>genNegateByte</name></proto><param><ptype>GENbyte</ptype> <name>value</name></param></command>
+        <command><proto><ptype>GENshort</ptype> <name>genMix</name></proto><param><ptype>GENubyte</ptype> <name>a</name></param><param><ptype>GENshort</ptype> <name>b</name></param><param><ptype>GENushort</ptype> <name>c</name></param></command>
+        <command><proto><ptype>GENushort</ptype> <name>genSwap</name></proto><param><ptype>GENushort</ptype> <name>value</name></param></command>
+        <command><proto><ptype>GENint64</ptype> <name>genWide</name></proto><param><ptype>GENint64</ptype> <name>value</name></param><param><ptype>GENuint64</ptype> <name>shift</name></param></command>
+        <command><proto><ptype>GENsizeiptr</ptype> <name>genSpan</name></proto><param><ptype>GENintptr</ptype> <name>start</name></param><param><ptype>GENsizeiptr</ptype> <name>length</name></param></command>
+        <command><proto><ptype>GENdouble</ptype> <name>genScale</name></proto><param><ptype>GENdouble</ptype> <name>value</name></param><param><ptype>GENfloat</ptype> <name>factor</name></param></command>
+        <command><proto><ptype>GENfloat</ptype> <name>genHalve</name></proto><param><ptype>GENfloat</ptype> <name>value</name></param></command>
+        <command><proto>const <ptype>GENchar</ptype> *<name>genName</name></proto></command>
+        <command><proto><ptype>GENsizei</ptype> <name>genFormat</name></proto><param><ptype>GENchar</ptype> *<name>buffer</name></param><param><ptype>GENsizei</ptype> <name>size</name></param><param>const <ptype>GENchar</ptype> *<name>text</name></param><param><ptype>GENint</ptype> <name>value</name></param></command>
+        <command><proto><ptype>GENobject</ptype> <name>genCreate</name></proto><param><ptype>GENint</ptype> <name>id</name></param></command>
+        <command><proto><ptype>GENint</ptype> <name>genObjectId</name></proto><param><ptype>GENobject</ptype> <name>object</name></param></command>
+        <command><proto>void <name>genDestroy</name></proto><param><ptype>GENobject</ptype> <name>object</name></param></command>
+        <command><proto>void <name>genRegister</name></proto><param><ptype>GENcallback</ptype> <name>callback</name></param><param>void *<name>user</name></param></command>
+        <command><proto><ptype>GENint</ptype> <name>genFire</name></proto><param><ptype>GENint</ptype> <name>value</name></param></command>
+        <command><proto>void <name>genSetLogger</name></proto><param><ptype>GENlogproc</ptype> <name>logger</name></param></command>
+        <command><proto>void <name>genLog</name></proto><param>const <ptype>GENchar</ptype> *<name>message</name></param><param><ptype>GENshort</ptype> <name>level</name></param></command>
+        <command><proto>void <name>genSetOther</name></proto><param><ptype>GENotherproc</ptype> <name>other</name></param></command>
+        <command><proto><ptype>GENotherproc</ptype> <name>genGetOther</name></proto></command>
+        <command><proto><ptype>GENint</ptype> <name>genPlatformValue</name></proto><param><ptype>GENplatform</ptype> <name>platform</name></param></command>
+        <command><proto><ptype>GENint</ptype> <name>genStatus</name></proto></command>
+        <command><proto><ptype>GENproc</ptype> <name>genGetProcAddress</name></proto><param>const <ptype>GENchar</ptype> *<name>name</name></param></command>
+        <command><proto><ptype>GENint</ptype> <name>genTwiceEXT</name></proto><param><ptype>GENint</ptype> <name>value</name></param></command>
+        <command><proto><ptype>GENint</ptype> <name>genMissingEXT</name></proto><param><ptype>GENint</ptype> <name>value</name></param></command>
+        <command><proto><ptype>GENint</ptype> <name>genAuxValue</name></proto></command>
+        <command><proto><ptype>GENint</ptype> <name>genOtherApi</name></proto></command>
+    </commands>
+    <feature api="gen" name="GEN_VERSION_1_0" number="1.0">
+        <require>
+            <command name="genAdd"/><command name="genLow"/><command name="genNegateByte"/><command name="genMix"/>
+            <command name="genSwap"/><command name="genWide"/><command name="genSpan"/><command name="genScale"/>
+            <command name="genHalve"/><command name="genName"/><command name="genFormat"/><command name="genCreate"/>
+            <command name="genObjectId"/><command name="genDestroy"/><command name="genRegister"/><command name="genFire"/>
+            <command name="genSetLogger"/><command name="genLog"/><command name="genSetOther"/><command name="genGetOther"/>
+            <command name="genPlatformValue"/><command name="genStatus"/><command name="genGetProcAddress"/>
+        </require>
+    </feature>
+    <feature api="genaux" name="GENAUX_VERSION_1_0" number="1.0">
+        <require><command name="genAuxValue"/></require>
+    </feature>
+    <feature api="other" name="OTHER_VERSION_1_0" number="1.0">
+        <require><command name="genOtherApi"/></require>
+    </feature>
+    <extensions>
+        <extension name="GEN_EXT_twice" supported="gen">
+            <require><command name="genTwiceEXT"/><command name="genMissingEXT"/></require>
+        </extension>
+        <extension name="GEN_EXT_other_only" supported="other">
+            <require><command name="genOtherApi"/></require>
+        </extension>
+    </extensions>
+</registry>

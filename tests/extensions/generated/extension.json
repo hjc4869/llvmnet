@@ -1,0 +1,34 @@
+{
+  "name": "generated",
+  "version": "2.1.0",
+  "summary": "The synthetic API of tests/ext-gen.sh, in two host libraries",
+  "registries": [
+    { "path": "registry.xml", "apis": ["gen"], "library": "Gen" },
+    { "path": "registry.xml", "apis": ["genaux"], "library": "GenAux" }
+  ],
+  "libraries": [
+    {
+      "name": "GenAux",
+      "linux": ["libllvmnet-gen-aux.so.1"],
+      "windows": ["llvmnet-gen-aux.dll"],
+      "macos": ["libllvmnet-gen-aux.dylib"],
+      "dlopen": ["libllvmnet-gen-aux.so.1"]
+    },
+    {
+      "name": "Gen",
+      "linux": ["libllvmnet-gen.so.1"],
+      "windows": ["llvmnet-gen.dll"],
+      "macos": ["libllvmnet-gen.dylib"],
+      "dlopen": ["libllvmnet-gen.so.1", "libllvmnet-gen.so"],
+      "preload": ["GenAux"]
+    }
+  ],
+  "link": ["llvmnet-gen"],
+  "lookup": { "command": "genGetProcAddress" },
+  "exclude-types": ["GENplatform"],
+  "callbacks": { "GENcallback": 2, "GENlogproc": 2 },
+  "defaults": { "genStatus": "0x77" },
+  "required": ["genAdd", "genAuxValue"],
+  "headers": [{ "from": "include", "files": ["llvmnet-gen.h"] }],
+  "checks": [{ "name": "gen", "apis": ["gen", "genaux"], "includes": ["llvmnet-gen.h"] }]
+}
