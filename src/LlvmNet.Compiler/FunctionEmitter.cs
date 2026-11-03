@@ -376,6 +376,8 @@ internal sealed class FunctionEmitter : ValueEmitter
             case 50 when Types.Vector(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0))) is not null:
                 Vectors.Extract(value);
                 break;
+            case 51 when VectorEmitter.Chained(value):
+                return;
             case 51 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null:
                 Vectors.Insert(value);
                 break;
@@ -993,8 +995,8 @@ internal sealed class FunctionEmitter : ValueEmitter
     /// definition, its uses and the blocks it is live into or out of (SSA liveness); a phi's starts at the edges
     /// that store it. Ranges that share a position conflict, so an instruction's result never shares a local with its
     /// operands, as an instruction may store part of its result before it has read all of them. The emitter reads the
-    /// operands of a comparison, a shuffle or an insertelement where those are used (Order, LoadMask, SplatScalar), so
-    /// they count as used there too. Only functions of more than 512
+    /// operands of a comparison, a shuffle or an insertelement where those are used (Order, LoadMask, SplatScalar, a
+    /// chain of insertelements built at its end), so they count as used there too. Only functions of more than 512
     /// values share: RyuJIT allocates registers per local, so values sharing one share an allocation, which added
     /// moves to small hot loops (heapsort and lpbench 10 to 15% slower). A function with setjmp keeps a local for
     /// each value, as the jump dispatch re-enters the body at its call sites.

@@ -149,10 +149,28 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// <summary>A helper of <see cref="Vectors"/> with these parameter types, generic ones instantiated with the lane.</summary>
     private static MethodInfo Helper(string name, Type? lane, params Type[] parameters) => Lookup(typeof(Vectors), name, lane, parameters);
 
+    /// <summary>
+    /// The operators of Vector128&lt;T&gt; and Vector256&lt;T&gt; for the element-wise methods of the same meaning. RyuJIT
+    /// expands the operators itself, while .NET 10 implements Add, Xor, ShiftLeft and the others with them and relies on
+    /// inlining, which RyuJIT stops in a method of about 920 locals (90% of JitMaxLocalsToTrack); a large translated
+    /// function would call them.
+    /// </summary>
+    private static readonly Dictionary<string, string> Operators = new()
+    {
+        ["Add"] = "op_Addition", ["Subtract"] = "op_Subtraction", ["Multiply"] = "op_Multiply", ["Divide"] = "op_Division",
+        ["BitwiseAnd"] = "op_BitwiseAnd", ["BitwiseOr"] = "op_BitwiseOr", ["Xor"] = "op_ExclusiveOr",
+        ["OnesComplement"] = "op_OnesComplement", ["Negate"] = "op_UnaryNegation", ["ShiftLeft"] = "op_LeftShift",
+        ["ShiftRightArithmetic"] = "op_RightShift", ["ShiftRightLogical"] = "op_UnsignedRightShift",
+    };
+
     private static MethodInfo Lookup(Type type, string name, Type? lane, Type[] parameters) =>
         Methods.GetOrAdd((type, name, lane, string.Join(",", parameters.Select(parameter => parameter.FullName))), _ =>
         {
-            MethodInfo[] candidates = type.GetMethods(BindingFlags.Public | BindingFlags.Static).Where(method => method.Name == name)
+            (Type declaring, string member) = (type, name);
+            if ((type == typeof(Vector128) || type == typeof(Vector256)) && Operators.TryGetValue(name, out string? op) &&
+                parameters[0].IsGenericType && parameters[0].GetGenericTypeDefinition() == (type == typeof(Vector128) ? typeof(Vector128<>) : typeof(Vector256<>)))
+                (declaring, member) = (parameters[0], op);
+            MethodInfo[] candidates = declaring.GetMethods(BindingFlags.Public | BindingFlags.Static).Where(method => method.Name == member)
                 .OrderBy(method => method.IsGenericMethodDefinition).ToArray();
             foreach (MethodInfo method in candidates)
             {
@@ -1012,20 +1030,58 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             il.Emit(OpCodes.Conv_I);
     }
 
+    /// <summary>
+    /// Whether an insertelement at a constant lane only feeds the next one of the same block, which builds the vector
+    /// with the lanes of the whole chain (<see cref="Insert"/>); it emits nothing itself. Without SSE4.1, as baseline
+    /// NativeAOT on x64 compiles, WithElement of a 32-bit lane goes through memory, and a chain of them stalls each
+    /// store's forwarding (perlin's vectorized loop as NativeAOT: 2.9 s, 0.83 s with x86-64-v3), while Create of the
+    /// lanes is a few register instructions on every host.
+    /// </summary>
+    internal static bool Chained(nint value)
+    {
+        if (Llvm.LLVMIsAConstantInt(Llvm.LLVMGetOperand(value, 2)) == 0) return false;
+        nint use = Llvm.LLVMGetFirstUse(value);
+        if (use == 0 || Llvm.LLVMGetNextUse(use) != 0) return false;
+        nint user = Llvm.LLVMGetUser(use);
+        return Llvm.LLVMIsAInstruction(user) != 0 && Llvm.LLVMGetInstructionOpcode(user) == 51 && Llvm.LLVMGetOperand(user, 0) == value &&
+            Llvm.LLVMIsAConstantInt(Llvm.LLVMGetOperand(user, 2)) != 0 && Llvm.LLVMGetInstructionParent(user) == Llvm.LLVMGetInstructionParent(value);
+    }
+
     internal void Insert(nint value)
     {
         nint vector = Llvm.LLVMGetOperand(value, 0), element = Llvm.LLVMGetOperand(value, 1), position = Llvm.LLVMGetOperand(value, 2);
         VectorShape shape = Shape(value);
         if (Llvm.LLVMIsAConstantInt(position) != 0)
         {
-            long index = Llvm.LLVMConstIntGetSExtValue(position);
+            // The lanes of the chain this insertelement ends, the last insert of a lane winning, and the vector it starts from.
+            var lanes = new nint[shape.Lanes];
+            for (nint current = value; ; current = vector)
+            {
+                long index = Llvm.LLVMConstIntGetSExtValue(Llvm.LLVMGetOperand(current, 2));
+                if ((ulong)index < (ulong)shape.Lanes && lanes[index] == 0) lanes[index] = Llvm.LLVMGetOperand(current, 1);
+                vector = Llvm.LLVMGetOperand(current, 0);
+                if (Llvm.LLVMIsAInstruction(vector) == 0 || Llvm.LLVMGetInstructionOpcode(vector) != 51 || !Chained(vector)) break;
+            }
+            bool fresh = Llvm.LLVMIsUndef(vector) != 0 || Llvm.LLVMIsPoison(vector) != 0 || Llvm.LLVMIsNull(vector) != 0;
             Build(shape, fragment =>
             {
+                int first = fragment * shape.PerFragment;
+                if (fresh)
+                {
+                    for (int lane = first; lane < first + shape.PerFragment; lane++)
+                        if (lane < shape.Lanes && lanes[lane] != 0) LaneValue(lanes[lane], shape);
+                        else Scalar(shape.Lane, 0);
+                    il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(shape.Lane, shape.PerFragment).ToArray()));
+                    return;
+                }
                 Fragment(vector, fragment);
-                if ((ulong)index >= (ulong)shape.Lanes || index / shape.PerFragment != fragment) return;
-                il.Emit(OpCodes.Ldc_I4, (int)(index % shape.PerFragment));
-                LaneValue(element, shape);
-                il.Emit(OpCodes.Call, Api("WithElement", shape.Lane, V(shape.Lane), typeof(int), shape.Lane));
+                for (int lane = first; lane < Math.Min(first + shape.PerFragment, shape.Lanes); lane++)
+                {
+                    if (lanes[lane] == 0) continue;
+                    il.Emit(OpCodes.Ldc_I4, lane - first);
+                    LaneValue(lanes[lane], shape);
+                    il.Emit(OpCodes.Call, Api("WithElement", shape.Lane, V(shape.Lane), typeof(int), shape.Lane));
+                }
             });
             return;
         }
@@ -1125,9 +1181,21 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             }
             if (sources.Count == 2 && Halves(sources) is var (lower, upper))
             {
-                SourceHalf(lower);
-                SourceHalf(upper);
-                il.Emit(OpCodes.Call, Api("Create", result.Lane, Half(result.Lane), Half(result.Lane)));
+                if (Wide)
+                {
+                    SourceHalf(lower);
+                    SourceHalf(upper);
+                    il.Emit(OpCodes.Call, Api("Create", result.Lane, Half(result.Lane), Half(result.Lane)));
+                }
+                else
+                {
+                    // The halves of a Vector128 as the lanes of a Vector128<double>: unpcklpd and unpckhpd, or ins on
+                    // ARM64. Vector64 has no hardware acceleration on x64, where Create of two goes through memory.
+                    SourceElement(lower);
+                    SourceElement(upper);
+                    il.Emit(OpCodes.Call, Api("Create", null, typeof(double), typeof(double)));
+                    As(typeof(double), result.Lane);
+                }
                 return;
             }
             bool firstSource = true;
@@ -1156,6 +1224,14 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         {
             Source(half.Operand, half.Fragment);
             il.Emit(OpCodes.Call, Api(half.Upper ? "GetUpper" : "GetLower", result.Lane, V(result.Lane)));
+        }
+
+        void SourceElement((int Operand, int Fragment, bool Upper) half)
+        {
+            Source(half.Operand, half.Fragment);
+            As(result.Lane, typeof(double));
+            il.Emit(half.Upper ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Call, Api("GetElement", typeof(double), V(typeof(double)), typeof(int)));
         }
 
         void Permute(int operand, int fragment, int[] pattern)
@@ -1528,6 +1604,21 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             });
             return true;
         }
+        if (operation == "copysign")
+        {
+            // The sign bit of the second operand and the other bits of the first; Vector128.CopySign is a call in a
+            // method too large for RyuJIT to inline (see Operators).
+            Build(shape, index =>
+            {
+                if (shape.Lane == typeof(float)) il.Emit(OpCodes.Ldc_R4, -0.0f);
+                else il.Emit(OpCodes.Ldc_R8, -0.0);
+                il.Emit(OpCodes.Call, Api("Create", null, shape.Lane));
+                Fragment(Operand(1), index);
+                Fragment(Operand(0), index);
+                Call("ConditionalSelect", shape.Lane, 3);
+            });
+            return true;
+        }
         if (operation == "round")
         {
             Build(shape, index =>
@@ -1548,7 +1639,6 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             "maxnum" => ("MaxNumber", 2, true),
             "minimum" => ("Min", 2, true),
             "maximum" => ("Max", 2, true),
-            "copysign" => ("CopySign", 2, true),
             "floor" => ("Floor", 1, false),
             "ceil" => ("Ceiling", 1, false),
             "trunc" => ("Truncate", 1, false),

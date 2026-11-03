@@ -103,6 +103,75 @@ SV-03 lowers the remaining integer intrinsics and moves the reductions into the 
 
 The module pair has 22,377 cases in 1,541 probes (`vector-integer` 13,144, `vector-float` 9,233). With seed 20261103 they print what the natively compiled modules print, byte for byte: in system and portable mode with `--vector-lowering=typed` (nothing scalarized), in portable mode with the default lowering (which scalarizes the lane-access probes), with `DOTNET_EnableHWIntrinsic=0`, with `DOTNET_EnableAVX=0` and as NativeAOT. `tests/vector-semantics.sh` runs all of that in 22 s. The portable images, copied with the native output, match on Windows x64 (`fluorite`), macOS ARM64 (`mainmac`) and Linux ARM64 (the arm64 runtime container under qemu), each with and without hardware intrinsics, so NEON's comparison, conversion and minimum rules agree with x64's. `tests/vector-fuzz.sh`, in the nightly fuzz job, repeats the run for ten seeds that change the random lanes, reduction inputs and shuffle masks; seeds 1 to 4 passed. No case mismatched in any of these runs.
 
+## SV-05: autovectorization
+
+`scripts/benchmark.py --vectorized` adds three engines that build the same sources with `-O2 -fvectorize -fslp-vectorize` on both compilers (`--vector-flags` replaces the flags): `native-vec`, whose ratio is to the scalar native build, so it is native's own vectorization gain, and `jit-vec` and `aot-vec`, whose ratios are to `native-vec`. The ffmpeg decoder keeps only its scalar engines. ptrdist-ft, whose output depends on glibc's `random` and is checked against native musl, failed in the first run because its glibc-linked vectorized native build was compared with musl too; the harness now compares only the llvmnet engines with the oracle.
+
+### What the first run found
+
+The first run, with the compiler at `ee9304b`, put the vectorized JIT at 2.22 and the vectorized NativeAOT at 1.54 times vectorized native, against 1.95 and 1.32 for the scalar builds: vectorizing made llvmnet 9 to 12% slower where it made native 3% faster. Three causes, each fixed:
+
+- **oourafft, 14 times slower vectorized.** In `cftmdl` (1,201 locals) RyuJIT left 500 `Vector128.Add`, `Multiply`, `Subtract`, `Xor`, `GetLower`, `GetUpper` and `Create` calls uninlined at full optimization. .NET 10 implements the element-wise methods with the `Vector128<T>` operators, and RyuJIT reaches its intrinsic expansion only by inlining, which it stops at about 920 locals. A probe calls every public `Vector128` and `Vector256` method, instantiated for eight lane types, from a dynamic method of 1,000 locals and lists those that stay calls: `Add`, `Subtract`, `Multiply`, `Divide`, `BitwiseAnd`, `BitwiseOr`, `Xor`, `Negate`, `OnesComplement`, the three shifts, `CopySign`, `Widen`, `Clamp`, the `All`/`Any`/`Count`/`IndexOf` family, the `Vector64` halves (`GetLower`, `GetUpper`, `WithLower`, `WithUpper`, `Create` of halves) and integer division and `Sqrt`. The operators, comparisons, `ConditionalSelect`, `Shuffle`, `Min`/`Max`, `Narrow`, `WidenLower`/`WidenUpper`, the conversions, `GetElement`, `WithElement`, `Create` of lanes and `As` stay intrinsics. The emitter now calls the operators for the element-wise methods, lowers `copysign` to a sign-bit `ConditionalSelect`, and combines the 64-bit halves of 128-bit fragments as lanes of a `Vector128<double>` (`GetElement` and `Create`: `unpcklpd`/`unpckhpd` on x64) instead of through `Vector64`, which x64 does not accelerate and RyuJIT builds through memory. oourafft went from 17.9 to 1.33 s (1.54 s with its vectors scalarized).
+- **stepanov-abstraction, 7 times slower vectorized.** Its vectorized `main` has 1,499 locals, past the 1,024 RyuJIT keeps in registers. That is BE-33, now done for locals: values whose live ranges do not meet share one ([evidence](2026-11-04-be33-local-sharing.md)). 12 to 17 s became 1.73 s (1.70 s scalar).
+- **perlin, 2.6 times slower as baseline NativeAOT.** Its loop builds `<2 x i32>` vectors with `insertelement`. Without SSE4.1 (`pinsrd`), which ILC's default `x86-64` level does not assume, `WithElement` of a 32-bit lane stores the vector, writes the lane and reloads it, and the next insert's load waits for the store. A chain of insertelements at constant lanes is now one `Create` of its lanes (`movd` and `punpckldq` at SSE2), or over a non-constant vector one `WithElement` per lane without the intermediate vectors. Baseline NativeAOT went from 2.90 to 0.88 s (1.02 scalar, 0.83 at `x86-64-v3`). A NativeAOT probe of the other operations the vectorizers emit for the portable target (`WidenLower` of signed and unsigned lanes, `Narrow`, unsigned `LessThan`, `ConditionalSelect`, constant `Shuffle` of doubles and 32-bit lanes, `ConvertToDouble` of `long`, `Create`, `GetElement`) found each compiled to SSE2 sequences without calls at the baseline. `FusedMultiplyAdd` calls the C runtime's `fma` per lane there, which is why `fmuladd` stays a multiply and an add.
+
+### The benchmark set at `-O2`
+
+With the fixes and BE-33, the 58 programs validate in all six engines. In the final run (3 runs each), the vectorized builds stand at 1.97 (JIT) and 1.34 (NativeAOT) times vectorized native, against 1.94 and 1.32 for the scalar builds against scalar native (53 programs vectorized, 57 scalar); the first run's were 2.22 and 1.54. Vectorization gains, scalar time over vectorized time per engine (geometric means; above 1 is faster):
+
+| | native | JIT | NativeAOT |
+| --- | ---: | ---: | ---: |
+| all 53 programs | 1.031 | 1.009 | 1.006 |
+| programs running at least 0.2 s in that engine | 1.021 (41) | 1.015 (47) | 1.013 (42) |
+| the same, in the run before the final one | 1.018 | 1.026 | 1.014 |
+| linpack | 1.94 | 1.82 | 1.64 |
+| perlin | 1.46 | 1.34 | 1.24 |
+| lpbench | 1.31 | 1.03 (1.36 in the run before) | 1.25 |
+| oourafft | 1.28 | 1.00 | 0.99 |
+| tramp3d | 1.06 | 0.87 | 1.03 |
+| fftbench | 0.79 | 0.90 | 0.94 |
+| dhrystone | 0.98 | 0.84 | 0.95 |
+| olden-bh | 0.62 | 0.96 | 0.63 |
+
+The set is mostly pointer-chasing integer code, so vectorizing changes little for native code either; llvmnet now gains about what native gains, and on the numeric loops (linpack, perlin, lpbench) 1.2 to 1.8 times. The losses are mostly native's own (olden-bh, fftbench) or layout effects: dhrystone's vectorized JIT image ran 0.209 s against 0.156 s scalar, and the same IR translated again, with its functions and globals in another order, 0.166 s. tramp3d's JIT loss (its vectorized NativeAOT build gains) was not investigated.
+
+### Vectorizer settings
+
+The 26 programs where vectorizing changes anything, measured again with the loop vectorizer only (`-fno-slp-vectorize`) and without interleaving (`-mllvm -force-vector-interleave=1`), with the run before the final one and its compiler (local sharing in every function), gains against that run's scalar builds, host-normalized, programs running at least 0.2 s:
+
+| flags | native | JIT | NativeAOT |
+| --- | ---: | ---: | ---: |
+| `-fvectorize -fslp-vectorize` (Clang's `-O2`) | 1.036 (17) | 1.058 (21) | 1.024 (18) |
+| `-fvectorize -fno-slp-vectorize` | 1.041 | 1.038 | 1.052 |
+| `... -mllvm -force-vector-interleave=1` | 1.048 | 1.056 | 1.051 |
+
+The same native scalar build varies by about 4% per program between these runs, so differences of 2 to 3% in geometric means of about 20 programs are not significant, and each setting loses somewhere: without SLP perlin keeps none of its gain (1.01 in every engine), without interleaving tramp3d (0.74 JIT) and lpbench (1.14 JIT) lose theirs. No llvmnet-specific setting is better than Clang's own, so the proposal keeps them. `-mprefer-vector-width` does not apply to the portable target's SSE2 cost model, whose vectors are 128 bits; it pairs with `--isa=x86-64-v3` and `--vector-width=256` (SV-08, SV-09).
+
+### `-O3`
+
+The vectorized engines at `-O3 -fvectorize -fslp-vectorize` against the final run's scalar `-O2` builds gain 1.031 natively, 0.989 under the JIT and 1.028 as NativeAOT (programs running at least 0.2 s). The JIT's loss is linpack (0.41): at `-O3` its `main` absorbs the kernels and reaches 60,972 bytes of IL, past RyuJIT's 60,000-byte limit, and runs as MinOpts (PF-07), while NativeAOT, which never falls back, gains 1.68 on the same IR. `-O3` adds nothing for vectorization that `-O2` does not.
+
+### The survey's kernels
+
+The seven kernels of the [SIMD survey](2026-11-03-simd-survey.md#hand-written-vectors-against-scalar-and-native-code) (`artifacts/simd-survey/autovec/kernels.c`, `-ffp-contract=off`), scalar at `-O2 -fno-vectorize -fno-slp-vectorize` and vectorized at `-O3 -fvectorize -fslp-vectorize`, `scripts/ab-time.py 5`, median seconds:
+
+| kernel | native scalar | native SSE2 | JIT scalar | JIT vectorized | JIT vectorized, `ee9304b` | NativeAOT scalar | NativeAOT vectorized |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| saxpy | 0.578 | 0.182 | 0.944 | 0.283 | 0.291 | 0.982 | 0.249 |
+| i32mix | 0.710 | 0.227 | 0.865 | 0.268 | 0.320 | 0.833 | 0.368 |
+| sad8 | 0.630 | 0.122 | 0.860 | 0.273 | 0.283 | 0.637 | 0.324 |
+| dot16 | 0.656 | 0.145 | 1.076 | 0.219 | 0.220 | 1.027 | 0.418 |
+| max8 | 0.345 | 0.038 | 2.451 | 0.075 | 0.081 | 2.422 | 0.062 |
+| fdot | 0.656 | 0.312 | 0.784 | 0.362 | 0.365 | 0.838 | 0.326 |
+| fdot8 | 0.671 | 0.172 | 0.752 | 0.258 | 0.241 | 0.835 | 0.298 |
+| paeth | 0.593 | 0.663 | 0.832 | 0.768 | 0.767 | 0.789 | 1.030 |
+
+Vectorized, the kernels other than paeth run 2.2 to 4.9 times faster than llvmnet's scalar builds under the JIT and 2.0 to 3.9 as NativeAOT (max8 33 and 39 times, because its scalar form is PF-18's select chain), at 1.2 to 2.2 times native SSE2 under the JIT and 1.04 to 2.9 as NativeAOT, close to what the survey's hand-written `Vector128` loops predicted (3.7 to 5 times on the element-wise and widening kernels). NativeAOT's baseline lags the JIT on i32mix, dot16 and sad8, whose 32-bit multiplications and byte widening it compiles without SSE4.1 (Level 2's `IsSupported` helpers); paeth, whose vectorized form is slower natively too, loses as NativeAOT. The kernels' functions are small, so this item's fixes change little for them (i32mix 0.320 to 0.268 s).
+
+### What remains
+
+The survey's library reproducers (Skia's nanobench subset, libjxl, dav1d, libjpeg-turbo and Opus) were not rebuilt with the vectorizers, and the SLP minimum register size was not varied separately (`-fno-slp-vectorize` bounds its effect). The decision on the default is the owner's ([proposal](../plan/decisions.md#proposed-for-the-owner-2026-11-04-sv-05)).
+
 ## SV-06: 256-bit fragments
 
 `--vector-width=256` holds every vector in `Vector256<T>` fragments instead of `Vector128<T>`: the same lowering with twice the lanes per fragment, `Vector256`'s methods, and the 256-bit helpers of `LlvmNet.Runtime.Vectors` (by halves where `Vector256` has no operation). A reduction first combines a fragment's 128-bit halves, the same step, so its shuffles are `Vector128` ones. The vector probes (22,377 cases) match native at 256 bits under the JIT, with `DOTNET_EnableAVX=0`, with `DOTNET_EnableHWIntrinsic=0`, and as NativeAOT at the default instruction set and at `x86-64-v3`; so does the vector-extension fixture.
@@ -123,7 +192,7 @@ The survey's seven kernels (`artifacts/simd-survey/autovec/kernels.c`, five time
 
 ## What it does not show
 
-- Speedups on real programs: the vectorizers stay off by default (ADR-11), and measuring the benchmark set and the survey's libraries with them on is SV-05. The kernels of the survey were not rerun.
-- The bit-count, byte-swap, funnel-shift and other generic intrinsics still scalarize their function (SV-03); the vector forms of the semantics probes (SV-04), `Vector256` (SV-06) and SIMD128 on the typed lowering (SV-07) are separate items.
+- Speedups on the survey's libraries: SV-05 measured the benchmark set and the survey's kernels; the vectorizers stay off by default (ADR-11) until the owner decides.
+- Transcendental intrinsics and `is.fpclass` still scalarize their function (SV-03); SIMD128 on the typed lowering is SV-07.
 - The disassembly is from this AVX-512 host; NativeAOT's default instruction set (SSE2 guaranteed) compiles byte shuffles and 32-bit multiplications through software sequences, which Level 2's explicit `IsSupported` helpers address.
 - Linux ARM64 NativeAOT, for the reason above.

@@ -28,6 +28,13 @@ The owner asked whether CoreCLR's JIT is tuned for particular IL patterns, and w
 - **Found on the way.** RyuJIT never if-converts inside a loop, and integer `Math.Min`/`Max` are not intrinsics on x64 or ARM64; this bears on PF-15 and PF-18. JIT settings come only from the environment. The .NET 11 RC2 runtime runs the subset at 10.0.14's speed.
 - **Proposed for the owner.** ADR-17; M12's placement; the order of JP-02 to JP-05, which change only what the compiler emits ([decisions.md](decisions.md#proposed-for-the-owner-2026-11-04-jit-patterns)).
 
+## Progress (2026-11-04, SV-05 and BE-33)
+
+Measurements are in [the vector lowering evidence](../evidence/2026-11-03-vector-lowering.md#sv-05-autovectorization) and [evidence/2026-11-04-be33-local-sharing.md](../evidence/2026-11-04-be33-local-sharing.md).
+
+- **SV-05 (measured, decision pending).** The benchmark harness builds the vectorized engines on request (`--vectorized`, also in the nightly). The first run made llvmnet 9 to 12% slower vectorized than scalar; the causes were RyuJIT leaving `Vector128` methods uninlined in methods of about 920 locals, functions past the 1,024 locals RyuJIT keeps in registers, and lane inserts through memory without SSE4.1, and all three are fixed. Vectorized llvmnet builds now gain about what native ones gain on the benchmark set and run the survey's SIMD kernels 2 to 5 times faster than scalar ones. Whether `-O2` and above vectorize as Clang's do is proposed to the owner ([decisions](decisions.md#proposed-for-the-owner-2026-11-04-sv-05)); the library reproducers are still to be measured.
+- **BE-33 (locals done, IL density open).** Functions of more than 512 values share IL locals between values whose live ranges do not meet. ffmpeg's decoder has no method left past RyuJIT's locals threshold (38 before), its IL is a fifth smaller, H.264 decoding is 10 to 17% faster, and the scalar benchmark set is 1 to 2% faster overall. Smaller functions keep a local per value: RyuJIT allocates registers per local, and sharing cost small hot loops moves. A side finding, RyuJIT storing a spilled loop bound back on every iteration, is PF-20.
+
 ## Progress (2026-11-03, PF-19)
 
 Measurements are in [evidence/2026-11-03-pf19-vectored-io.md](../evidence/2026-11-03-pf19-vectored-io.md).

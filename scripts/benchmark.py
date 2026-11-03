@@ -22,6 +22,13 @@ geomean tolerance. A regression must reproduce in a second measurement before it
     scripts/benchmark.py --update-baseline        write this run's medians as the new baseline
     scripts/benchmark.py --compare results.tsv    apply the thresholds to an earlier run's results.tsv
     scripts/benchmark.py --engines native,jit --env DOTNET_TieredPGO=0   the JIT with a runtime setting
+    scripts/benchmark.py --vectorized             also the vectorized engines (SV-05): native-vec, jit-vec, aot-vec
+    scripts/benchmark.py --vectorized --vector-flags="-O2 -fvectorize -fslp-vectorize -mllvm -force-vector-interleave=1"
+                                                  the vectorized engines with other flags (both compilers)
+
+The vectorized engines build the same sources with -O2 -fvectorize -fslp-vectorize on both compilers; their ratio is
+to native-vec, whose own ratio is to the scalar native build (native's vectorization gain). The ffmpeg decoder has
+only the scalar engines, and the vectorized engines have no baseline: they are reported, not judged.
 
 Results go to artifacts/bench/<UTC time>/ (or --output): results.tsv, summary.md, metadata.json, logs, builds.
 """
@@ -50,10 +57,12 @@ root = Path(__file__).resolve().parent.parent
 llvmnet = root / "bin" / "llvmnet"
 benchmark_set = root / "tests" / "perf" / "benchmarks.tsv"
 default_baseline = root / "tests" / "perf" / "baseline.tsv"
-engines_all = ("native", "jit", "aot")
+engines_all = ("native", "jit", "aot", "native-vec", "jit-vec", "aot-vec")
+engines_scalar = ("native", "jit", "aot")
 # Both compilers get the same optimization pipeline: llvmnet's -O2 keeps automatic vectorization off (ADR-11; the
 # vectorized column is SV-05's), so the native build turns it off too and the ratio measures the translation.
 common_flags = ["-O2", "-fno-vectorize", "-fno-slp-vectorize", "-w"]
+vector_flags = ["-O2", "-fvectorize", "-fslp-vectorize", "-w"]
 # Thresholds (proposed for the owner in docs/plan/decisions.md): a benchmark regresses when its host-normalized time
 # grows by more than 25%, an engine when the geometric mean grows by more than 10%.
 default_tolerance = 0.25
@@ -143,12 +152,17 @@ def build_program(benchmark, engines, suite, output):
         return str(error)
     flags = [flag.replace("{dir}", str(benchmark.directory)) for flag in benchmark.flags]
     links = ["-lm", "-pthread"]
+    compiler = "clang++-22" if benchmark.cxx else "clang-22"
     if "native" in engines:
-        compiler = "clang++-22" if benchmark.cxx else "clang-22"
         program = build / "native"
         if run_logged([compiler, *common_flags, *flags, *sources, *links, "-o", program], log_path):
             return f"native build failed (see {log_path})"
         benchmark.programs["native"] = [str(program)]
+    if "native-vec" in engines:
+        program = build / "native-vec"
+        if run_logged([compiler, *vector_flags, *flags, *sources, *links, "-o", program], log_path):
+            return f"vectorized native build failed (see {log_path})"
+        benchmark.programs["native-vec"] = [str(program)]
         if benchmark.compare == "musl":
             oracle = build / "native-musl"
             if run_logged(["bash", root / "scripts" / "musl-native-cc.sh", *common_flags, *flags, *sources, "-o", oracle], log_path):
@@ -168,6 +182,21 @@ def build_program(benchmark, engines, suite, output):
             if run_logged([llvmnet, "--runtime=portable", "--nativeaot", bitcode, "-o", executable], log_path):
                 return f"NativeAOT build failed (see {log_path})"
             benchmark.programs["aot"] = [str(executable)]
+    if "jit-vec" in engines or "aot-vec" in engines:
+        mode = ["--driver-mode=g++"] if benchmark.cxx else []
+        program = build / "vec" / f"{benchmark.name}.dll"
+        bitcode = build / "vec" / f"{benchmark.name}.bc"
+        program.parent.mkdir(exist_ok=True)
+        if run_logged([llvmnet, "--runtime=portable", *mode, *vector_flags, *flags, *sources, *links,
+                       "--keep-ir", bitcode, "-o", program], log_path):
+            return f"vectorized llvmnet build failed (see {log_path})"
+        benchmark.programs["jit-vec"] = ["dotnet", str(program)]
+        if "aot-vec" in engines:
+            executable = build / "vec" / "aot" / benchmark.name
+            executable.parent.mkdir(exist_ok=True)
+            if run_logged([llvmnet, "--runtime=portable", "--nativeaot", bitcode, "-o", executable], log_path):
+                return f"vectorized NativeAOT build failed (see {log_path})"
+            benchmark.programs["aot-vec"] = [str(executable)]
     return None
 
 
@@ -205,7 +234,7 @@ def prepare_ffmpeg(benchmarks, engines, output, rebuild):
                 return f"generating {clip.name} failed (see {log_path})"
             temporary.rename(clip)
         benchmark.directory = clip_directory
-        benchmark.programs = {engine: programs[engine] for engine in engines}
+        benchmark.programs = {engine: programs[engine] for engine in engines if engine in programs}
     return None
 
 
@@ -274,13 +303,14 @@ def validate(benchmark, engines, output, checks, timeout):
     stdin = str(directory / stdin) if stdin else None
     results = {}
     errors = []
+    engines = tuple(engine for engine in engines if engine in benchmark.programs)
     for engine in engines + (("musl",) if "musl" in benchmark.programs else ()):
         out_path = directory / f"{engine}.out"
         err_path = directory / f"{engine}.err"
         with open(out_path, "wb") as stdout, open(err_path, "wb") as stderr:
             try:
                 status = run_once(benchmark.programs[engine] + arguments, directory, stdin, stdout, stderr, timeout,
-                                  jit_environment if engine == "jit" else None)[0]
+                                  jit_environment if engine.startswith("jit") else None)[0]
             except TimeoutError as error:
                 errors.append(f"{benchmark.name} {engine}: {error}")
                 continue
@@ -295,7 +325,8 @@ def validate(benchmark, engines, output, checks, timeout):
         return errors or [f"{benchmark.name}: no {reference} result"]
     native_out = directory / f"{reference}.out"
     for engine, status in results.items():
-        if engine in ("native", reference):
+        # The vectorized native build links glibc too.
+        if engine in ("native", reference) or engine == "native-vec" and reference == "musl":
             continue
         if status != results[reference]:
             errors.append(f"{benchmark.name} {engine}: exit status {status}, {reference} {results[reference]}")
@@ -331,13 +362,14 @@ def measure(benchmark, engines, output, repeats, timeout):
     directory = run_directory(benchmark, output)
     arguments, stdin = expand(benchmark.arguments, benchmark)
     stdin = str(directory / stdin) if stdin else None
+    engines = tuple(engine for engine in engines if engine in benchmark.programs)
     samples = {engine: [] for engine in engines}
     for repeat in range(repeats):
         order = engines if repeat % 2 == 0 else tuple(reversed(engines))
         for engine in order:
             with open(os.devnull, "wb") as sink:
                 status, *sample = run_once(benchmark.programs[engine] + arguments, directory, stdin, sink, sink, timeout,
-                                           jit_environment if engine == "jit" else None)
+                                           jit_environment if engine.startswith("jit") else None)
             if status != benchmark.status:
                 raise RuntimeError(f"{benchmark.name} {engine}: exit status {status} in a measured run, {benchmark.status} when validated")
             samples[engine].append(sample)
@@ -443,6 +475,9 @@ def compare(rows, baseline, tolerance, geomean_tolerance):
     return factor, verdicts, means, failures
 
 
+engine_labels = {"jit": "JIT", "aot": "NativeAOT", "native-vec": "Native vectorized", "jit-vec": "JIT vectorized", "aot-vec": "NativeAOT vectorized"}
+
+
 def write_summary(path, rows, metadata, comparison, engines):
     factor, verdicts, means, failures = comparison
     by_key = {(row["benchmark"], row["engine"]): row for row in rows}
@@ -453,14 +488,15 @@ def write_summary(path, rows, metadata, comparison, engines):
         "",
         f"Host: {metadata['cpu']}, {metadata['cores']} logical cores, {metadata['kernel']}; {metadata['dotnet']}; "
         f"{metadata['clang']}; commit {metadata['commit']}. Median of {metadata['repeats']} runs; seconds are elapsed "
-        "time per process, including startup and JIT compilation. Ratio is llvmnet time over native time; "
+        "time per process, including startup and JIT compilation. Ratio is llvmnet time over native time (a vectorized "
+        "engine's over the vectorized native build's, and that one's over the scalar native build's); "
         "baseline is the host-normalized time over the baseline's (1.00 = unchanged).",
         "",
     ]
     llvmnet_engines = [engine for engine in engines if engine != "native"]
     header = ["Benchmark", "Group"] + (["Native (s)"] if "native" in engines else [])
     for engine in llvmnet_engines:
-        label = {"jit": "JIT", "aot": "NativeAOT"}[engine]
+        label = engine_labels[engine]
         header += [f"{label} (s)", f"{label} ratio", f"{label} vs baseline"]
     lines.append("| " + " | ".join(header) + " |")
     lines.append("| " + " | ".join(["---", "---"] + ["---:"] * (len(header) - 2)) + " |")
@@ -488,7 +524,7 @@ def write_summary(path, rows, metadata, comparison, engines):
         lines.append("| " + " | ".join(cells) + " |")
     lines.append("")
     for engine in llvmnet_engines:
-        label = {"jit": "JIT", "aot": "NativeAOT"}[engine]
+        label = engine_labels[engine]
         if ratios[engine]:
             text = f"- {label}: geometric mean of the ratios to native {geomean(ratios[engine]):.2f} over {len(ratios[engine])} benchmarks"
             if engine in means:
@@ -529,6 +565,7 @@ def metadata_for(arguments):
         "commit": command("git", "-C", str(root), "describe", "--always", "--dirty") or "unknown",
         "repeats": arguments.repeats,
         "jit_environment": " ".join(arguments.env),
+        "vector_flags": " ".join(vector_flags),
         "tolerance": arguments.tolerance,
         "geomean_tolerance": arguments.geomean_tolerance,
     }
@@ -538,7 +575,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--only", help="comma-separated benchmark names (a name ending in * is a prefix)")
     parser.add_argument("--group", action="append", help="benchmark group to run (repeatable)")
-    parser.add_argument("--engines", default=",".join(engines_all), help="comma-separated: native, jit, aot")
+    parser.add_argument("--engines", default=",".join(engines_scalar), help="comma-separated: native, jit, aot, native-vec, jit-vec, aot-vec")
+    parser.add_argument("--vectorized", action="store_true", help="add the vectorized engines native-vec, jit-vec and aot-vec")
+    parser.add_argument("--vector-flags", help=f"the vectorized engines' compiler flags (default: {' '.join(vector_flags)})")
     parser.add_argument("--repeats", type=int, default=5, help="measured runs per engine (default 5)")
     parser.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1), help="parallel builds")
     parser.add_argument("--timeout", type=int, default=600, help="seconds per process (default 600)")
@@ -553,10 +592,13 @@ def main():
     parser.add_argument("--env", action="append", default=[], metavar="NAME=VALUE",
                         help="environment variable for the JIT engine's processes (repeatable), e.g. DOTNET_TieredPGO=0")
     arguments = parser.parse_args()
-    engines = tuple(engine for engine in engines_all if engine in arguments.engines.split(","))
+    requested = arguments.engines.split(",") + (["native-vec", "jit-vec", "aot-vec"] if arguments.vectorized else [])
+    engines = tuple(engine for engine in engines_all if engine in requested)
     for setting in arguments.env:
         name, _, value = setting.partition("=")
         jit_environment[name] = value
+    if arguments.vector_flags:
+        vector_flags[:] = shlex.split(arguments.vector_flags)
     if "native" not in engines:
         parser.error("--engines must include native, the reference for validation and the ratios")
 
@@ -643,19 +685,20 @@ def main():
         summaries = {engine: summarize(values) for engine, values in samples.items()}
         native = summaries["native"]["median"]
         for engine, summary in summaries.items():
+            reference = summaries["native-vec"]["median"] if engine in ("jit-vec", "aot-vec") and "native-vec" in summaries else native
             rows.append({"benchmark": benchmark.name, "group": benchmark.group, "engine": engine,
                          "runs": summary["runs"], "median_s": f"{summary['median']:.4f}", "min_s": f"{summary['min']:.4f}",
                          "max_s": f"{summary['max']:.4f}", "user_s": f"{summary['user']:.3f}",
                          "system_s": f"{summary['system']:.3f}", "max_rss_kib": summary["rss"],
-                         "ratio_to_native": f"{summary['median'] / native:.3f}" if native > 0 else "nan"})
-        log(f"{benchmark.name}: " + ", ".join(f"{engine} {summaries[engine]['median']:.3f} s" for engine in engines))
+                         "ratio_to_native": f"{summary['median'] / reference:.3f}" if reference > 0 else "nan"})
+        log(f"{benchmark.name}: " + ", ".join(f"{engine} {summary['median']:.3f} s" for engine, summary in summaries.items()))
 
     baseline = read_baseline(arguments.baseline)
     comparison = compare(rows, baseline, arguments.tolerance, arguments.geomean_tolerance)
     if comparison[3] and not arguments.update_baseline:
         # A regression must reproduce: measure the regressed benchmarks again and judge the second measurement.
-        suspects = {failure.split()[0] for failure in comparison[3]} - {"jit", "aot"}
-        if any(failure.split()[0] in ("jit", "aot") for failure in comparison[3]):
+        suspects = {failure.split()[0] for failure in comparison[3]} - set(engines_all)
+        if any(failure.split()[0] in engines_all for failure in comparison[3]):
             suspects |= {row["benchmark"] for row in rows}
         log(f"Measuring again to confirm: {', '.join(sorted(suspects))}")
         for benchmark in ready:
@@ -669,10 +712,11 @@ def main():
                     if second["min"] < float(row["min_s"]):
                         row.update(median_s=f"{second['median']:.4f}", min_s=f"{second['min']:.4f}",
                                    max_s=f"{second['max']:.4f}", runs=row["runs"] + second["runs"])
-            native = next(float(row["median_s"]) for row in rows if row["benchmark"] == benchmark.name and row["engine"] == "native")
+            medians = {row["engine"]: float(row["median_s"]) for row in rows if row["benchmark"] == benchmark.name}
             for row in rows:
                 if row["benchmark"] == benchmark.name:
-                    row["ratio_to_native"] = f"{float(row['median_s']) / native:.3f}"
+                    reference = medians.get("native-vec", medians["native"]) if row["engine"] in ("jit-vec", "aot-vec") else medians["native"]
+                    row["ratio_to_native"] = f"{float(row['median_s']) / reference:.3f}"
         comparison = compare(rows, baseline, arguments.tolerance, arguments.geomean_tolerance)
 
     write_results(output / "results.tsv", rows)
