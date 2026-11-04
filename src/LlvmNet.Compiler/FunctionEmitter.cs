@@ -1302,11 +1302,30 @@ internal sealed class FunctionEmitter : ValueEmitter
         {
             nint text = Llvm.LLVMGetInlineAsmAsmString(target, out nuint length);
             string assembly = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(text, checked((int)length))!;
-            if (Compiler.Host is not null && NativeCpuQuery(instruction, target, assembly))
+            if (CpuQuery(instruction, target, assembly) is int registers and not 0)
             {
-                for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
-                    Load(Llvm.LLVMGetOperand(instruction, index));
-                Il.Emit(OpCodes.Call, Compiler.Host.Resolve(0, instruction));
+                if (Compiler.Host is not null)
+                {
+                    for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
+                        Load(Llvm.LLVMGetOperand(instruction, index));
+                    Il.Emit(OpCodes.Call, Compiler.Host.Resolve(0, instruction));
+                    return;
+                }
+                // Portable code asks the runtime, which answers for the host from .NET's view (SV-12): the registers are
+                // written into the result's explicit-layout structure, EAX first.
+                LocalBuilder result = Il.DeclareLocal(Types.Map(Llvm.LLVMTypeOf(instruction)));
+                Il.Emit(OpCodes.Ldloca, result);
+                Il.Emit(OpCodes.Initobj, result.LocalType);
+                Il.Emit(OpCodes.Ldloca, result);
+                Il.Emit(OpCodes.Conv_U);
+                Load(Llvm.LLVMGetOperand(instruction, 0));
+                if (registers == 4)
+                {
+                    if (Llvm.LLVMGetNumArgOperands(instruction) == 2) Load(Llvm.LLVMGetOperand(instruction, 1));
+                    else Il.Emit(OpCodes.Ldc_I4_0);
+                }
+                Il.Emit(OpCodes.Call, typeof(CpuFeatures).GetMethod(registers == 4 ? nameof(CpuFeatures.CpuId) : nameof(CpuFeatures.XGetBv))!);
+                Il.Emit(OpCodes.Ldloc, result);
                 return;
             }
             if (Compiler.Host is not null && length == 4 && TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) == 0 && Llvm.LLVMGetNumArgOperands(instruction) == 0 &&
@@ -1329,7 +1348,7 @@ internal sealed class FunctionEmitter : ValueEmitter
                 return;
             }
             if (!commentOnly || TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0)
-                throw new NotSupportedException("Inline assembly with instructions or outputs is not supported; use a pure C configuration.");
+                throw new NotSupportedException("Inline assembly with instructions or outputs is not supported; " + InlineAssemblyAdvice);
             Il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.MemoryBarrier))!);
             return;
         }
@@ -1489,7 +1508,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         else if (Llvm.LLVMIsAFunction(target) != 0)
             Il.Emit(OpCodes.Call, Compiler.ResolveFunction(target));
         else if (Llvm.LLVMIsAInlineAsm(target) != 0)
-            throw new NotSupportedException("Inline assembly is not supported; use a pure C configuration.");
+            throw new NotSupportedException("Inline assembly is not supported; " + InlineAssemblyAdvice);
         else
         {
             Load(target);
@@ -1740,49 +1759,55 @@ internal sealed class FunctionEmitter : ValueEmitter
         return true;
     }
 
-    private static bool NativeCpuQuery(nint instruction, nint target, string assembly)
+    /// <summary>
+    /// What the inline assembly rejection advises (BE-24, SV-15): the projects' switches that leave it out, and where
+    /// assembly goes instead.
+    /// </summary>
+    internal const string InlineAssemblyAdvice = "build the project without it (ffmpeg: --disable-inline-asm; OpenSSL: no-asm; " +
+        "libjpeg-turbo: -DWITH_SIMD=0) and keep assembly in .S or .asm files, which system mode links as native objects and " +
+        "portable mode calls through a native kernel package (docs/user/native-kernels.md).";
+
+    /// <summary>
+    /// The registers a CPUID (4) or XGETBV (2) inline-assembly form returns, or 0 for other assembly. CPUID is "cpuid"
+    /// with its four outputs, or "cpuid" between a mov or xchg that keeps RBX in another register (LLVM's and Eigen's host
+    /// detection, ffmpeg's, Clang's &lt;cpuid.h&gt;); its inputs are the leaf, in EAX or tied to it, and optionally the
+    /// subleaf, in ECX or tied to it. XGETBV is "xgetbv" or its encoding, with the register's index in ECX. The text is
+    /// compared without white space or operand-size suffixes, with LLVM's spelling of Clang's {att|intel} alternatives,
+    /// $(att$|intel$), taken as its AT&amp;T part. System mode runs them in native thunks, portable mode asks
+    /// <see cref="CpuFeatures"/>.
+    /// </summary>
+    internal static int CpuQuery(nint instruction, nint target, string assembly)
     {
         nint text = Llvm.LLVMGetInlineAsmConstraintString(target, out nuint length);
-        string constraints = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(text, checked((int)length))!;
+        string[] constraints = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(text, checked((int)length))!.Split(',')
+            .Where(constraint => !constraint.StartsWith('~')).ToArray();
+        string[] outputs = constraints.Where(constraint => constraint.StartsWith('=')).ToArray();
+        string[] inputs = constraints.Where(constraint => !constraint.StartsWith('=')).ToArray();
+        string attSyntax = System.Text.RegularExpressions.Regex.Replace(assembly, @"\$\(([^$|]*)(\$\|[^$]*)?\$\)", "$1");
+        string[] instructions = attSyntax.Split('\n', ';').Select(line => System.Text.RegularExpressions.Regex.Replace(line, @"\s+", "").ToLowerInvariant())
+            .Where(line => line.Length != 0).ToArray();
         int registers = 0;
-        int arguments = 0;
-        if (assembly == "movq\t%rbx, %rsi\n\tcpuid\n\txchgq\t%rbx, %rsi\n\t")
-        {
+        if (instructions is ["cpuid"] && outputs is ["={ax}", "={bx}", "={cx}", "={dx}"])
             registers = 4;
-            arguments = constraints switch
-            {
-                "={ax},={si},={cx},={dx},{ax},~{dirflag},~{fpsr},~{flags}" => 1,
-                "={ax},={si},={cx},={dx},{ax},{cx},~{dirflag},~{fpsr},~{flags}" => 2,
-                _ => 0
-            };
-        }
-        else if (assembly == "xchg$(q$)\t$(%$)rbx, ${1:q}; cpuid; xchg$(q$)\t$(%$)rbx, ${1:q}" &&
-            constraints == "={ax},=&r,={cx},={dx},0,2,~{dirflag},~{fpsr},~{flags}")
-        {
+        else if (instructions is [string save, "cpuid", string restore] && outputs is ["={ax}", string kept, "={cx}", "={dx}"] &&
+            System.Text.RegularExpressions.Regex.Match(save, @"^(movq?|xchgq?)%rbx,(%r[sd]i|\$\{1:q\})$") is { Success: true } match &&
+            System.Text.RegularExpressions.Regex.IsMatch(restore, @"^xchgq?%rbx," + System.Text.RegularExpressions.Regex.Escape(match.Groups[2].Value) + "$") &&
+            (match.Groups[2].Value.StartsWith('%') ? kept == "={" + match.Groups[2].Value[2..] + "}" : kept is "=r" or "=&r"))
             registers = 4;
-            arguments = 2;
-        }
-        else if (assembly == "  xchg$(q$|$)  $(%$|$)rbx,${1:q}\n  cpuid\n  xchg$(q$|$)  $(%$|$)rbx,${1:q}")
-        {
-            // Clang's <cpuid.h> on x86-64: __cpuid, and __cpuid_count with the subleaf in ECX.
-            registers = 4;
-            arguments = constraints switch
-            {
-                "={ax},=r,={cx},={dx},0,~{dirflag},~{fpsr},~{flags}" => 1,
-                "={ax},=r,={cx},={dx},0,2,~{dirflag},~{fpsr},~{flags}" => 2,
-                _ => 0
-            };
-        }
-        else if (assembly == ".byte 0x0f, 0x01, 0xd0" && constraints == "={ax},={dx},{cx},~{dirflag},~{fpsr},~{flags}")
-        {
+        else if (instructions is [".byte0x0f,0x01,0xd0"] or ["xgetbv"] && outputs is ["={ax}", "={dx}"] && inputs is ["{cx}"])
             registers = 2;
-            arguments = 1;
-        }
+        int arguments = registers == 2 ? 1 : inputs switch
+        {
+            ["0" or "{ax}"] => 1,
+            ["0" or "{ax}", "2" or "{cx}"] => 2,
+            _ => 0
+        };
         nint result = Llvm.LLVMTypeOf(instruction);
-        return arguments != 0 && Llvm.LLVMGetNumArgOperands(instruction) == arguments && TypeSystem.Kind(result) == 10 &&
+        return registers != 0 && arguments != 0 && Llvm.LLVMGetNumArgOperands(instruction) == arguments && TypeSystem.Kind(result) == 10 &&
             Llvm.LLVMCountStructElementTypes(result) == registers &&
             Enumerable.Range(0, registers).All(index => TypeSystem.Width(Llvm.LLVMStructGetTypeAtIndex(result, (uint)index)) == 32) &&
-            Enumerable.Range(0, arguments).All(index => TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index))) == 32);
+            Enumerable.Range(0, arguments).All(index => TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index))) == 32)
+            ? registers : 0;
     }
 
     private void Intrinsic(nint instruction, string name)
@@ -2477,7 +2502,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             nint operand = Llvm.LLVMGetOperand(instruction, index);
             nint type = Llvm.LLVMTypeOf(operand);
             Type expected = parameters[index].ParameterType, actual = Types.Map(type);
-            if (IsVector(expected) && !IsVector(actual))
+            if (IsVector(expected) && !IsVector(actual) && VectorEmitter.Halves(actual) is null)
                 throw new NotSupportedException($"{name} needs the typed vector lowering, which --vector-lowering=scalar turns off.");
             if (!IsVector(expected) && (expected == typeof(int) ? TypeSystem.Kind(type) != 8 || TypeSystem.Width(type) > 32 : expected != actual))
                 throw new NotSupportedException($"{name}: operand {index} is {Llvm.PrintType(type)} where its runtime helper takes {expected.Name}.");
@@ -2490,9 +2515,9 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     /// <summary>
     /// The x86 target intrinsics the backend translates: the spin-wait hint, which libstdc++'s atomic waits use on
-    /// x86-64, the SSE fences, and the SSE to SSE4.2 intrinsics the runtime implements (<see cref="TargetIntrinsics"/>).
-    /// Every other llvm.x86 intrinsic (MMX, AVX and later, the MXCSR write) is rejected when a module is translated, after
-    /// a warning when its unit was compiled (Driver).
+    /// x86-64, the SSE fences, and the SSE to AVX2, FMA, F16C and BMI intrinsics the runtime implements
+    /// (<see cref="TargetIntrinsics"/>). Every other llvm.x86 intrinsic (AVX-512 and later, the MXCSR write) is rejected
+    /// when a module is translated, after a warning when its unit was compiled (Driver).
     /// </summary>
     internal static bool TranslatesX86Intrinsic(string name) =>
         name is "llvm.x86.sse2.pause" or "llvm.x86.sse2.mfence" or "llvm.x86.sse2.lfence" or "llvm.x86.sse.sfence" || TargetIntrinsics.Helper(name) is not null;
@@ -2500,9 +2525,9 @@ internal sealed class FunctionEmitter : ValueEmitter
     internal static string X86IntrinsicMessage(string name, bool system, bool compiling = false) =>
         $"x86 target intrinsic {name} is not translated{(compiling ? ", so linking a program that reaches it fails" : "")}; " + (name == "llvm.x86.sse.ldmxcsr"
             ? "translated code keeps the default MXCSR (round to nearest, no flush to zero), so _mm_setcsr and the _MM_SET macros cannot change it"
-            : "llvmnet translates the SSE to SSE4.2 and PCLMULQDQ intrinsics, so build the code's SSE4.2, SSE2 or C path instead" + (system
-                ? " (system mode takes the instruction sets of -m and -march as native code does: try -march=x86-64-v2 or the library's own SIMD option)"
-                : " (--isa=x86-64-v2 selects SSE4.2 paths, the baseline a library's C paths)"));
+            : "llvmnet translates the SSE to AVX2 intrinsics with FMA, F16C, BMI and PCLMULQDQ (x86-64-v3), so build the code's AVX2, SSE or C path instead" + (system
+                ? " (system mode takes the instruction sets of -m and -march as native code does: try -march=x86-64-v3 or the library's own SIMD option)"
+                : " (--isa=x86-64-v3 selects AVX2 paths, x86-64-v2 SSE4.2 ones, the baseline a library's C paths)"));
 
     private unsafe void Aggregate(nint instruction, bool insert)
     {

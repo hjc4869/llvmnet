@@ -37,6 +37,17 @@ llvmnet-clang --runtime=system client.c --system-library /path/libexternal.so -o
 
 LLVM generates a bridge for each imported signature (`lib<name>.llvmnet-host.so` next to a JIT image, linked statically into a NativeAOT executable): scalars, structures by value, `sret`, varargs and native data all work, and C callbacks passed to native code are native-callable entry points as long as they take and return scalars. The library stays a dynamic dependency, found through the loader's usual path (`LD_LIBRARY_PATH` or an installed location); the compiler host must be able to load it too, because the symbols are resolved at compile time. Native C++ libraries are not callable through their C++ ABI: provide a C wrapper, or compile the C++ code to bitcode. Portable mode rejects `--system-library`: a dependency is recompiled in portable mode or reached through a managed interface.
 
+## Native objects and assembly (system mode)
+
+System mode links a project's assembled code into the image's native library (`lib<name>.llvmnet-host.so`, or NativeAOT's static link): native object files on the command line, recognized by their content (ELF, COFF or Mach-O, whatever their names), the native members of archives that also hold the project's bitcode, as ffmpeg's do when nasm assembles its kernels, and assembly sources, which llvmnet assembles itself: `.s`, `.S` and `-x assembler` or `assembler-with-cpp` with Clang for x86-64 Linux and the command line's `-I`, `-D` and target options, `.asm` with nasm (`-f elf64`, the `-I` and `-D` options). `-c` on an assembly source writes its native object.
+
+```sh
+llvmnet-clang --runtime=system -O2 main.c kernels.S dsp.asm -o program.dll
+llvmnet-clang --runtime=system -c kernels.S -o kernels.o      # a native object, for an archive or a later link
+```
+
+Translated code calls the objects' functions through the same bridges as system libraries' functions, function pointers to them included. The data they share with the program live in the native library: a variable the program defines and the assembly reads (C constant tables) is stored there, with the program's initializer, and a variable the assembly defines is the program's to read and write there. A native object that calls a function of the program, rather than receiving it as a function pointer, is a compile error naming the object and the function, as is a symbol that neither the objects, the program nor a system library defines. Every native member of an archive is linked, not only those that resolve a reference. A NativeAOT build from a kept `.bc` (`--keep-ir`) needs the objects or archives again on its command line; their bitcode members resolve nothing more there. Portable mode does not link native objects: it calls assembly through a [native kernel package](native-kernels.md), and rejects assembly sources and native objects otherwise, naming them.
+
 ## Native extensions (portable mode)
 
 A host library that cannot be recompiled, because it is the operating system's or the GPU vendor's (EGL and OpenGL ES), is reached through a native extension: a package under the sysroot's `ext/` with the library's headers, which are on the include path, and a generated managed assembly that the link references as it references a managed library. `-l<name>` links the extension whose manifest lists the name when no archive matches, and `--extension=<name>` names it; `llvmnet --list-extensions` lists the installed ones.

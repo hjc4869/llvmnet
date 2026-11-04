@@ -9,6 +9,8 @@ internal static unsafe class Llvm
     private static extern uint ConstantBits(nint value, byte* destination, uint capacity);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_link")]
     private static extern int LinkFiles(nint* paths, int* wholeArchive, uint count, nint* entry, uint entryCount, nint* required, uint requiredCount, [MarshalAs(UnmanagedType.LPUTF8Str)] string output, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, out nint message);
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_native_objects")]
+    private static extern int ReadNativeObjects([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string directory, out nint listing, out nint message);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_stamp_abi")]
     private static extern int StampFile([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, [MarshalAs(UnmanagedType.LPUTF8Str)] string isa, int textual, out nint message);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_isa_levels")]
@@ -19,10 +21,16 @@ internal static unsafe class Llvm
     internal static extern uint LowerConstrainedFloatingPoint(nint module);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_wrap_vector_invokes")]
     internal static extern uint WrapVectorInvokes(nint source);
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_narrow_vector_integers")]
+    internal static extern uint NarrowVectorIntegers(nint module);
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_fuse_multiply_adds")]
+    internal static extern uint FuseMultiplyAdds(nint module);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_scalarize_functions")]
     internal static extern uint ScalarizeFunctions(nint* functions, uint count);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_add_native_thunk")]
     internal static extern void AddNativeThunk(nint shim, nint function, nint call, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_add_native_forwarder")]
+    internal static extern void AddNativeForwarder(nint shim, nint function, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
     [DllImport(Library)] internal static extern int LLVMWriteBitcodeToFile(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
     [DllImport(Library)] internal static extern nint LLVMGetTarget(nint module);
     [DllImport(Library)] private static extern void LLVMGetVersion(out uint major, out uint minor, out uint patch);
@@ -59,13 +67,16 @@ internal static unsafe class Llvm
     /// Links objects and archives (recognized by content) into one bitcode module: every object, and the archive
     /// members that resolve a referenced symbol (rescanning until none does) or every member of an archive marked
     /// whole-archive. While none of the <paramref name="entry"/> names is defined, a member defining one is linked too.
+    /// With <paramref name="nativeMembers"/>, archives' native object members are left out, as a native kernel package
+    /// provides them (SV-13); otherwise they are an error.
     /// </summary>
-    internal static void Link(string[] paths, bool[] wholeArchive, string output, string abi, string[]? entry = null, string[]? required = null)
+    internal static void Link(string[] paths, bool[] wholeArchive, string output, string abi, string[]? entry = null, string[]? required = null,
+        bool nativeMembers = false)
     {
         entry ??= [];
         required ??= [];
         nint[] pointers = new nint[paths.Length + entry.Length + required.Length];
-        int[] whole = wholeArchive.Select(flag => flag ? 1 : 0).ToArray();
+        int[] whole = wholeArchive.Select(flag => (flag ? 1 : 0) | (nativeMembers ? 2 : 0)).ToArray();
         try
         {
             for (int index = 0; index < pointers.Length; index++)
@@ -87,6 +98,36 @@ internal static unsafe class Llvm
             foreach (nint pointer in pointers)
                 Marshal.FreeCoTaskMem(pointer);
         }
+    }
+
+    /// <summary>
+    /// The native object files of a link input (native/objects.cpp): the input itself when it is an ELF, COFF or Mach-O
+    /// object, the native members of an archive, which are written into <paramref name="directory"/>, or none.
+    /// </summary>
+    internal static List<NativeObject> NativeObjects(string path, string directory)
+    {
+        if (ReadNativeObjects(path, directory, out nint listing, out nint message) != 0)
+        {
+            string text = Marshal.PtrToStringUTF8(message) ?? "cannot read native objects";
+            LLVMDisposeMessage(message);
+            throw new InvalidOperationException(text);
+        }
+        string lines = Marshal.PtrToStringUTF8(listing) ?? "";
+        LLVMDisposeMessage(listing);
+        List<NativeObject> objects = [];
+        HashSet<string>? functions = null, data = null, undefined = null;
+        foreach (string line in lines.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string name = line[2..];
+            switch (line[0])
+            {
+                case 'F': objects.Add(new NativeObject(name, functions = [], data = [], undefined = [])); break;
+                case 'T': functions!.Add(name); break;
+                case 'D': data!.Add(name); break;
+                default: undefined!.Add(name); break;
+            }
+        }
+        return objects;
     }
 
     internal static byte[] Bits(nint value)
@@ -226,6 +267,12 @@ internal static unsafe class Llvm
     [DllImport(Library)] internal static extern int LLVMGetLinkage(nint global);
     [DllImport(Library)] internal static extern int LLVMGetVisibility(nint global);
     [DllImport(Library)] internal static extern nint LLVMGetNamedFunction(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+    [DllImport(Library)] internal static extern nint LLVMAddFunction(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, nint type);
+    [DllImport(Library)] internal static extern nint LLVMFunctionType(nint result, nint* parameters, uint count, int variadic);
+    /// <summary>The type of a function without parameters.</summary>
+    internal static nint FunctionType(nint result) => LLVMFunctionType(result, null, 0, 0);
+    [DllImport(Library)] internal static extern nint LLVMPointerTypeInContext(nint context, uint addressSpace);
+    [DllImport(Library)] internal static extern nint LLVMGetModuleContext(nint module);
     [DllImport(Library)] internal static extern nint LLVMGetFirstGlobalIFunc(nint module);
     [DllImport(Library)] internal static extern nint LLVMGetNextGlobalIFunc(nint ifunc);
     [DllImport(Library)] internal static extern nint LLVMIsAGlobalIFunc(nint value);

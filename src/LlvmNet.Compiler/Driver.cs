@@ -8,7 +8,7 @@ internal sealed class CompilerOptions
     internal string Runtime { get; set; } = "portable";
     internal bool Verbose { get; set; }
     internal bool NativeAot { get; set; }
-    /// <summary>The instruction set the frontend may assume (--isa, ADR-16): baseline, x86-64-v2 or wasm-simd128.</summary>
+    /// <summary>The instruction set the frontend may assume (--isa, ADR-16): baseline, x86-64-v2, x86-64-v3 or wasm-simd128.</summary>
     internal string Isa { get; set; } = "baseline";
     internal bool Simd128 => Isa == "wasm-simd128";
     /// <summary>
@@ -33,6 +33,17 @@ internal sealed class CompilerOptions
     internal List<ExtensionPackage> Extensions { get; } = [];
     /// <summary>Native extensions a system-mode image links: their Linux libraries, registered by name and listed in its metadata.</summary>
     internal List<ExtensionPackage> SystemExtensions { get; } = [];
+    /// <summary>The native kernel packages the image calls (--native-kernels, SV-13).</summary>
+    internal List<KernelPackage> KernelPackages { get; } = [];
+    /// <summary>System mode: native object files (assembled kernels) linked into the image's native library (SV-15).</summary>
+    internal List<NativeObject> NativeObjects { get; } = [];
+}
+
+/// <summary>A native object file and its global symbols: the functions and data it defines and the symbols it references.
+/// <paramref name="Source"/> is how messages name it: the input, the assembly source or archive(member).</summary>
+internal sealed record NativeObject(string Path, IReadOnlySet<string> Functions, IReadOnlySet<string> Data, IReadOnlySet<string> Undefined)
+{
+    internal string Source { get; init; } = Path;
 }
 
 /// <summary>One link input: a source or object with the language in effect for it (from -x), or an archive with its whole-archive state.</summary>
@@ -73,6 +84,12 @@ internal sealed class Invocation
     internal string AotPreference { get; private set; } = "Balanced";
     /// <summary>--extension names, in order.</summary>
     internal List<string> ExtensionNames { get; } = [];
+    /// <summary>The directories of the native kernel packages to resolve undefined functions against (--native-kernels).</summary>
+    internal List<string> KernelDirectories { get; } = [];
+    /// <summary>Whether the command line gives --vector-width, which then wins over the width x86-64-v3 implies.</summary>
+    internal bool VectorWidthGiven { get; private set; }
+    /// <summary>The hidden --print-kernel-data: a file of the data names a kernel package shares with the program.</summary>
+    internal string? KernelData { get; private set; }
     internal bool ListExtensions { get; private set; }
     /// <summary>--install-extension: a built extension package to install in the sysroot's ext/ directory.</summary>
     internal string? InstallExtension { get; private set; }
@@ -150,24 +167,26 @@ internal sealed class Invocation
                 case "--portable-sysroot": PortableAbi.SysrootOverride = Path.GetFullPath(value); break;
                 case "--simd128": Options.Isa = "wasm-simd128"; break;
                 case "--isa=":
-                    // The instruction set the frontend may assume (ADR-16): baseline; x86-64-v2, whose macros and SSE to
-                    // SSE4.2 intrinsics the runtime's helpers translate (Level 2); or wasm-simd128, the SIMD128 header path
-                    // (--simd128). x86-64-v3 and neon come with their helpers (SV-09, SV-11).
-                    if (value is "x86-64-v3" or "neon")
-                        throw new ArgumentException($"--isa={value} is not implemented yet; the supported levels are baseline, x86-64-v2 and wasm-simd128.");
-                    if (value is not ("baseline" or "x86-64-v2" or "wasm-simd128")) throw new ArgumentException("--isa requires baseline, x86-64-v2 or wasm-simd128.");
+                    // The instruction set the frontend may assume (ADR-16): baseline; x86-64-v2 and x86-64-v3, whose macros
+                    // and SSE to AVX2 intrinsics the runtime's helpers translate (Level 2); or wasm-simd128, the SIMD128
+                    // header path (--simd128). neon comes with its helpers (SV-11).
+                    if (value is "neon")
+                        throw new ArgumentException($"--isa={value} is not implemented yet; the supported levels are baseline, x86-64-v2, x86-64-v3 and wasm-simd128.");
+                    if (value is not ("baseline" or "x86-64-v2" or "x86-64-v3" or "wasm-simd128")) throw new ArgumentException("--isa requires baseline, x86-64-v2, x86-64-v3 or wasm-simd128.");
                     Options.Isa = value;
                     break;
-                case var alias when DriverOptions.IsaAliases.Contains(alias):
-                    // An x86 SIMD feature flag in portable mode (system mode forwards it): the x86-64-v2 level, and the flag
-                    // itself for Clang, which enables what it names (-mpclmul beyond the level).
-                    if (Options.Isa == "wasm-simd128") throw new ArgumentException($"{argument.Text} selects x86-64-v2, which cannot be combined with --isa=wasm-simd128.");
-                    Options.Isa = "x86-64-v2";
+                case var alias when DriverOptions.IsaAliases.Contains(alias) || DriverOptions.IsaV3Aliases.Contains(alias):
+                    // An x86 SIMD feature flag in portable mode (system mode forwards it): its level, unless a higher one is
+                    // already given, and the flag itself for Clang, which enables what it names (-mpclmul beyond the level).
+                    string level = DriverOptions.IsaV3Aliases.Contains(alias) ? "x86-64-v3" : "x86-64-v2";
+                    if (Options.Isa == "wasm-simd128") throw new ArgumentException($"{argument.Text} selects {level}, which cannot be combined with --isa=wasm-simd128.");
+                    if (Options.Isa != "x86-64-v3") Options.Isa = level;
                     Frontend.Add(argument.Text);
                     break;
                 case "--vector-width=":
                     if (value is not ("128" or "256")) throw new ArgumentException("--vector-width requires 128 or 256.");
                     Options.VectorWidth = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+                    VectorWidthGiven = true;
                     break;
                 case "--vector-lowering=":
                     if (value is not ("auto" or "typed" or "scalar")) throw new ArgumentException("--vector-lowering requires auto, typed or scalar.");
@@ -176,6 +195,8 @@ internal sealed class Invocation
                 case "--cil-reference": Options.CilReferences.Add(Path.GetFullPath(value)); break;
                 case "--system-library": Options.SystemLibraries.Add(value); break;
                 case "--extension": ExtensionNames.Add(value); break;
+                case "--native-kernels": KernelDirectories.Add(Path.GetFullPath(value)); break;
+                case "--print-kernel-data=": KernelData = Path.GetFullPath(value); break;
                 case "--list-extensions": ListExtensions = true; break;
                 case "--install-extension": InstallExtension = Path.GetFullPath(value); break;
                 case "--uninstall-extension": UninstallExtension = value; break;
@@ -255,11 +276,24 @@ internal sealed class Invocation
         if (AotProject is not null && RuntimeId is not null)
             throw new ArgumentException("--aot-project takes no --runtime-id: the runtime identifier is chosen when the project is published (dotnet publish -r <rid>).");
         if (Options.Runtime != "system" && Options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
+        // x86-64-v3 code targets AVX2 hosts, where 256-bit vectors held whole run faster than as two halves (SV-06); a
+        // --vector-width the command line gives wins.
+        if (Options.Isa == "x86-64-v3" && !VectorWidthGiven) Options.VectorWidth = 256;
         if (PortableAbi.SysrootOverride is not null && Options.Runtime != "portable") throw new ArgumentException("--portable-sysroot requires --runtime=portable.");
         if (Options.Runtime == "system" && RuntimeId is not null && RuntimeId != "linux-x64")
             throw new ArgumentException("The current system ABI profile requires NativeAOT RID linux-x64.");
         // An extension that is not installed fails before anything runs, whether or not this invocation links.
         foreach (string name in ExtensionNames) Extensions.Find(name);
+        // Native kernel packages are portable mode's: system mode links native objects and libraries itself (SV-15).
+        if (KernelDirectories.Count != 0 && Options.Runtime == "system")
+            throw new ArgumentException("--native-kernels is for portable mode; in system mode link the package's linux-x64 library with --system-library.");
+        foreach (string directory in KernelDirectories)
+        {
+            KernelPackage package = KernelPackage.Read(directory);
+            if (Options.KernelPackages.FirstOrDefault(other => other.Name == package.Name || other.Library == package.Library) is KernelPackage clash)
+                throw new ArgumentException($"native kernel packages {clash.Directory} and {package.Directory} have the same name or library.");
+            Options.KernelPackages.Add(package);
+        }
         if (LinkerVersion && (Inputs.Count != 0 || Output is not null || CompileOnly || Preprocess || DependencyOnly || EmitLlvm || nativeAot || Options.Library))
             throw new ArgumentException("-Wl,--version is an informational query, not a link operation.");
     }
@@ -366,9 +400,35 @@ internal static class Driver
         try
         {
             List<(string Path, bool WholeArchive)> bitcode = [];
+            // System mode: native objects (assembled kernels) for the image's native library (SV-15).
+            List<string> nativeInputs = [];
+            Dictionary<string, string> assemblySources = [];
+            string members = Path.Combine(temporary, "native-members");
             foreach (LinkInput input in inputs)
             {
                 string extension = Path.GetExtension(input.Path);
+                if (input.Language is "assembler" or "assembler-with-cpp" || input.Language is null && extension is ".s" or ".S" or ".sx" or ".asm")
+                {
+                    string assembled = invocation.CompileOnly ? invocation.Output ?? Path.GetFileNameWithoutExtension(input.Path) + ".o" : Path.Combine(temporary, $"native{nativeInputs.Count}.o");
+                    int assembly = Assemble(input, assembled, options, clang, frontend, verbose);
+                    if (assembly != 0) return assembly;
+                    if (!invocation.CompileOnly && !invocation.DryRun)
+                    {
+                        nativeInputs.Add(assembled);
+                        assemblySources[assembled] = input.Path;
+                    }
+                    continue;
+                }
+                if (input.Language is null && IsNativeObject(input.Path))
+                {
+                    // A native object on the link line: system mode links it into the image's native library, and a
+                    // portable link with a kernel package leaves it to the package, as it does archives' native members.
+                    if (invocation.CompileOnly) throw new NotSupportedException($"-c needs a source, LLVM IR or a bitcode object; {input.Path} is a native object file.");
+                    if (options.Runtime == "system") nativeInputs.Add(input.Path);
+                    else if (options.KernelPackages.Count == 0)
+                        throw new NotSupportedException($"{input.Path} is a native object file, such as assembled code; llvmnet links bitcode, and portable mode calls native code through a native kernel package (--native-kernels, docs/user/native-kernels.md); system mode (--runtime=system) links native objects into the image's native library.");
+                    continue;
+                }
                 // A linker input is what its content says, as for a native linker: an archive named .so or .lib, say.
                 if (input.Language is null && !SourceExtensions.Contains(extension) && !IsFortran(input))
                     extension = LinkerInputKind(input.Path) ?? extension;
@@ -474,10 +534,25 @@ internal static class Driver
                         if ((invocation.CxxLibraries || archive is not ("libc++.a" or "libc++abi.a")) && File.Exists(PortableAbi.Library(archive)))
                             bitcode.Add((PortableAbi.Library(archive), false));
             }
-            // System executables take the Fortran runtime from flang-rt built against glibc; the C library is native.
-            string systemFortran = Path.Combine(Toolchain.Root, "sysroot", "system-linux-x64-v1", "lib", "libflang_rt.runtime.a");
-            if (options.Runtime == "system" && !options.Library && !invocation.Relocatable && invocation.DefaultLibraries && File.Exists(systemFortran))
-                bitcode.Add((systemFortran, false));
+            // System executables take the Fortran runtime from flang-rt built against glibc, and compiler-rt's x86 CPU model
+            // (__builtin_cpu_supports, target_clones), which the native libraries do not export; the C library is native.
+            if (options.Runtime == "system" && !options.Library && !invocation.Relocatable && invocation.DefaultLibraries)
+                foreach (string archive in new[] { "libflang_rt.runtime.a", "libclang_rt.builtins.a" })
+                    if (Path.Combine(Toolchain.Root, "sysroot", "system-linux-x64-v1", "lib", archive) is string path && File.Exists(path))
+                        bitcode.Add((path, false));
+            // System mode links the native objects given on the command line and the native members of the archives
+            // into the image's native library, and every symbol they reference stays in the bitcode link (SV-15).
+            if (options.Runtime == "system")
+            {
+                Directory.CreateDirectory(members);
+                foreach (string native in nativeInputs)
+                    options.NativeObjects.AddRange(Llvm.NativeObjects(native, members).Select(item => item with { Source = assemblySources.GetValueOrDefault(native, native) }));
+                foreach ((string path, _) in bitcode)
+                    if (LinkerInputKind(path) == ".a")
+                        options.NativeObjects.AddRange(Llvm.NativeObjects(path, members).Select(item => item with { Source = $"{path}({Path.GetFileName(item.Path).Split('-', 2)[^1]})" }));
+            }
+            HashSet<string> nativeDefined = [.. options.NativeObjects.SelectMany(native => native.Functions.Concat(native.Data))];
+            string[] nativeReferences = [.. options.NativeObjects.SelectMany(native => native.Undefined).Where(name => !nativeDefined.Contains(name)).Distinct().Order(StringComparer.Ordinal)];
             string linked = Path.Combine(temporary, "linked.bc");
             // An executable's root is its entry point, which an archive member may define (gtest_main, Catch2's main),
             // as crt1.o's reference to main extracts it natively. A library or a relocatable object has no entry point.
@@ -488,8 +563,20 @@ internal static class Driver
             // extensions' reverse thunks need on threads a host library started (NX-08).
             string[] threadAttachment = executable && options.Extensions.Count != 0 && options.Runtime == "portable" && invocation.DefaultLibraries
                 ? ["__llvmnet_attach_thread", "__llvmnet_detach_thread"] : [];
+            // Data a kernel package shares with the program stays in the link even when only the package's code reads it.
+            string[] dataNames = invocation.KernelData is null ? [] : [.. File.ReadAllLines(invocation.KernelData).Select(line => line.Trim()).Where(line => line.Length != 0)];
+            string[] kernelData = [.. options.KernelPackages.SelectMany(package => package.Data), .. dataNames];
             Llvm.Link([.. bitcode.Select(input => input.Path)], [.. bitcode.Select(input => input.WholeArchive)], linked, options.AbiTag,
-                executable ? ["main", "_QQmain"] : [], threadAttachment);
+                executable && invocation.KernelData is null ? ["main", "_QQmain"] : [], [.. threadAttachment, .. kernelData, .. nativeReferences],
+                nativeMembers: options.KernelPackages.Count != 0 || invocation.KernelData is not null || options.Runtime == "system");
+            if (invocation.KernelData is not null)
+            {
+                using var dataModule = new LlvmModule(linked);
+                string source = KernelDataSource(dataModule.Handle, dataNames);
+                if (invocation.Output is null) Console.Write(source);
+                else File.WriteAllText(invocation.Output, source);
+                return 0;
+            }
             if (invocation.KeepIr is not null)
                 File.Copy(linked, invocation.KeepIr, true);
             string output = Path.GetFullPath(invocation.Output ?? (options.Library ? "a.dll" : invocation.Relocatable ? "a.o" : invocation.EmitLlvm ? "a.bc" : "a.out"));
@@ -502,6 +589,8 @@ internal static class Driver
             using (var prepared = new LlvmModule(linked))
             {
                 Llvm.WrapVectorInvokes(prepared.Handle);
+                Llvm.NarrowVectorIntegers(prepared.Handle);
+                Llvm.FuseMultiplyAdds(prepared.Handle);
                 Llvm.RemoveTargetAttributes(prepared.Handle);
                 Llvm.LowerConstrainedFloatingPoint(prepared.Handle);
                 if (Llvm.LLVMWriteBitcodeToFile(prepared.Handle, linked) != 0)
@@ -516,7 +605,8 @@ internal static class Driver
             string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,{reductions}scalarize-masked-mem-intrin{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
             if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (options.Runtime == "portable" ? ",__llvmnet_libc_main,__llvmnet_register_finalizer,__llvmnet_cxx_can_catch" : "") +
-                (options.Extensions.Count != 0 && options.Runtime == "portable" ? ",__llvmnet_attach_thread,__llvmnet_detach_thread" : ""));
+                (options.Extensions.Count != 0 && options.Runtime == "portable" ? ",__llvmnet_attach_thread,__llvmnet_detach_thread" : "") +
+                string.Concat(options.KernelPackages.SelectMany(package => package.Data).Concat(nativeReferences).Select(data => "," + data)));
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);
             if (optimizeResult != 0)
                 return optimizeResult;
@@ -528,6 +618,8 @@ internal static class Driver
             string payloadDirectory = nativeAot ? Path.Combine(temporary, "payload") : launcher ? output + ".llvmnet" : Path.GetDirectoryName(output)!;
             Directory.CreateDirectory(payloadDirectory);
             string payload = nativeAot || launcher ? Path.Combine(payloadDirectory, "program.dll") : output;
+            // An image of x86-64-v3 objects holds its 256-bit vectors whole, as the level's command line does (SV-06, SV-09).
+            if (!invocation.VectorWidthGiven && Llvm.IsaLevels(module.Handle).Split(',').Contains("x86-64-v3")) options.VectorWidth = 256;
             try
             {
                 new CilCompiler(options).Compile(module.Handle, payload);
@@ -543,10 +635,20 @@ internal static class Driver
             string levels = Llvm.IsaLevels(module.Handle);
             if (invocation.AotProject is not null)
             {
-                Toolchain.AotProject(payload, invocation.AotProject, invocation.AotPreference, AotInstructionSet(invocation, levels), invocation.AotDebug, options.SystemLibraries);
+                Toolchain.AotProject(payload, invocation.AotProject, invocation.AotPreference, AotInstructionSet(invocation, levels), invocation.AotDebug, options.SystemLibraries, options.KernelPackages);
                 return 0;
             }
-            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, invocation.RuntimeId, invocation.AotPreference, AotInstructionSet(invocation, levels), verbose, invocation.AotDebug, options.SystemLibraries);
+            // A JIT image loads each identifier's kernel library from runtimes/<rid>/native/ beside it.
+            if (!nativeAot)
+                foreach (KernelPackage package in options.KernelPackages)
+                    foreach ((string identifier, (string? shared, _)) in package.Runtimes)
+                    {
+                        if (shared is null) continue;
+                        string native = Path.Combine(payloadDirectory, "runtimes", identifier, "native");
+                        Directory.CreateDirectory(native);
+                        File.Copy(shared, Path.Combine(native, Path.GetFileName(shared)), true);
+                    }
+            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, invocation.RuntimeId, invocation.AotPreference, AotInstructionSet(invocation, levels), verbose, invocation.AotDebug, options.SystemLibraries, options.KernelPackages);
             if (launcher) Toolchain.Launcher(output, payload);
             return 0;
         }
@@ -557,6 +659,54 @@ internal static class Driver
     }
 
     /// <summary>
+    /// The C source of a native kernel package's shared data (--print-kernel-data, SV-13), which the package's build
+    /// compiles into its libraries, and of system mode's native objects' (SV-15), which llvmnet links into the image's
+    /// native library: storage of each named variable the program's bitcode defines, with its size and
+    /// alignment, declarations of those the package defines itself, and for each an accessor, llvmnet_kernel_data_&lt;name&gt;,
+    /// that returns its address and through which the program uses the package's copy.
+    /// </summary>
+    internal static string KernelDataSource(nint module, IEnumerable<string> names)
+    {
+        nint layout = Llvm.LLVMCreateTargetData(Llvm.LLVMGetDataLayoutStr(module));
+        var source = new System.Text.StringBuilder("/* Generated by llvmnet --print-kernel-data: the data this kernel package shares with the program. */\n");
+        foreach (string name in names)
+        {
+            nint global = Llvm.LLVMGetNamedGlobal(module, name);
+            if (global != 0 && Llvm.LLVMGetInitializer(global) != 0)
+            {
+                nint type = Llvm.LLVMGlobalGetValueType(global);
+                uint alignment = Math.Max(Llvm.LLVMGetAlignment(global), Llvm.LLVMABIAlignmentOfType(layout, type));
+                source.Append($"__attribute__((aligned({alignment}))) unsigned char {name}[{Math.Max(Llvm.LLVMABISizeOfType(layout, type), 1)}];\n");
+            }
+            else
+                source.Append($"extern unsigned char {name}[];\n");
+            source.Append($"void *{KernelPackage.Accessor(name)}(void) {{ return {name}; }}\n");
+        }
+        return source.ToString();
+    }
+
+    /// <summary>
+    /// ILC's instruction set: the one given, or for an x64 program with objects compiled at --isa=x86-64-v2 or x86-64-v3
+    /// (the image's llvmnet.isa levels) the highest of them, which such a program requires as it does natively; otherwise
+    /// the baseline, where SSE4.2 and AVX2 are only opportunistic sets that the helpers test at run time and the generic
+    /// vector operations do not use.
+    /// </summary>
+    private static string AotInstructionSet(Invocation invocation, string levels)
+    {
+        if (invocation.AotInstructionSet is not null) return invocation.AotInstructionSet;
+        if (!(invocation.RuntimeId ?? System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier).EndsWith("-x64", StringComparison.Ordinal)) return "baseline";
+        string[] recorded = levels.Split(',');
+        return recorded.Contains("x86-64-v3") ? "x86-64-v3" : recorded.Contains("x86-64-v2") ? "x86-64-v2" : "baseline";
+    }
+
+    /// <summary>
+    /// The frontend options of an ISA level for C and C++: x86-64-v2 selects SSE3 to SSE4.2 and POPCNT as -march does,
+    /// x86-64-v3 also AVX, AVX2, FMA, F16C, BMI1, BMI2, LZCNT and MOVBE, with their macros, intrinsics and vectorizer
+    /// costs, but not CMPXCHG16B, so that 16-byte atomics stay the library calls objects of every level share.
+    /// </summary>
+    private static List<string> IsaArguments(string isa) => isa is "x86-64-v2" or "x86-64-v3" ? ["-march=" + isa, "-mno-cx16"] : [];
+
+    /// <summary>
     /// Warns, when the unit is compiled, about each x86 target intrinsic the backend does not translate
     /// (FunctionEmitter.TranslatesX86Intrinsic): such intrinsics come from SSE and AVX code paths, which system mode's
     /// native feature macros select, and the translation rejects them only at the final link. A warning, not an error:
@@ -564,22 +714,6 @@ internal static class Driver
     /// (flang-rt's floating-point exception accessors read MXCSR). Bitcode keeps symbol names verbatim in its string
     /// table, so a unit without the prefix is not parsed a second time.
     /// </summary>
-    /// <summary>
-    /// ILC's instruction set: the one given, or for an x64 program with objects compiled at --isa=x86-64-v2 (the image's
-    /// llvmnet.isa levels) that level, which such a program requires as it does natively; otherwise the baseline, where
-    /// SSE4.2 is only an opportunistic set that the helpers test at run time and the generic Vector128 operations do not use.
-    /// </summary>
-    private static string AotInstructionSet(Invocation invocation, string levels) =>
-        invocation.AotInstructionSet ?? (levels.Split(',').Contains("x86-64-v2") &&
-            (invocation.RuntimeId ?? System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier).EndsWith("-x64", StringComparison.Ordinal) ? "x86-64-v2" : "baseline");
-
-    /// <summary>
-    /// The frontend options of an ISA level for C and C++: x86-64-v2 selects SSE3 to SSE4.2 and POPCNT as -march does,
-    /// with their macros, intrinsics and vectorizer costs, but not CMPXCHG16B, so that 16-byte atomics stay the library
-    /// calls objects of every level share.
-    /// </summary>
-    private static List<string> IsaArguments(string isa) => isa == "x86-64-v2" ? ["-march=x86-64-v2", "-mno-cx16"] : [];
-
     private static void WarnX86Intrinsics(string path, bool system, Diagnostics diagnostics)
     {
         if (File.ReadAllBytes(path).AsSpan().IndexOf("llvm.x86."u8) < 0) return;
@@ -614,6 +748,52 @@ internal static class Driver
     }
 
     private static readonly HashSet<string> SourceExtensions = new(StringComparer.Ordinal) { ".c", ".cc", ".cpp", ".cxx", ".C", ".i", ".ii", ".ll", ".bc" };
+
+    /// <summary>Whether a file is a native object (ELF, COFF or Mach-O), by its content.</summary>
+    internal static bool IsNativeObject(string path)
+    {
+        Span<byte> magic = stackalloc byte[20];
+        int read;
+        try
+        {
+            using FileStream stream = File.OpenRead(path);
+            read = stream.ReadAtLeast(magic, magic.Length, throwOnEndOfStream: false);
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        // ELF: the relocatable type (1) at offset 16; Mach-O's 64- and 32-bit magic; COFF objects for x64 and ARM64.
+        if (read >= 18 && magic[..4].SequenceEqual((ReadOnlySpan<byte>)[0x7F, (byte)'E', (byte)'L', (byte)'F'])) return magic[16] == 1 && magic[17] == 0;
+        if (read >= 4 && (magic[..4].SequenceEqual((ReadOnlySpan<byte>)[0xCF, 0xFA, 0xED, 0xFE]) || magic[..4].SequenceEqual((ReadOnlySpan<byte>)[0xCE, 0xFA, 0xED, 0xFE]))) return true;
+        return read >= 2 && (magic[..2].SequenceEqual((ReadOnlySpan<byte>)[0x64, 0x86]) || magic[..2].SequenceEqual((ReadOnlySpan<byte>)[0x64, 0xAA]));
+    }
+
+    /// <summary>
+    /// Assembles an assembly source natively (SV-15): .s and .S (and -x assembler, assembler-with-cpp) with Clang for
+    /// x86-64 Linux, with the command line's preprocessor and target options, and .asm with nasm (elf64, its -I and -D
+    /// options). Only system mode links native objects; portable mode calls assembly through a kernel package.
+    /// </summary>
+    private static int Assemble(LinkInput input, string destination, CompilerOptions options, string clang, List<string> frontend, bool verbose)
+    {
+        if (options.Runtime != "system")
+            throw new NotSupportedException($"{input.Path} is assembly, which llvmnet does not translate; portable mode calls assembled code through a native kernel package (--native-kernels, docs/user/native-kernels.md), and system mode (--runtime=system) links it into the image's native library.");
+        if (input.Language is null && Path.GetExtension(input.Path) == ".asm")
+        {
+            List<string> nasm = ["-f", "elf64"];
+            for (int index = 0; index < frontend.Count; index++)
+            {
+                string argument = frontend[index];
+                string? value = argument is "-I" or "-D" && index + 1 < frontend.Count ? frontend[++index] : argument.Length > 2 && argument[0] == '-' && argument[1] is 'I' or 'D' ? argument[2..] : null;
+                if (value is null) continue;
+                nasm.Add((argument[1] == 'I' ? "-I" : "-D") + (argument[1] == 'I' && !value.EndsWith('/') ? value + "/" : value));
+            }
+            nasm.AddRange([input.Path, "-o", destination]);
+            return Toolchain.Run(Toolchain.Executable("nasm", "LLVMNET_NASM"), nasm, verbose);
+        }
+        List<string> command = ["--target=x86_64-linux-gnu", "-c", .. WithoutFortranOptions(frontend)];
+        if (input.Language is not null) command.AddRange(["-x", input.Language]);
+        command.AddRange([input.Path, "-o", destination]);
+        return Toolchain.Run(clang, command, verbose);
+    }
 
     /// <summary>
     /// What a file whose extension names no language is, read from its content: Clang hands such a file to the linker,

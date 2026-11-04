@@ -17,6 +17,7 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal readonly Dictionary<nint, MethodBuilder> ThreadGlobals = [];
     /// <summary>Functions whose address the module takes: the pointer value (identity) and the method it calls.</summary>
     internal readonly Dictionary<nint, (MethodInfo Identity, MethodInfo Target)> AddressTaken = [];
+    private KernelStubs? kernelStubs;
     internal TypeSystem Types { get; private set; } = null!;
     internal TypeBuilder Program { get; private set; } = null!;
     // The CLR limits how many fields one type may have, so static fields beyond this many per type go to further
@@ -236,6 +237,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         }
         if (name == "__llvmnet_run_constructors")
             return Methods[function] = constructors;
+        if (Host is null && kernelStubs?.Stub(function) is MethodInfo kernel)
+            return Methods[function] = kernel;
         if (!runtimeExports.TryGetValue(name, out method) || options.Runtime == "portable" && !MuslVisible(name, method))
             throw new NotSupportedException($"Unresolved function: {name}");
         if (!Reinterpretable(Types.Map(Llvm.LLVMGetReturnType(signature)), method.ReturnType) ||
@@ -283,8 +286,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         if (options.Simd128)
             foreach (string name in runtimeExports.Keys.Where(name => name.StartsWith("__llvmnet_simd128_", StringComparison.Ordinal)))
                 managedImports.Add(name);
-        // <llvmnet/ext.h> answers from the runtime in both modes, not from a native library in system mode.
-        managedImports.UnionWith(["llvmnet_ext_available", "llvmnet_ext_library"]);
+        // <llvmnet/ext.h> and <llvmnet/cpu.h> answer from the runtime in both modes, not from a native library in system mode.
+        managedImports.UnionWith(["llvmnet_ext_available", "llvmnet_ext_library", "llvmnet_cpu_features", "llvmnet_native_kernels"]);
         ConstructorInfo metadataAttribute = typeof(AssemblyMetadataAttribute).GetConstructor([typeof(string), typeof(string)])!;
         assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.abi", options.AbiTag]));
         assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.version", BuildInfo.Version]));
@@ -311,6 +314,12 @@ internal sealed class CilCompiler(CompilerOptions options)
         }
         foreach (ExtensionPackage extension in options.Extensions)
             extensionProviders.Add(ExtensionProvider(extension));
+        if (options.KernelPackages.Count != 0)
+        {
+            kernelStubs = new KernelStubs(this, options.KernelPackages);
+            assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.kernels",
+                string.Join(", ", options.KernelPackages.Select(package => package.Tag))]));
+        }
         if (options.Extensions.Count + options.SystemExtensions.Count != 0)
             assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.extensions",
                 string.Join(", ", options.Extensions.Concat(options.SystemExtensions).Select(extension => extension.Tag))]));
@@ -351,7 +360,7 @@ internal sealed class CilCompiler(CompilerOptions options)
                 throw new NotSupportedException($"External thread-local global requires a bitcode definition: {Llvm.Name(global)}");
             if (Llvm.LLVMGetInitializer(global) == 0 && Host is not null && !Cxx.HasGlobal(Llvm.Name(global)))
                 Host.LibraryFor(Llvm.Name(global));
-            else if (Llvm.LLVMGetInitializer(global) == 0 && !Cxx.HasGlobal(Llvm.Name(global)))
+            else if (Llvm.LLVMGetInitializer(global) == 0 && !Cxx.HasGlobal(Llvm.Name(global)) && kernelStubs?.DataPackageOf(Llvm.Name(global)) is null)
                 throw new NotSupportedException($"Unresolved external global: {Llvm.Name(global)}");
             Globals[global] = FieldHolder().DefineField($"__global{Globals.Count}", typeof(nint), FieldAttributes.Assembly | FieldAttributes.Static);
             if (threadLocal)
@@ -620,6 +629,17 @@ internal sealed class CilCompiler(CompilerOptions options)
             il.Emit(OpCodes.Newobj, provider);
             il.Emit(OpCodes.Call, typeof(NativeExtensions).GetMethod(nameof(NativeExtensions.Register))!);
         }
+        // Native kernel packages: the resolver of the image's kernel stubs, and llvmnet_native_kernels (SV-13).
+        foreach (KernelPackage package in options.KernelPackages)
+        {
+            il.Emit(OpCodes.Ldtoken, Program);
+            il.Emit(OpCodes.Call, typeof(Type).GetMethod(nameof(Type.GetTypeFromHandle))!);
+            il.Emit(OpCodes.Callvirt, typeof(Type).GetProperty(nameof(Type.Assembly))!.GetMethod!);
+            il.Emit(OpCodes.Ldstr, package.Name);
+            il.Emit(OpCodes.Ldstr, package.Library);
+            il.Emit(OpCodes.Ldstr, string.Join(" ", options.Runtime == "system" ? ["linux-x64"] : package.Runtimes.Keys));
+            il.Emit(OpCodes.Call, typeof(NativeKernels).GetMethod(nameof(NativeKernels.Register))!);
+        }
         // In system mode the loader has linked the extension's libraries; <llvmnet/ext.h> still answers for it.
         foreach (ExtensionPackage extension in options.SystemExtensions)
         {
@@ -647,6 +667,34 @@ internal sealed class CilCompiler(CompilerOptions options)
         foreach ((nint global, FieldBuilder field) in Globals)
         {
             if (ThreadGlobals.ContainsKey(global)) continue;
+            // Shared with system mode's native objects (SV-15): the image's native library holds it.
+            if (Host?.DataAccessor(global) is MethodInfo shared)
+            {
+                il.Emit(OpCodes.Call, shared);
+                il.Emit(OpCodes.Stsfld, field);
+                continue;
+            }
+            if (kernelStubs?.DataPackageOf(Llvm.Name(global)) is KernelPackage dataPackage)
+            {
+                // Shared with a kernel package (SV-13): the library's storage where the host has the library, which the
+                // program's initializer fills below, so that its code and the program read one copy; otherwise the
+                // program's own. Data only the library defines gets zeroed storage of its declared size there, as LLVM
+                // may load from a declared global speculatively.
+                Label own = il.DefineLabel(), store = il.DefineLabel();
+                il.Emit(OpCodes.Ldstr, dataPackage.Name);
+                il.Emit(OpCodes.Call, typeof(NativeKernels).GetMethod(nameof(NativeKernels.IsAvailable))!);
+                il.Emit(OpCodes.Brfalse, own);
+                il.Emit(OpCodes.Call, kernelStubs.Accessor(dataPackage, Llvm.Name(global)));
+                il.Emit(OpCodes.Br, store);
+                il.MarkLabel(own);
+                nint type = Llvm.LLVMGlobalGetValueType(global);
+                il.Emit(OpCodes.Ldc_I8, Math.Max(Types.Size(type), 1));
+                il.Emit(OpCodes.Ldc_I4, Math.Max(checked((int)Llvm.LLVMGetAlignment(global)), Types.Alignment(type)));
+                il.Emit(OpCodes.Call, typeof(Memory).GetMethod(nameof(Memory.AllocateGlobal))!);
+                il.MarkLabel(store);
+                il.Emit(OpCodes.Stsfld, field);
+                continue;
+            }
             if (Llvm.LLVMGetInitializer(global) == 0)
             {
                 if (Host is not null && !Cxx.HasGlobal(Llvm.Name(global)))
@@ -701,7 +749,12 @@ internal sealed class CilCompiler(CompilerOptions options)
                 lifecycle.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.AtFini))!);
         }
         foreach (nint function in LifecycleFunctions("llvm.global_ctors"))
-            lifecycle.Emit(OpCodes.Call, ResolveFunction(function));
+        {
+            // A constructor's result is ignored, as the ELF loader ignores it (compiler-rt's __cpu_indicator_init returns int).
+            MethodInfo constructor = ResolveFunction(function);
+            lifecycle.Emit(OpCodes.Call, constructor);
+            if (constructor.ReturnType != typeof(void)) lifecycle.Emit(OpCodes.Pop);
+        }
         lifecycle.Emit(OpCodes.Ret);
 
         IEnumerable<nint> LifecycleFunctions(string name)
@@ -717,7 +770,7 @@ internal sealed class CilCompiler(CompilerOptions options)
                 nint function = Llvm.LLVMGetAggregateElement(entry, 1);
                 if (Llvm.LLVMIsNull(function) != 0)
                     continue;
-                if (Llvm.LLVMCountParams(function) != 0 || Types.Map(Llvm.LLVMGetReturnType(Llvm.LLVMGlobalGetValueType(function))) != typeof(void))
+                if (Llvm.LLVMCountParams(function) != 0 || name == "llvm.global_dtors" && Types.Map(Llvm.LLVMGetReturnType(Llvm.LLVMGlobalGetValueType(function))) != typeof(void))
                     throw new NotSupportedException($"Unsupported global constructor/destructor signature: {Llvm.Name(function)}");
                 functions.Add((Llvm.LLVMConstIntGetSExtValue(Llvm.LLVMGetAggregateElement(entry, 0)), function));
             }

@@ -51,14 +51,15 @@ public static unsafe class ProcessRuntime
 
     /// <summary>
     /// Builds musl's Linux-style start vector: argv entries, NULL, environment entries, NULL, then an auxiliary
-    /// vector with AT_PAGESZ, AT_RANDOM and equal real/effective ids, which __init_libc reads.
+    /// vector with AT_PAGESZ, AT_RANDOM, equal real/effective ids and the host's AT_HWCAP, which __init_libc and
+    /// getauxval read.
     /// </summary>
     public static int InitializeStartup(string[] arguments)
     {
         HostSyscalls.InitializeHost();
         string[] values = [Environment.GetCommandLineArgs().FirstOrDefault() ?? Environment.ProcessPath ?? "program", .. arguments];
         string[] environment = EnvironmentEntries();
-        int slots = values.Length + 1 + environment.Length + 1 + 2 * 8;
+        int slots = values.Length + 1 + environment.Length + 1 + 2 * 10;
         nint vector = (nint)NativeMemory.AllocZeroed((nuint)slots, (nuint)IntPtr.Size);
         argumentAllocations.Add(vector);
         nint* slot = (nint*)vector;
@@ -70,7 +71,7 @@ public static unsafe class ProcessRuntime
         nint random = (nint)NativeMemory.Alloc(16);
         argumentAllocations.Add(random);
         HostRandom.Fill(new Span<byte>((void*)random, 16));
-        foreach ((nint key, nint value) in new (nint, nint)[] { (6, 4096), (25, random), (11, 0), (12, 0), (13, 0), (14, 0), (23, 0) })
+        foreach ((nint key, nint value) in new (nint, nint)[] { (6, 4096), (25, random), (11, 0), (12, 0), (13, 0), (14, 0), (23, 0), (16, CpuFeatures.HardwareCapabilities()), (26, CpuFeatures.HardwareCapabilities2()) })
         {
             *slot++ = key;
             *slot++ = value;

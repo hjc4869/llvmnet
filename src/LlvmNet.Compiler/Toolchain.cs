@@ -96,7 +96,8 @@ internal static class Toolchain
     /// on any host with the .NET 10 SDK and that host's native toolchain, which is how portable images are published
     /// for Windows and macOS from a Linux build (docs/user/deployment.md). Returns the assembly name, which names the executable.
     /// </summary>
-    internal static string AotProject(string assembly, string projectDirectory, string preference, string instructionSet, bool debug, IReadOnlyList<string> systemLibraries)
+    internal static string AotProject(string assembly, string projectDirectory, string preference, string instructionSet, bool debug, IReadOnlyList<string> systemLibraries,
+        IReadOnlyList<KernelPackage>? kernels = null)
     {
         Directory.CreateDirectory(projectDirectory);
         string projectPath = Path.Combine(projectDirectory, "NativeHost.csproj");
@@ -118,6 +119,19 @@ internal static class Toolchain
             references.Add(new XElement("NativeLibrary", new XAttribute("Include", "$(MSBuildThisFileDirectory)" + Path.GetFileName(archive))));
             references.Add(new XElement("DirectPInvoke", new XAttribute("Include", Path.GetFileNameWithoutExtension(archive) + ".so")));
         }
+        // Native kernel packages (SV-13): each identifier's static library, linked when the project is published for it,
+        // and its P/Invoke stubs bound directly to it.
+        foreach (KernelPackage package in kernels ?? [])
+            foreach ((string identifier, (_, string? archive)) in package.Runtimes)
+            {
+                if (archive is null) continue;
+                string copied = Path.Combine("kernels", package.Name, identifier, Path.GetFileName(archive));
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(projectDirectory, copied))!);
+                File.Copy(archive, Path.Combine(projectDirectory, copied), true);
+                string condition = $"'$(RuntimeIdentifier)' == '{identifier}'";
+                references.Add(new XElement("NativeLibrary", new XAttribute("Include", "$(MSBuildThisFileDirectory)" + copied.Replace('\\', '/')), new XAttribute("Condition", condition)));
+                references.Add(new XElement("DirectPInvoke", new XAttribute("Include", package.Library), new XAttribute("Condition", condition)));
+            }
         foreach (string library in systemLibraries)
             references.Add(Path.IsPathRooted(library)
                 ? new XElement("NativeLibrary", new XAttribute("Include", library))
@@ -237,7 +251,8 @@ internal static class Toolchain
         return output + error;
     }
 
-    internal static int NativeAot(string assembly, string output, string temporary, string? rid, string preference, string instructionSet, bool verbose, bool debug, IReadOnlyList<string> systemLibraries)
+    internal static int NativeAot(string assembly, string output, string temporary, string? rid, string preference, string instructionSet, bool verbose, bool debug, IReadOnlyList<string> systemLibraries,
+        IReadOnlyList<KernelPackage>? kernels = null)
     {
         if (instructionSet == "native" && rid is not null && rid != RuntimeInformation.RuntimeIdentifier)
             throw new ArgumentException("Host CPU instruction selection requires the current host runtime identifier.");
@@ -246,7 +261,7 @@ internal static class Toolchain
         CheckNativeAotPrerequisites(rid ?? RuntimeInformation.RuntimeIdentifier, verbose);
         string projectDirectory = Path.Combine(temporary, "aot");
         string projectPath = Path.Combine(projectDirectory, "NativeHost.csproj");
-        string assemblyName = AotProject(assembly, projectDirectory, preference, instructionSet, debug, systemLibraries);
+        string assemblyName = AotProject(assembly, projectDirectory, preference, instructionSet, debug, systemLibraries, kernels);
         string publish = Path.Combine(projectDirectory, "publish");
         List<string> arguments = ["publish", projectPath, "-c", "Release", "-r", rid ?? RuntimeInformation.RuntimeIdentifier, "-o", publish, "--nologo", "-v", verbose ? "normal" : "minimal"];
         int result = Run(Dotnet, arguments, verbose);

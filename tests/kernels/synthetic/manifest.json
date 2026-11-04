@@ -1,0 +1,10 @@
+{
+  "name": "synthetic",
+  "version": "1.0",
+  "library": "synthetic-kernels",
+  "runtimes": {
+    "linux-x64": { "shared": "runtimes/linux-x64/native/libsynthetic-kernels.so", "static": "runtimes/linux-x64/native/libsynthetic-kernels.a" },
+    "linux-arm64": { "shared": "runtimes/linux-arm64/native/libsynthetic-kernels.so", "static": "runtimes/linux-arm64/native/libsynthetic-kernels.a" }
+  },
+  "symbols": { "sk_add_i32": {}, "sk_dot_f64": {}, "sk_mix": {} }
+}

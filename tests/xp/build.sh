@@ -30,8 +30,8 @@ while IFS=$'\t' read -r name aot sources flags arguments environment; do
     for source_file in "${source_files[@]}"; do source_paths+=("$root/tests/$source_file"); done
     # shellcheck disable=SC2206
     flag_list=($flags)
-    # --isa=x86-64-v2 is llvmnet's spelling of -march=x86-64-v2 (docs/user/x86-intrinsics.md).
-    native_flags=("${flag_list[@]/#--isa=x86-64-v2/-march=x86-64-v2}")
+    # --isa=x86-64-v2 and x86-64-v3 are llvmnet's spellings of -march=<level> (docs/user/x86-intrinsics.md).
+    native_flags=("${flag_list[@]/#--isa=x86-64-v/-march=x86-64-v}")
     case "${source_files[0]##*.}" in
         c) compiler=(clang-22 "${native_flags[@]}" "${source_paths[@]}" -lm -latomic -o "$bundle/native/$name") ;;
         cpp) compiler=(clang++-22 "${native_flags[@]}" "${source_paths[@]}" -o "$bundle/native/$name") ;;
@@ -121,6 +121,29 @@ LLVMNET_ROOT="$farm" "$llvmnet" --runtime=portable -O1 "$template/example/main.c
 LLVMNET_ROOT="$farm" "$llvmnet" --runtime=portable -O1 "$template/example/main.c" -lllvmnet-hello --aot-project "$bundle/aot/hello"
 printf 'hello\taot\t-\t-\tnative:hello\n' >>"$bundle/manifest.tsv"
 count=$((count + 1))
+# A native kernel package (SV-13): the synthetic kernels for linux-x64, linux-arm64, win-x64 and osx-arm64, linked by lld
+# here (scripts/kernels.py), and an image that calls them and shares data with them; each host loads its own library
+# under the JIT and links its static library as NativeAOT, and must print what the native Linux program prints.
+kernels="$root/tests/kernels/synthetic"
+kernel_work="$bundle/native/kernel-build"
+mkdir -p "$kernel_work"
+clang-22 --target=x86_64-linux-gnu -c "$kernels/x86_64.S" -o "$kernel_work/x86_64.o"
+clang-22 --target=aarch64-linux-gnu -c "$kernels/aarch64.S" -o "$kernel_work/aarch64.o"
+clang-22 --target=x86_64-pc-windows-msvc -c "$kernels/x86_64-windows.S" -o "$kernel_work/x86_64-windows.o"
+clang-22 --target=arm64-apple-macos11 -c "$kernels/aarch64-macos.S" -o "$kernel_work/aarch64-macos.o"
+"$llvmnet" --runtime=portable -O1 -c "$kernels/program.c" -o "$kernel_work/program.o"
+python3 "$root/scripts/kernels.py" --llvmnet "$llvmnet" --name synthetic --version 1.0 --library synthetic-kernels \
+    --output "$kernel_work/package" --runtime linux-x64 "$kernel_work/x86_64.o" --runtime linux-arm64 "$kernel_work/aarch64.o" \
+    --runtime win-x64 "$kernel_work/x86_64-windows.o" --runtime osx-arm64 "$kernel_work/aarch64-macos.o" \
+    --bitcode "$kernel_work/program.o" >/dev/null
+clang-22 -O1 "$kernels/program.c" "$kernel_work/x86_64.o" -o "$bundle/native/kernels"
+"$bundle/native/kernels" >"$bundle/expected/kernels.txt"
+printf '0\n' >"$bundle/expected/kernels.status"
+"$llvmnet" --runtime=portable -O1 --native-kernels "$kernel_work/package" "$kernels/program.c" -o "$bundle/images/kernels.dll"
+"$llvmnet" --runtime=portable -O1 --native-kernels "$kernel_work/package" "$kernels/program.c" --aot-project "$bundle/aot/kernels"
+printf 'kernels\taot\t-\t-\t-\n' >>"$bundle/manifest.tsv"
+count=$((count + 1))
+rm -rf "$kernel_work"
 # The symbolic-link farm points into this checkout and the extension build directory is scratch: neither ships, and
 # Windows cannot extract links whose targets are missing.
 rm -rf "$farm" "$bundle/native/ext-build"

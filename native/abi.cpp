@@ -114,6 +114,25 @@ extern "C" unsigned llvmnet_wrap_vector_invokes(LLVMModuleRef sourceRef)
     return invokes.size();
 }
 
+// A forwarder for a native object's function (SV-15): an exported function of the same signature and attributes that
+// tail-calls it, so that translated code can call a function the object keeps hidden directly, without a thunk's buffer.
+extern "C" void llvmnet_add_native_forwarder(LLVMModuleRef shimRef, LLVMValueRef functionRef, const char *exportName)
+{
+    auto *module = llvm::unwrap(shimRef);
+    auto *source = llvm::cast<llvm::Function>(llvm::unwrap(functionRef));
+    llvm::FunctionCallee target = module->getOrInsertFunction(source->getName(), source->getFunctionType());
+    auto *forwarder = llvm::Function::Create(source->getFunctionType(), llvm::GlobalValue::ExternalLinkage, exportName, module);
+    forwarder->setAttributes(source->getAttributes());
+    llvm::IRBuilder<> builder(llvm::BasicBlock::Create(module->getContext(), "entry", forwarder));
+    std::vector<llvm::Value *> arguments;
+    for (auto &argument : forwarder->args()) arguments.push_back(&argument);
+    auto *call = builder.CreateCall(target, arguments);
+    call->setAttributes(source->getAttributes());
+    call->setTailCallKind(llvm::CallInst::TCK_MustTail);
+    if (call->getType()->isVoidTy()) builder.CreateRetVoid();
+    else builder.CreateRet(call);
+}
+
 extern "C" void llvmnet_add_native_thunk(LLVMModuleRef shimRef, LLVMValueRef functionRef,
                                         LLVMValueRef callRef, const char *exportName)
 {

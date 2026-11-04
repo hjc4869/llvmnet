@@ -101,13 +101,17 @@ internal static class DriverOptions
     /// </summary>
     internal static readonly string[] IsaAliases = ["-msse", "-msse2", "-msse3", "-mssse3", "-msse4", "-msse4.1", "-msse4.2", "-mpopcnt", "-mpclmul", "-mcrc32", "-march=x86-64-v2"];
 
-    /// <summary>Their negations above SSE2, which turn features off without changing the ABI; -mno-sse and -mno-sse2 would
-    /// move floating-point arguments out of the SSE registers and stay rejected.</summary>
+    /// <summary>Their negations above SSE2, which turn features off without changing the ABI, and -march=x86-64, the
+    /// baseline itself, after which -m flags add features as natively (skcms compiles its AVX2 file with -march=x86-64
+    /// -mavx2 -mf16c); -mno-sse and -mno-sse2 would move floating-point arguments out of the SSE registers and stay rejected.</summary>
     internal static readonly string[] IsaNegations = ["-mno-sse3", "-mno-ssse3", "-mno-sse4", "-mno-sse4.1", "-mno-sse4.2", "-mno-popcnt", "-mno-pclmul", "-mno-crc32",
-        "-mno-avx", "-mno-avx2", "-mno-fma", "-mno-f16c", "-mno-avx512f"];
+        "-mno-avx", "-mno-avx2", "-mno-fma", "-mno-f16c", "-mno-avx512f", "-mno-bmi", "-mno-bmi2", "-mno-lzcnt", "-mno-movbe", "-march=x86-64"];
 
-    /// <summary>The flags of x86-64-v3 and beyond, whose intrinsics come with SV-09.</summary>
-    internal static readonly string[] IsaLater = ["-mavx", "-mavx2", "-mfma", "-mf16c", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mavx512f", "-march=x86-64-v3", "-march=x86-64-v4"];
+    /// <summary>The flags that portable mode takes as aliases of --isa=x86-64-v3 (SV-09), passed to Clang as given too.</summary>
+    internal static readonly string[] IsaV3Aliases = ["-mavx", "-mavx2", "-mfma", "-mf16c", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-march=x86-64-v3"];
+
+    /// <summary>The flags of the levels beyond x86-64-v3, whose intrinsics the runtime does not implement.</summary>
+    internal static readonly string[] IsaLater = ["-mavx512f", "-march=x86-64-v4"];
 
     /// <summary>The option table. Order within a group is the order --help prints.</summary>
     internal static readonly IReadOnlyList<OptionSpec> Table =
@@ -139,13 +143,15 @@ internal static class DriverOptions
         // Runtime mode and ABI
         new("--runtime", OptionKind.JoinedOrSeparate, Modes, "portable (the default; ABI " + PortableAbi.Tag + ", runs on every supported .NET host) or system (the native Linux x86-64 ABI, system-linux-x64-v1)", H, value: "<mode>"),
         new("--portable-sysroot", OptionKind.JoinedOrSeparate, Modes, "Use another portable sysroot instead of the toolchain's sysroot/" + PortableAbi.Tag, H, value: "<dir>"),
-        new("--isa=", OptionKind.Joined, Modes, "The instruction set intrinsics and headers may assume, without changing the data layout (ADR-16): baseline (the default); x86-64-v2, the SSE to SSE4.2 macros and intrinsics, which run as the host's instructions or exact compositions on every host (docs/user/x86-intrinsics.md); or wasm-simd128, the wasm_simd128.h header (docs/user/simd128.md); x86-64-v3 and neon follow with their intrinsic helpers", H, value: "<level>"),
+        new("--isa=", OptionKind.Joined, Modes, "The instruction set intrinsics and headers may assume, without changing the data layout (ADR-16): baseline (the default); x86-64-v2, the SSE to SSE4.2 macros and intrinsics, which run as the host's instructions or exact compositions on every host (docs/user/x86-intrinsics.md); x86-64-v3, also AVX, AVX2, FMA, F16C, BMI1, BMI2 and LZCNT; or wasm-simd128, the wasm_simd128.h header (docs/user/simd128.md)", H, value: "<level>"),
         new("--simd128", OptionKind.Flag, Modes, "--isa=wasm-simd128: compile wasm_simd128.h intrinsics to Vector128 code (docs/user/simd128.md)", H),
         new("--vector-lowering=", OptionKind.Joined, Hidden, "", H, value: "<auto|typed|scalar>"),
         new("--vector-width=", OptionKind.Joined, Modes, "128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a 256-bit vector as one instruction where the host has AVX2 and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128", H, value: "<bits>"),
         // Managed and native libraries
         new("--cil-reference", OptionKind.JoinedOrSeparate, Managed, "Resolve calls to the public CExport methods of a managed library built with -shared, in the same mode", H, value: "<assembly>"),
         new("--system-library", OptionKind.JoinedOrSeparate, Managed, "System mode: a native shared library whose functions the program calls through generated bridges", H, value: "<library>"),
+        new("--print-kernel-data=", OptionKind.Joined, Hidden, "", H, value: "<file>"),
+        new("--native-kernels", OptionKind.JoinedOrSeparate, Managed, "Portable mode: a native kernel package (its directory, with manifest.json) whose library defines functions the program declares, such as assembly kernels; the image calls them through P/Invoke stubs, loads the library of the running host from runtimes/<rid>/native/ beside it and NativeAOT links the target's static library (docs/user/native-kernels.md)", H, value: "<dir>"),
         new("--extension", OptionKind.JoinedOrSeparate, Managed, "Link a native extension installed in the sysroot's ext/ directory: in portable mode its assembly, registered for dlopen; in system mode its Linux libraries, as --system-library (also -l<name> for a name its manifest lists)", H, value: "<name>"),
         new("--native-import", OptionKind.JoinedOrSeparate, NotAccepted, "", R, "it was removed (ADR-04, SA-01); --runtime=system resolves every native function through generated bridges, and --system-library <shared-library> adds a library", "<spec>"),
         // NativeAOT
@@ -241,11 +247,12 @@ internal static class DriverOptions
         new("-coverage", OptionKind.Flag, Hidden, "", R, "the profiling runtime is not part of the sysroot or the system-mode link"),
         new("--coverage", OptionKind.Flag, Hidden, "", R, "the profiling runtime is not part of the sysroot or the system-mode link"),
         new("-nolibc", OptionKind.Flag, NotAccepted, "", R, F, "portable: the C library cannot be left out on its own (crt1.o needs it); -nodefaultlibs leaves out every sysroot library"),
-        new("-m", OptionKind.Joined, NotAccepted, "", R, F, "portable: -m<option> selects a CPU, instruction set or native ABI detail, and " + PortableAbiReason + "; -mllvm, -mmlir, -mtune=, the x86 SIMD feature flags up to SSE4.2 (aliases of --isa=x86-64-v2) and the -module... options are the exceptions", "<option>"),
-        new("-msse4.2", OptionKind.Flag, Modes, "Portable mode: an alias of --isa=x86-64-v2, with no ABI effect, that also reaches Clang as given (as do -msse, -msse2, -msse3, -mssse3, -msse4, -msse4.1, -mpopcnt, -mpclmul, -mcrc32 and -march=x86-64-v2; -mno-sse3 and the other -mno- forms above SSE2 pass through without changing the level). System mode: as in Clang", H, F),
+        new("-m", OptionKind.Joined, NotAccepted, "", R, F, "portable: -m<option> selects a CPU, instruction set or native ABI detail, and " + PortableAbiReason + "; -mllvm, -mmlir, -mtune=, the x86 SIMD feature flags up to AVX2 (aliases of --isa=x86-64-v2 and x86-64-v3) and the -module... options are the exceptions", "<option>"),
+        new("-msse4.2", OptionKind.Flag, Modes, "Portable mode: an alias of --isa=x86-64-v2, with no ABI effect, that also reaches Clang as given (as do -msse, -msse2, -msse3, -mssse3, -msse4, -msse4.1, -mpopcnt, -mpclmul, -mcrc32 and -march=x86-64-v2; -mno-sse3 and the other -mno- forms above SSE2 pass through without changing the level; -mavx, -mavx2, -mfma, -mf16c, -mbmi, -mbmi2, -mlzcnt, -mmovbe and -march=x86-64-v3 are aliases of --isa=x86-64-v3, and the highest level given applies). System mode: as in Clang", H, F),
+        .. IsaV3Aliases.Select(name => new OptionSpec(name, OptionKind.Flag, Hidden, "", H, F)),
         .. IsaAliases.Where(name => name != "-msse4.2").Select(name => new OptionSpec(name, OptionKind.Flag, Hidden, "", H, F)),
         .. IsaNegations.Select(name => new OptionSpec(name, OptionKind.Flag, Hidden, "", F)),
-        .. IsaLater.Select(name => new OptionSpec(name, OptionKind.Flag, Hidden, "", R, F, "portable: " + name + " selects x86-64-v3, whose AVX, AVX2 and FMA intrinsics are not implemented yet (SV-09); the supported levels are baseline, x86-64-v2 and wasm-simd128")),
+        .. IsaLater.Select(name => new OptionSpec(name, OptionKind.Flag, Hidden, "", R, F, "portable: " + name + " selects AVX-512, whose intrinsics the runtime does not implement; the supported levels are baseline, x86-64-v2, x86-64-v3 and wasm-simd128")),
         new("-arch", OptionKind.Separate, Hidden, "", R, F, "portable: " + PortableAbiReason, "<arch>"),
         new("--target=", OptionKind.Joined, NotAccepted, "", R, F, "portable: " + PortableAbiReason + " (also -target <triple>, --sysroot, -isysroot, -fshort-wchar, -fshort-enums, -fpack-struct)", "<triple>"),
         new("-target", OptionKind.Separate, Hidden, "", R, F, "portable: " + PortableAbiReason, "<triple>"),

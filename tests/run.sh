@@ -86,6 +86,8 @@ missing() {
             node) command -v node >/dev/null || { echo "node not found"; return; } ;;
             wasm-ld) [[ -n "${WASM_LD:-}" ]] || command -v wasm-ld-22 >/dev/null || command -v wasm-ld >/dev/null || command -v wasm-ld-21 >/dev/null || { echo "no wasm-ld (install lld-22 or set WASM_LD)"; return; } ;;
             python3) command -v python3 >/dev/null || { echo "python3 not found"; return; } ;;
+            lld) command -v ld.lld-22 >/dev/null || { echo "ld.lld-22 not found (install lld-22)"; return; } ;;
+            nasm) command -v nasm >/dev/null || { echo "nasm not found (install nasm)"; return; } ;;
             egl)
                 local libraries
                 libraries="$(ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null)"
