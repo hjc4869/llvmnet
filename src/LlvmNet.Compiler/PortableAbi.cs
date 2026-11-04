@@ -39,11 +39,11 @@ internal static class PortableAbi
         List<string> result = ["--target=" + Triple, "-D__LLVMNET__=1", "-D__LLVMNET_PORTABLE__=1", "-D__LLVMNET_ABI_VERSION=2"];
         if (fortran) return result;
         // The fixed x86-64 data layout must not imply x86 instruction sets: libraries select x86 code paths by these
-        // macros. --isa=x86-64-v2 keeps them, with the SSE3 to SSE4.2 ones -march adds, because the runtime translates
-        // those intrinsics, and the MMX ones, which Clang implements with SSE2 (ADR-16 Level 2); the layouts do not
-        // depend on them.
+        // macros. --isa=x86-64-v2 and x86-64-v3 keep them, with the SSE3 to AVX2 ones -march adds, because the runtime
+        // translates those intrinsics, and the MMX ones, which Clang implements with SSE2 (ADR-16 Level 2); the layouts
+        // do not depend on them.
         result.Add("-nostdinc");
-        if (isa != "x86-64-v2")
+        if (isa is not ("x86-64-v2" or "x86-64-v3"))
             result.AddRange(["-U__x86_64__", "-U__amd64__", "-U__amd64", "-U__SSE__", "-U__SSE2__", "-U__MMX__", "-U__SSE_MATH__", "-U__SSE2_MATH__", "-U__FXSR__"]);
         if (cpp)
         {

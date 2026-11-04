@@ -15,7 +15,7 @@ namespace LlvmNet.Runtime;
 /// integer indefinite of an out-of-range conversion, saturation and rounding. rcpps and rsqrtps are approximations whose
 /// bits differ between processors; composed, they divide, which stays within the instructions' documented error.
 /// </summary>
-public static unsafe class X86
+public static unsafe partial class X86
 {
     // The immediates (comparison predicates, rounding modes, controls) are the intrinsic's constant operand, which the
     // JIT and ILC see as a constant once the helper is inlined at the call site; a helper left as a call takes .NET's

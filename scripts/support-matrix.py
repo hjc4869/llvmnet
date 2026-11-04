@@ -169,7 +169,8 @@ probe("Intrinsics: x86", "llvm.x86.sse2.mfence / lfence, llvm.x86.sse.sfence", b
       + "declare void @llvm.x86.sse2.mfence()\ndeclare void @llvm.x86.sse2.lfence()\ndeclare void @llvm.x86.sse.sfence()\n")
 probe("Intrinsics: x86", "SSE to SSE4.2 operations (llvm.x86.sse2.psad.bw)", "define <2 x i64> @probe(<16 x i8> %a) {\n  %r = call <2 x i64> @llvm.x86.sse2.psad.bw(<16 x i8> %a, <16 x i8> %a)\n  ret <2 x i64> %r\n}\ndeclare <2 x i64> @llvm.x86.sse2.psad.bw(<16 x i8>, <16 x i8>)\n")
 probe("Intrinsics: x86", "llvm.x86.pclmulqdq", "define <2 x i64> @probe(<2 x i64> %a) {\n  %r = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> %a, <2 x i64> %a, i8 17)\n  ret <2 x i64> %r\n}\ndeclare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8 immarg)\n")
-probe("Intrinsics: x86", "AVX and later (llvm.x86.avx2.psad.bw)", "define <4 x i64> @probe(<32 x i8> %a) {\n  %r = call <4 x i64> @llvm.x86.avx2.psad.bw(<32 x i8> %a, <32 x i8> %a)\n  ret <4 x i64> %r\n}\ndeclare <4 x i64> @llvm.x86.avx2.psad.bw(<32 x i8>, <32 x i8>)\n")
+probe("Intrinsics: x86", "AVX to AVX2, FMA, F16C and BMI operations (llvm.x86.avx2.psad.bw)", "define <4 x i64> @probe(<32 x i8> %a) {\n  %r = call <4 x i64> @llvm.x86.avx2.psad.bw(<32 x i8> %a, <32 x i8> %a)\n  ret <4 x i64> %r\n}\ndeclare <4 x i64> @llvm.x86.avx2.psad.bw(<32 x i8>, <32 x i8>)\n")
+probe("Intrinsics: x86", "AVX-512 and later (llvm.x86.avx512.psad.bw.512)", "define <8 x i64> @probe(<64 x i8> %a) {\n  %r = call <8 x i64> @llvm.x86.avx512.psad.bw.512(<64 x i8> %a, <64 x i8> %a)\n  ret <8 x i64> %r\n}\ndeclare <8 x i64> @llvm.x86.avx512.psad.bw.512(<64 x i8>, <64 x i8>)\n")
 probe("Intrinsics: x86", "MXCSR write (llvm.x86.sse.ldmxcsr)", body("  call void @llvm.x86.sse.ldmxcsr(ptr %p)\n  ret void") + "declare void @llvm.x86.sse.ldmxcsr(ptr)\n")
 # Linkage
 linkage = [

@@ -8,7 +8,7 @@ internal sealed class CompilerOptions
     internal string Runtime { get; set; } = "portable";
     internal bool Verbose { get; set; }
     internal bool NativeAot { get; set; }
-    /// <summary>The instruction set the frontend may assume (--isa, ADR-16): baseline, x86-64-v2 or wasm-simd128.</summary>
+    /// <summary>The instruction set the frontend may assume (--isa, ADR-16): baseline, x86-64-v2, x86-64-v3 or wasm-simd128.</summary>
     internal string Isa { get; set; } = "baseline";
     internal bool Simd128 => Isa == "wasm-simd128";
     /// <summary>
@@ -86,6 +86,8 @@ internal sealed class Invocation
     internal List<string> ExtensionNames { get; } = [];
     /// <summary>The directories of the native kernel packages to resolve undefined functions against (--native-kernels).</summary>
     internal List<string> KernelDirectories { get; } = [];
+    /// <summary>Whether the command line gives --vector-width, which then wins over the width x86-64-v3 implies.</summary>
+    internal bool VectorWidthGiven { get; private set; }
     /// <summary>The hidden --print-kernel-data: a file of the data names a kernel package shares with the program.</summary>
     internal string? KernelData { get; private set; }
     internal bool ListExtensions { get; private set; }
@@ -165,24 +167,26 @@ internal sealed class Invocation
                 case "--portable-sysroot": PortableAbi.SysrootOverride = Path.GetFullPath(value); break;
                 case "--simd128": Options.Isa = "wasm-simd128"; break;
                 case "--isa=":
-                    // The instruction set the frontend may assume (ADR-16): baseline; x86-64-v2, whose macros and SSE to
-                    // SSE4.2 intrinsics the runtime's helpers translate (Level 2); or wasm-simd128, the SIMD128 header path
-                    // (--simd128). x86-64-v3 and neon come with their helpers (SV-09, SV-11).
-                    if (value is "x86-64-v3" or "neon")
-                        throw new ArgumentException($"--isa={value} is not implemented yet; the supported levels are baseline, x86-64-v2 and wasm-simd128.");
-                    if (value is not ("baseline" or "x86-64-v2" or "wasm-simd128")) throw new ArgumentException("--isa requires baseline, x86-64-v2 or wasm-simd128.");
+                    // The instruction set the frontend may assume (ADR-16): baseline; x86-64-v2 and x86-64-v3, whose macros
+                    // and SSE to AVX2 intrinsics the runtime's helpers translate (Level 2); or wasm-simd128, the SIMD128
+                    // header path (--simd128). neon comes with its helpers (SV-11).
+                    if (value is "neon")
+                        throw new ArgumentException($"--isa={value} is not implemented yet; the supported levels are baseline, x86-64-v2, x86-64-v3 and wasm-simd128.");
+                    if (value is not ("baseline" or "x86-64-v2" or "x86-64-v3" or "wasm-simd128")) throw new ArgumentException("--isa requires baseline, x86-64-v2, x86-64-v3 or wasm-simd128.");
                     Options.Isa = value;
                     break;
-                case var alias when DriverOptions.IsaAliases.Contains(alias):
-                    // An x86 SIMD feature flag in portable mode (system mode forwards it): the x86-64-v2 level, and the flag
-                    // itself for Clang, which enables what it names (-mpclmul beyond the level).
-                    if (Options.Isa == "wasm-simd128") throw new ArgumentException($"{argument.Text} selects x86-64-v2, which cannot be combined with --isa=wasm-simd128.");
-                    Options.Isa = "x86-64-v2";
+                case var alias when DriverOptions.IsaAliases.Contains(alias) || DriverOptions.IsaV3Aliases.Contains(alias):
+                    // An x86 SIMD feature flag in portable mode (system mode forwards it): its level, unless a higher one is
+                    // already given, and the flag itself for Clang, which enables what it names (-mpclmul beyond the level).
+                    string level = DriverOptions.IsaV3Aliases.Contains(alias) ? "x86-64-v3" : "x86-64-v2";
+                    if (Options.Isa == "wasm-simd128") throw new ArgumentException($"{argument.Text} selects {level}, which cannot be combined with --isa=wasm-simd128.");
+                    if (Options.Isa != "x86-64-v3") Options.Isa = level;
                     Frontend.Add(argument.Text);
                     break;
                 case "--vector-width=":
                     if (value is not ("128" or "256")) throw new ArgumentException("--vector-width requires 128 or 256.");
                     Options.VectorWidth = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+                    VectorWidthGiven = true;
                     break;
                 case "--vector-lowering=":
                     if (value is not ("auto" or "typed" or "scalar")) throw new ArgumentException("--vector-lowering requires auto, typed or scalar.");
@@ -272,6 +276,9 @@ internal sealed class Invocation
         if (AotProject is not null && RuntimeId is not null)
             throw new ArgumentException("--aot-project takes no --runtime-id: the runtime identifier is chosen when the project is published (dotnet publish -r <rid>).");
         if (Options.Runtime != "system" && Options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
+        // x86-64-v3 code targets AVX2 hosts, where 256-bit vectors held whole run faster than as two halves (SV-06); a
+        // --vector-width the command line gives wins.
+        if (Options.Isa == "x86-64-v3" && !VectorWidthGiven) Options.VectorWidth = 256;
         if (PortableAbi.SysrootOverride is not null && Options.Runtime != "portable") throw new ArgumentException("--portable-sysroot requires --runtime=portable.");
         if (Options.Runtime == "system" && RuntimeId is not null && RuntimeId != "linux-x64")
             throw new ArgumentException("The current system ABI profile requires NativeAOT RID linux-x64.");
@@ -582,6 +589,8 @@ internal static class Driver
             using (var prepared = new LlvmModule(linked))
             {
                 Llvm.WrapVectorInvokes(prepared.Handle);
+                Llvm.NarrowVectorIntegers(prepared.Handle);
+                Llvm.FuseMultiplyAdds(prepared.Handle);
                 Llvm.RemoveTargetAttributes(prepared.Handle);
                 Llvm.LowerConstrainedFloatingPoint(prepared.Handle);
                 if (Llvm.LLVMWriteBitcodeToFile(prepared.Handle, linked) != 0)
@@ -609,6 +618,8 @@ internal static class Driver
             string payloadDirectory = nativeAot ? Path.Combine(temporary, "payload") : launcher ? output + ".llvmnet" : Path.GetDirectoryName(output)!;
             Directory.CreateDirectory(payloadDirectory);
             string payload = nativeAot || launcher ? Path.Combine(payloadDirectory, "program.dll") : output;
+            // An image of x86-64-v3 objects holds its 256-bit vectors whole, as the level's command line does (SV-06, SV-09).
+            if (!invocation.VectorWidthGiven && Llvm.IsaLevels(module.Handle).Split(',').Contains("x86-64-v3")) options.VectorWidth = 256;
             try
             {
                 new CilCompiler(options).Compile(module.Handle, payload);
@@ -675,6 +686,27 @@ internal static class Driver
     }
 
     /// <summary>
+    /// ILC's instruction set: the one given, or for an x64 program with objects compiled at --isa=x86-64-v2 or x86-64-v3
+    /// (the image's llvmnet.isa levels) the highest of them, which such a program requires as it does natively; otherwise
+    /// the baseline, where SSE4.2 and AVX2 are only opportunistic sets that the helpers test at run time and the generic
+    /// vector operations do not use.
+    /// </summary>
+    private static string AotInstructionSet(Invocation invocation, string levels)
+    {
+        if (invocation.AotInstructionSet is not null) return invocation.AotInstructionSet;
+        if (!(invocation.RuntimeId ?? System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier).EndsWith("-x64", StringComparison.Ordinal)) return "baseline";
+        string[] recorded = levels.Split(',');
+        return recorded.Contains("x86-64-v3") ? "x86-64-v3" : recorded.Contains("x86-64-v2") ? "x86-64-v2" : "baseline";
+    }
+
+    /// <summary>
+    /// The frontend options of an ISA level for C and C++: x86-64-v2 selects SSE3 to SSE4.2 and POPCNT as -march does,
+    /// x86-64-v3 also AVX, AVX2, FMA, F16C, BMI1, BMI2, LZCNT and MOVBE, with their macros, intrinsics and vectorizer
+    /// costs, but not CMPXCHG16B, so that 16-byte atomics stay the library calls objects of every level share.
+    /// </summary>
+    private static List<string> IsaArguments(string isa) => isa is "x86-64-v2" or "x86-64-v3" ? ["-march=" + isa, "-mno-cx16"] : [];
+
+    /// <summary>
     /// Warns, when the unit is compiled, about each x86 target intrinsic the backend does not translate
     /// (FunctionEmitter.TranslatesX86Intrinsic): such intrinsics come from SSE and AVX code paths, which system mode's
     /// native feature macros select, and the translation rejects them only at the final link. A warning, not an error:
@@ -682,22 +714,6 @@ internal static class Driver
     /// (flang-rt's floating-point exception accessors read MXCSR). Bitcode keeps symbol names verbatim in its string
     /// table, so a unit without the prefix is not parsed a second time.
     /// </summary>
-    /// <summary>
-    /// ILC's instruction set: the one given, or for an x64 program with objects compiled at --isa=x86-64-v2 (the image's
-    /// llvmnet.isa levels) that level, which such a program requires as it does natively; otherwise the baseline, where
-    /// SSE4.2 is only an opportunistic set that the helpers test at run time and the generic Vector128 operations do not use.
-    /// </summary>
-    private static string AotInstructionSet(Invocation invocation, string levels) =>
-        invocation.AotInstructionSet ?? (levels.Split(',').Contains("x86-64-v2") &&
-            (invocation.RuntimeId ?? System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier).EndsWith("-x64", StringComparison.Ordinal) ? "x86-64-v2" : "baseline");
-
-    /// <summary>
-    /// The frontend options of an ISA level for C and C++: x86-64-v2 selects SSE3 to SSE4.2 and POPCNT as -march does,
-    /// with their macros, intrinsics and vectorizer costs, but not CMPXCHG16B, so that 16-byte atomics stay the library
-    /// calls objects of every level share.
-    /// </summary>
-    private static List<string> IsaArguments(string isa) => isa == "x86-64-v2" ? ["-march=x86-64-v2", "-mno-cx16"] : [];
-
     private static void WarnX86Intrinsics(string path, bool system, Diagnostics diagnostics)
     {
         if (File.ReadAllBytes(path).AsSpan().IndexOf("llvm.x86."u8) < 0) return;

@@ -6,7 +6,7 @@ What llvmnet does not do, in one place. The two tables are generated from code: 
 
 Programs are compiled through Clang and Flang 22 and translated from LLVM IR to CIL; what the frontends reject is theirs to report. The backend rejects the constructs below with a compile error naming the function and the instruction ([driver.md](driver.md#exit-status)); everything else in the support matrix is translated.
 
-32 of the 235 probed constructs are rejected (203 translated).
+32 of the 236 probed constructs are rejected (204 translated).
 
 | Construct | Diagnostic |
 | --- | --- |
@@ -39,7 +39,7 @@ Programs are compiled through Clang and Flang 22 and translated from LLVM IR to 
 | Intrinsics: floating (x86_fp80): `llvm.fptosi.sat.i32.f80` | Saturated conversion type: llvm.fptosi.sat.i32.f80 |
 | Intrinsics: vector: `llvm.get.active.lane.mask` | Unsupported intrinsic: llvm.get.active.lane.mask.v4i1.i64 |
 | Intrinsics: vector: `llvm.vp.add (vector predication)` | Unsupported intrinsic: llvm.vp.add.v4i32 |
-| Intrinsics: x86: `AVX and later (llvm.x86.avx2.psad.bw)` | x86 target intrinsic llvm.x86.avx2.psad.bw is not translated; llvmnet translates the SSE to SSE4.2 and PCLMULQDQ intrinsics, so build the code's SSE4.2, SSE2 or C path instead (--isa=x86-64-v2 selects SSE4.2 paths, the baseline a library's C paths) |
+| Intrinsics: x86: `AVX-512 and later (llvm.x86.avx512.psad.bw.512)` | x86 target intrinsic llvm.x86.avx512.psad.bw.512 is not translated; llvmnet translates the SSE to AVX2 intrinsics with FMA, F16C, BMI and PCLMULQDQ (x86-64-v3), so build the code's AVX2, SSE or C path instead (--isa=x86-64-v3 selects AVX2 paths, x86-64-v2 SSE4.2 ones, the baseline a library's C paths) |
 | Intrinsics: x86: `MXCSR write (llvm.x86.sse.ldmxcsr)` | x86 target intrinsic llvm.x86.sse.ldmxcsr is not translated; translated code keeps the default MXCSR (round to nearest, no flush to zero), so _mm_setcsr and the _MM_SET macros cannot change it |
 | Linkage: `external thread_local global` | External thread-local global requires a bitcode definition: t |
 

@@ -437,6 +437,14 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         Release(address);
     }
 
+    /// <summary>The fields of a vector held as two Vector128 fragments, or null for another type.</summary>
+    internal static FieldInfo[]? Halves(Type type)
+    {
+        if (type.IsGenericType || !type.IsValueType) return null;
+        FieldInfo[] fields = type.GetFields();
+        return fields.Length == 2 && fields.All(field => field.FieldType.IsGenericType && field.FieldType.GetGenericTypeDefinition() == typeof(Vector128<>)) ? fields : null;
+    }
+
     /// <summary>Reinterprets the vector on the stack as another vector of the same width (CilCompiler.Reinterpretable).</summary>
     internal void Reinterpret(Type from, Type to)
     {
@@ -450,10 +458,46 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// <summary>
     /// Converts the vector on the stack to or from a target intrinsic helper's vector type: reinterpreted as the helper's
     /// lanes, and with --vector-width=256, where a 128-bit value is the low half of a Vector256, narrowed to the helper's
-    /// Vector128 or widened from it.
+    /// Vector128 or widened from it. A 256-bit value of two Vector128 fragments (the default width) becomes the helper's
+    /// Vector256 and back (SV-09).
     /// </summary>
     internal void Convert(Type from, Type to)
     {
+        if (Halves(from) is FieldInfo[] parts && to.IsGenericType && to.GetGenericTypeDefinition() == typeof(Vector256<>))
+        {
+            Type wideLane = to.GetGenericArguments()[0], wideHalf = typeof(Vector128<>).MakeGenericType(wideLane);
+            LocalBuilder value = Rent(from);
+            il.Emit(OpCodes.Stloc, value);
+            foreach (FieldInfo part in parts)
+            {
+                il.Emit(OpCodes.Ldloca, value);
+                il.Emit(OpCodes.Ldfld, part);
+                Reinterpret(part.FieldType, wideHalf);
+            }
+            il.Emit(OpCodes.Call, Lookup(typeof(Vector256), "Create", wideLane, [wideHalf, wideHalf]));
+            Release(value);
+            return;
+        }
+        if (Halves(to) is FieldInfo[] fields && from.IsGenericType && from.GetGenericTypeDefinition() == typeof(Vector256<>))
+        {
+            Type helperLane = from.GetGenericArguments()[0];
+            LocalBuilder value = Rent(from), result = Rent(to);
+            il.Emit(OpCodes.Stloc, value);
+            il.Emit(OpCodes.Ldloca, result);
+            il.Emit(OpCodes.Initobj, to);
+            for (int index = 0; index < 2; index++)
+            {
+                il.Emit(OpCodes.Ldloca, result);
+                il.Emit(OpCodes.Ldloc, value);
+                il.Emit(OpCodes.Call, Lookup(typeof(Vector256), index == 0 ? "GetLower" : "GetUpper", helperLane, [from]));
+                Reinterpret(typeof(Vector128<>).MakeGenericType(helperLane), fields[index].FieldType);
+                il.Emit(OpCodes.Stfld, fields[index]);
+            }
+            il.Emit(OpCodes.Ldloc, result);
+            Release(value);
+            Release(result);
+            return;
+        }
         if (CilCompiler.Reinterpretable(from, to))
         {
             Reinterpret(from, to);

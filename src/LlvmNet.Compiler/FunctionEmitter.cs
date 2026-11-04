@@ -2502,7 +2502,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             nint operand = Llvm.LLVMGetOperand(instruction, index);
             nint type = Llvm.LLVMTypeOf(operand);
             Type expected = parameters[index].ParameterType, actual = Types.Map(type);
-            if (IsVector(expected) && !IsVector(actual))
+            if (IsVector(expected) && !IsVector(actual) && VectorEmitter.Halves(actual) is null)
                 throw new NotSupportedException($"{name} needs the typed vector lowering, which --vector-lowering=scalar turns off.");
             if (!IsVector(expected) && (expected == typeof(int) ? TypeSystem.Kind(type) != 8 || TypeSystem.Width(type) > 32 : expected != actual))
                 throw new NotSupportedException($"{name}: operand {index} is {Llvm.PrintType(type)} where its runtime helper takes {expected.Name}.");
@@ -2515,9 +2515,9 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     /// <summary>
     /// The x86 target intrinsics the backend translates: the spin-wait hint, which libstdc++'s atomic waits use on
-    /// x86-64, the SSE fences, and the SSE to SSE4.2 intrinsics the runtime implements (<see cref="TargetIntrinsics"/>).
-    /// Every other llvm.x86 intrinsic (MMX, AVX and later, the MXCSR write) is rejected when a module is translated, after
-    /// a warning when its unit was compiled (Driver).
+    /// x86-64, the SSE fences, and the SSE to AVX2, FMA, F16C and BMI intrinsics the runtime implements
+    /// (<see cref="TargetIntrinsics"/>). Every other llvm.x86 intrinsic (AVX-512 and later, the MXCSR write) is rejected
+    /// when a module is translated, after a warning when its unit was compiled (Driver).
     /// </summary>
     internal static bool TranslatesX86Intrinsic(string name) =>
         name is "llvm.x86.sse2.pause" or "llvm.x86.sse2.mfence" or "llvm.x86.sse2.lfence" or "llvm.x86.sse.sfence" || TargetIntrinsics.Helper(name) is not null;
@@ -2525,9 +2525,9 @@ internal sealed class FunctionEmitter : ValueEmitter
     internal static string X86IntrinsicMessage(string name, bool system, bool compiling = false) =>
         $"x86 target intrinsic {name} is not translated{(compiling ? ", so linking a program that reaches it fails" : "")}; " + (name == "llvm.x86.sse.ldmxcsr"
             ? "translated code keeps the default MXCSR (round to nearest, no flush to zero), so _mm_setcsr and the _MM_SET macros cannot change it"
-            : "llvmnet translates the SSE to SSE4.2 and PCLMULQDQ intrinsics, so build the code's SSE4.2, SSE2 or C path instead" + (system
-                ? " (system mode takes the instruction sets of -m and -march as native code does: try -march=x86-64-v2 or the library's own SIMD option)"
-                : " (--isa=x86-64-v2 selects SSE4.2 paths, the baseline a library's C paths)"));
+            : "llvmnet translates the SSE to AVX2 intrinsics with FMA, F16C, BMI and PCLMULQDQ (x86-64-v3), so build the code's AVX2, SSE or C path instead" + (system
+                ? " (system mode takes the instruction sets of -m and -march as native code does: try -march=x86-64-v3 or the library's own SIMD option)"
+                : " (--isa=x86-64-v3 selects AVX2 paths, x86-64-v2 SSE4.2 ones, the baseline a library's C paths)"));
 
     private unsafe void Aggregate(nint instruction, bool insert)
     {

@@ -30,8 +30,8 @@ while IFS=$'\t' read -r name aot sources flags arguments environment; do
     for source_file in "${source_files[@]}"; do source_paths+=("$root/tests/$source_file"); done
     # shellcheck disable=SC2206
     flag_list=($flags)
-    # --isa=x86-64-v2 is llvmnet's spelling of -march=x86-64-v2 (docs/user/x86-intrinsics.md).
-    native_flags=("${flag_list[@]/#--isa=x86-64-v2/-march=x86-64-v2}")
+    # --isa=x86-64-v2 and x86-64-v3 are llvmnet's spellings of -march=<level> (docs/user/x86-intrinsics.md).
+    native_flags=("${flag_list[@]/#--isa=x86-64-v/-march=x86-64-v}")
     case "${source_files[0]##*.}" in
         c) compiler=(clang-22 "${native_flags[@]}" "${source_paths[@]}" -lm -latomic -o "$bundle/native/$name") ;;
         cpp) compiler=(clang++-22 "${native_flags[@]}" "${source_paths[@]}" -o "$bundle/native/$name") ;;
