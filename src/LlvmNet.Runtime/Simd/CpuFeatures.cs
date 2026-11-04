@@ -90,11 +90,6 @@ public static unsafe class CpuFeatures
         return (long)bits;
     }
 
-    /// <summary>int llvmnet_native_kernels(const char *package) (&lt;llvmnet/cpu.h&gt;): whether the running host has a library
-    /// of the named native kernel package; 0 for every package until kernel packages exist (SV-13).</summary>
-    [CExport("llvmnet_native_kernels")]
-    public static int NativeKernels(nint package) => 0;
-
     /// <summary>
     /// The AT_HWCAP of Linux on this host for the auxiliary vector portable programs start with: CPUID leaf 1's EDX on x64,
     /// as Linux reports it there, and the HWCAP_* bits of the instruction sets .NET reports on ARM64 (FP, ASIMD, AES,

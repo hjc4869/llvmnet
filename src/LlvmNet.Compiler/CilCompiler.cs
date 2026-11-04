@@ -17,6 +17,7 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal readonly Dictionary<nint, MethodBuilder> ThreadGlobals = [];
     /// <summary>Functions whose address the module takes: the pointer value (identity) and the method it calls.</summary>
     internal readonly Dictionary<nint, (MethodInfo Identity, MethodInfo Target)> AddressTaken = [];
+    private KernelStubs? kernelStubs;
     internal TypeSystem Types { get; private set; } = null!;
     internal TypeBuilder Program { get; private set; } = null!;
     // The CLR limits how many fields one type may have, so static fields beyond this many per type go to further
@@ -236,6 +237,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         }
         if (name == "__llvmnet_run_constructors")
             return Methods[function] = constructors;
+        if (Host is null && kernelStubs?.Stub(function) is MethodInfo kernel)
+            return Methods[function] = kernel;
         if (!runtimeExports.TryGetValue(name, out method) || options.Runtime == "portable" && !MuslVisible(name, method))
             throw new NotSupportedException($"Unresolved function: {name}");
         if (!Reinterpretable(Types.Map(Llvm.LLVMGetReturnType(signature)), method.ReturnType) ||
@@ -311,6 +314,12 @@ internal sealed class CilCompiler(CompilerOptions options)
         }
         foreach (ExtensionPackage extension in options.Extensions)
             extensionProviders.Add(ExtensionProvider(extension));
+        if (options.KernelPackages.Count != 0)
+        {
+            kernelStubs = new KernelStubs(this, options.KernelPackages);
+            assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.kernels",
+                string.Join(", ", options.KernelPackages.Select(package => package.Tag))]));
+        }
         if (options.Extensions.Count + options.SystemExtensions.Count != 0)
             assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.extensions",
                 string.Join(", ", options.Extensions.Concat(options.SystemExtensions).Select(extension => extension.Tag))]));
@@ -619,6 +628,17 @@ internal sealed class CilCompiler(CompilerOptions options)
         {
             il.Emit(OpCodes.Newobj, provider);
             il.Emit(OpCodes.Call, typeof(NativeExtensions).GetMethod(nameof(NativeExtensions.Register))!);
+        }
+        // Native kernel packages: the resolver of the image's kernel stubs, and llvmnet_native_kernels (SV-13).
+        foreach (KernelPackage package in options.KernelPackages)
+        {
+            il.Emit(OpCodes.Ldtoken, Program);
+            il.Emit(OpCodes.Call, typeof(Type).GetMethod(nameof(Type.GetTypeFromHandle))!);
+            il.Emit(OpCodes.Callvirt, typeof(Type).GetProperty(nameof(Type.Assembly))!.GetMethod!);
+            il.Emit(OpCodes.Ldstr, package.Name);
+            il.Emit(OpCodes.Ldstr, package.Library);
+            il.Emit(OpCodes.Ldstr, string.Join(" ", options.Runtime == "system" ? ["linux-x64"] : package.Runtimes.Keys));
+            il.Emit(OpCodes.Call, typeof(NativeKernels).GetMethod(nameof(NativeKernels.Register))!);
         }
         // In system mode the loader has linked the extension's libraries; <llvmnet/ext.h> still answers for it.
         foreach (ExtensionPackage extension in options.SystemExtensions)

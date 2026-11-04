@@ -33,6 +33,8 @@ internal sealed class CompilerOptions
     internal List<ExtensionPackage> Extensions { get; } = [];
     /// <summary>Native extensions a system-mode image links: their Linux libraries, registered by name and listed in its metadata.</summary>
     internal List<ExtensionPackage> SystemExtensions { get; } = [];
+    /// <summary>The native kernel packages the image calls (--native-kernels, SV-13).</summary>
+    internal List<KernelPackage> KernelPackages { get; } = [];
 }
 
 /// <summary>One link input: a source or object with the language in effect for it (from -x), or an archive with its whole-archive state.</summary>
@@ -73,6 +75,8 @@ internal sealed class Invocation
     internal string AotPreference { get; private set; } = "Balanced";
     /// <summary>--extension names, in order.</summary>
     internal List<string> ExtensionNames { get; } = [];
+    /// <summary>The directories of the native kernel packages to resolve undefined functions against (--native-kernels).</summary>
+    internal List<string> KernelDirectories { get; } = [];
     internal bool ListExtensions { get; private set; }
     /// <summary>--install-extension: a built extension package to install in the sysroot's ext/ directory.</summary>
     internal string? InstallExtension { get; private set; }
@@ -176,6 +180,7 @@ internal sealed class Invocation
                 case "--cil-reference": Options.CilReferences.Add(Path.GetFullPath(value)); break;
                 case "--system-library": Options.SystemLibraries.Add(value); break;
                 case "--extension": ExtensionNames.Add(value); break;
+                case "--native-kernels": KernelDirectories.Add(Path.GetFullPath(value)); break;
                 case "--list-extensions": ListExtensions = true; break;
                 case "--install-extension": InstallExtension = Path.GetFullPath(value); break;
                 case "--uninstall-extension": UninstallExtension = value; break;
@@ -260,6 +265,16 @@ internal sealed class Invocation
             throw new ArgumentException("The current system ABI profile requires NativeAOT RID linux-x64.");
         // An extension that is not installed fails before anything runs, whether or not this invocation links.
         foreach (string name in ExtensionNames) Extensions.Find(name);
+        // Native kernel packages are portable mode's: system mode links native objects and libraries itself (SV-15).
+        if (KernelDirectories.Count != 0 && Options.Runtime == "system")
+            throw new ArgumentException("--native-kernels is for portable mode; in system mode link the package's linux-x64 library with --system-library.");
+        foreach (string directory in KernelDirectories)
+        {
+            KernelPackage package = KernelPackage.Read(directory);
+            if (Options.KernelPackages.FirstOrDefault(other => other.Name == package.Name || other.Library == package.Library) is KernelPackage clash)
+                throw new ArgumentException($"native kernel packages {clash.Directory} and {package.Directory} have the same name or library.");
+            Options.KernelPackages.Add(package);
+        }
         if (LinkerVersion && (Inputs.Count != 0 || Output is not null || CompileOnly || Preprocess || DependencyOnly || EmitLlvm || nativeAot || Options.Library))
             throw new ArgumentException("-Wl,--version is an informational query, not a link operation.");
     }
@@ -545,10 +560,20 @@ internal static class Driver
             string levels = Llvm.IsaLevels(module.Handle);
             if (invocation.AotProject is not null)
             {
-                Toolchain.AotProject(payload, invocation.AotProject, invocation.AotPreference, AotInstructionSet(invocation, levels), invocation.AotDebug, options.SystemLibraries);
+                Toolchain.AotProject(payload, invocation.AotProject, invocation.AotPreference, AotInstructionSet(invocation, levels), invocation.AotDebug, options.SystemLibraries, options.KernelPackages);
                 return 0;
             }
-            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, invocation.RuntimeId, invocation.AotPreference, AotInstructionSet(invocation, levels), verbose, invocation.AotDebug, options.SystemLibraries);
+            // A JIT image loads each identifier's kernel library from runtimes/<rid>/native/ beside it.
+            if (!nativeAot)
+                foreach (KernelPackage package in options.KernelPackages)
+                    foreach ((string identifier, (string? shared, _)) in package.Runtimes)
+                    {
+                        if (shared is null) continue;
+                        string native = Path.Combine(payloadDirectory, "runtimes", identifier, "native");
+                        Directory.CreateDirectory(native);
+                        File.Copy(shared, Path.Combine(native, Path.GetFileName(shared)), true);
+                    }
+            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, invocation.RuntimeId, invocation.AotPreference, AotInstructionSet(invocation, levels), verbose, invocation.AotDebug, options.SystemLibraries, options.KernelPackages);
             if (launcher) Toolchain.Launcher(output, payload);
             return 0;
         }

@@ -44,7 +44,7 @@ Libraries that choose their SIMD paths at run time ask the processor, and their 
 - **`getauxval(AT_HWCAP)`** returns what Linux gives native processes: CPUID leaf 1's EDX on x64 and the `HWCAP_*` bits of the instruction sets .NET reports on ARM64.
 - **`<llvmnet/cpu.h>`**: `llvmnet_cpu_features()` returns the instruction sets the host executes as .NET reports them (`LLVMNET_CPU_SSE4_2`, `LLVMNET_CPU_AVX2`, `LLVMNET_CPU_NEON` and the others), for a program that wants to ask without CPUID.
 
-ffmpeg's `ff_get_cpu_flags_x86`, Chromium zlib's `cpu_features.c`, wuffs and astc-encoder's command-line check report the host's features in both modes ([evidence](../evidence/2026-11-04-cpu-detection.md)). Detection written in assembly files, such as dav1d's and ffmpeg's `cpuid.asm`, needs a native kernel package (SV-13).
+ffmpeg's `ff_get_cpu_flags_x86`, Chromium zlib's `cpu_features.c`, wuffs and astc-encoder's command-line check report the host's features in both modes ([evidence](../evidence/2026-11-04-cpu-detection.md)). Detection written in assembly files, such as dav1d's and ffmpeg's `cpuid.asm`, runs from a [native kernel package](native-kernels.md).
 
 ## Speed
 
