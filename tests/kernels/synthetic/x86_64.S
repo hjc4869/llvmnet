@@ -55,4 +55,42 @@ sk_mix:
     ret
     .size sk_mix, .-sk_mix
 
+/* int64_t sk_weighted(const int16_t *x): the sum of x[i] * sk_weights[i] over eight i, times sk_scale. Both are the
+   program's data, which the kernel reads in the package's copy. */
+    .globl sk_weighted
+    .type sk_weighted, @function
+sk_weighted:
+    lea sk_weights(%rip), %rsi
+    xor %eax, %eax
+    xor %ecx, %ecx
+1:  movswq (%rdi,%rcx,2), %rdx
+    movswq (%rsi,%rcx,2), %r8
+    imul %r8, %rdx
+    add %rdx, %rax
+    inc %rcx
+    cmp $8, %rcx
+    jb 1b
+    movslq sk_scale(%rip), %rdx
+    imul %rdx, %rax
+    ret
+    .size sk_weighted, .-sk_weighted
+
+/* void sk_count(int32_t index): increments sk_counts[index & 3], the package's data, which the program reads too. */
+    .globl sk_count
+    .type sk_count, @function
+sk_count:
+    and $3, %edi
+    lea sk_counts(%rip), %rax
+    incl (%rax,%rdi,4)
+    ret
+    .size sk_count, .-sk_count
+
+    .data
+    .globl sk_counts
+    .type sk_counts, @object
+    .p2align 2
+sk_counts:
+    .long 10, 20, 30, 40
+    .size sk_counts, 16
+
     .section .note.GNU-stack, "", @progbits

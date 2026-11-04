@@ -77,6 +77,8 @@ internal sealed class Invocation
     internal List<string> ExtensionNames { get; } = [];
     /// <summary>The directories of the native kernel packages to resolve undefined functions against (--native-kernels).</summary>
     internal List<string> KernelDirectories { get; } = [];
+    /// <summary>The hidden --print-kernel-data: a file of the data names a kernel package shares with the program.</summary>
+    internal string? KernelData { get; private set; }
     internal bool ListExtensions { get; private set; }
     /// <summary>--install-extension: a built extension package to install in the sysroot's ext/ directory.</summary>
     internal string? InstallExtension { get; private set; }
@@ -181,6 +183,7 @@ internal sealed class Invocation
                 case "--system-library": Options.SystemLibraries.Add(value); break;
                 case "--extension": ExtensionNames.Add(value); break;
                 case "--native-kernels": KernelDirectories.Add(Path.GetFullPath(value)); break;
+                case "--print-kernel-data=": KernelData = Path.GetFullPath(value); break;
                 case "--list-extensions": ListExtensions = true; break;
                 case "--install-extension": InstallExtension = Path.GetFullPath(value); break;
                 case "--uninstall-extension": UninstallExtension = value; break;
@@ -505,8 +508,20 @@ internal static class Driver
             // extensions' reverse thunks need on threads a host library started (NX-08).
             string[] threadAttachment = executable && options.Extensions.Count != 0 && options.Runtime == "portable" && invocation.DefaultLibraries
                 ? ["__llvmnet_attach_thread", "__llvmnet_detach_thread"] : [];
+            // Data a kernel package shares with the program stays in the link even when only the package's code reads it.
+            string[] dataNames = invocation.KernelData is null ? [] : [.. File.ReadAllLines(invocation.KernelData).Select(line => line.Trim()).Where(line => line.Length != 0)];
+            string[] kernelData = [.. options.KernelPackages.SelectMany(package => package.Data), .. dataNames];
             Llvm.Link([.. bitcode.Select(input => input.Path)], [.. bitcode.Select(input => input.WholeArchive)], linked, options.AbiTag,
-                executable ? ["main", "_QQmain"] : [], threadAttachment);
+                executable && invocation.KernelData is null ? ["main", "_QQmain"] : [], [.. threadAttachment, .. kernelData],
+                nativeMembers: options.KernelPackages.Count != 0 || invocation.KernelData is not null);
+            if (invocation.KernelData is not null)
+            {
+                using var dataModule = new LlvmModule(linked);
+                string source = KernelDataSource(dataModule.Handle, dataNames);
+                if (invocation.Output is null) Console.Write(source);
+                else File.WriteAllText(invocation.Output, source);
+                return 0;
+            }
             if (invocation.KeepIr is not null)
                 File.Copy(linked, invocation.KeepIr, true);
             string output = Path.GetFullPath(invocation.Output ?? (options.Library ? "a.dll" : invocation.Relocatable ? "a.o" : invocation.EmitLlvm ? "a.bc" : "a.out"));
@@ -533,7 +548,8 @@ internal static class Driver
             string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,{reductions}scalarize-masked-mem-intrin{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
             if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (options.Runtime == "portable" ? ",__llvmnet_libc_main,__llvmnet_register_finalizer,__llvmnet_cxx_can_catch" : "") +
-                (options.Extensions.Count != 0 && options.Runtime == "portable" ? ",__llvmnet_attach_thread,__llvmnet_detach_thread" : ""));
+                (options.Extensions.Count != 0 && options.Runtime == "portable" ? ",__llvmnet_attach_thread,__llvmnet_detach_thread" : "") +
+                string.Concat(options.KernelPackages.SelectMany(package => package.Data).Select(data => "," + data)));
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);
             if (optimizeResult != 0)
                 return optimizeResult;
@@ -581,6 +597,32 @@ internal static class Driver
         {
             Directory.Delete(temporary, true);
         }
+    }
+
+    /// <summary>
+    /// The C source of a native kernel package's shared data (--print-kernel-data, SV-13), which the package's build
+    /// compiles into its libraries: storage of each named variable the program's bitcode defines, with its size and
+    /// alignment, declarations of those the package defines itself, and for each an accessor, llvmnet_kernel_data_&lt;name&gt;,
+    /// that returns its address and through which the program uses the package's copy.
+    /// </summary>
+    private static string KernelDataSource(nint module, IEnumerable<string> names)
+    {
+        nint layout = Llvm.LLVMCreateTargetData(Llvm.LLVMGetDataLayoutStr(module));
+        var source = new System.Text.StringBuilder("/* Generated by llvmnet --print-kernel-data: the data this kernel package shares with the program. */\n");
+        foreach (string name in names)
+        {
+            nint global = Llvm.LLVMGetNamedGlobal(module, name);
+            if (global != 0 && Llvm.LLVMGetInitializer(global) != 0)
+            {
+                nint type = Llvm.LLVMGlobalGetValueType(global);
+                uint alignment = Math.Max(Llvm.LLVMGetAlignment(global), Llvm.LLVMABIAlignmentOfType(layout, type));
+                source.Append($"__attribute__((aligned({alignment}))) unsigned char {name}[{Math.Max(Llvm.LLVMABISizeOfType(layout, type), 1)}];\n");
+            }
+            else
+                source.Append($"extern unsigned char {name}[];\n");
+            source.Append($"void *{KernelPackage.Accessor(name)}(void) {{ return {name}; }}\n");
+        }
+        return source.ToString();
     }
 
     /// <summary>

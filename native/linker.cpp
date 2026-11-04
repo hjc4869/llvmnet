@@ -155,7 +155,9 @@ struct LinkDiagnostics {
 // defines none of them, a member that defines one is linked, as crt1.o's reference to main extracts it natively (the
 // gtest_main and Catch2 idiom). Libraries and relocatable links have no entry point. `required` names symbols that are
 // linked from the archive member that defines them in any case, as a native linker's -u does (the musl port's thread
-// attachment, which images with native extensions need although nothing in them calls it).
+// attachment, which images with native extensions need although nothing in them calls it). An input's flags are 1 for
+// --whole-archive and 2 when its native object members (ELF, COFF, Mach-O: a project's assembly, which a native kernel
+// package provides; SV-13) are left out rather than rejected.
 //
 // Bitcode is loaded lazily, so a function body is read only when its definition is linked: archive members that are
 // never needed, and the copies of an inline function that every C++ object carries, cost little more than their
@@ -235,12 +237,20 @@ extern "C" int llvmnet_link(const char *const *paths, const int *wholeArchive, u
             auto data = child.getMemoryBufferRef();
             if (!data)
                 return fail(llvm::toString(data.takeError()));
+            llvm::file_magic magic = llvm::identify_magic(data->getBuffer());
+            if (magic == llvm::file_magic::elf_relocatable || magic == llvm::file_magic::coff_object || magic == llvm::file_magic::macho_object) {
+                if (wholeArchive[index] & 2)
+                    continue;
+                auto name = child.getName();
+                return fail(path + "(" + (name ? name->str() : "?") + ") is a native object file, such as assembled code; llvmnet links " +
+                    "bitcode, and calls native code through a native kernel package (--native-kernels, docs/user/native-kernels.md)");
+            }
             auto module = llvm::getLazyBitcodeModule(*data, context);
             if (!module)
                 return fail(path + ": archive members must be LLVM bitcode: " + llvm::toString(module.takeError()));
             auto name = child.getName();
             std::string memberFile = path + "(" + (name ? name->str() : (*module)->getModuleIdentifier()) + ")";
-            if (wholeArchive[index]) {
+            if (wholeArchive[index] & 1) {
                 // --whole-archive: every member is linked like an object, in archive order.
                 if (std::string problem = add(std::move(*module), memberFile, memberFile); !problem.empty())
                     return fail(problem);

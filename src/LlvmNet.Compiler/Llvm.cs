@@ -59,13 +59,16 @@ internal static unsafe class Llvm
     /// Links objects and archives (recognized by content) into one bitcode module: every object, and the archive
     /// members that resolve a referenced symbol (rescanning until none does) or every member of an archive marked
     /// whole-archive. While none of the <paramref name="entry"/> names is defined, a member defining one is linked too.
+    /// With <paramref name="nativeMembers"/>, archives' native object members are left out, as a native kernel package
+    /// provides them (SV-13); otherwise they are an error.
     /// </summary>
-    internal static void Link(string[] paths, bool[] wholeArchive, string output, string abi, string[]? entry = null, string[]? required = null)
+    internal static void Link(string[] paths, bool[] wholeArchive, string output, string abi, string[]? entry = null, string[]? required = null,
+        bool nativeMembers = false)
     {
         entry ??= [];
         required ??= [];
         nint[] pointers = new nint[paths.Length + entry.Length + required.Length];
-        int[] whole = wholeArchive.Select(flag => flag ? 1 : 0).ToArray();
+        int[] whole = wholeArchive.Select(flag => (flag ? 1 : 0) | (nativeMembers ? 2 : 0)).ToArray();
         try
         {
             for (int index = 0; index < pointers.Length; index++)

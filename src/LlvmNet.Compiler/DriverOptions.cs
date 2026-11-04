@@ -146,6 +146,7 @@ internal static class DriverOptions
         // Managed and native libraries
         new("--cil-reference", OptionKind.JoinedOrSeparate, Managed, "Resolve calls to the public CExport methods of a managed library built with -shared, in the same mode", H, value: "<assembly>"),
         new("--system-library", OptionKind.JoinedOrSeparate, Managed, "System mode: a native shared library whose functions the program calls through generated bridges", H, value: "<library>"),
+        new("--print-kernel-data=", OptionKind.Joined, Hidden, "", H, value: "<file>"),
         new("--native-kernels", OptionKind.JoinedOrSeparate, Managed, "Portable mode: a native kernel package (its directory, with manifest.json) whose library defines functions the program declares, such as assembly kernels; the image calls them through P/Invoke stubs, loads the library of the running host from runtimes/<rid>/native/ beside it and NativeAOT links the target's static library (docs/user/native-kernels.md)", H, value: "<dir>"),
         new("--extension", OptionKind.JoinedOrSeparate, Managed, "Link a native extension installed in the sysroot's ext/ directory: in portable mode its assembly, registered for dlopen; in system mode its Linux libraries, as --system-library (also -l<name> for a name its manifest lists)", H, value: "<name>"),
         new("--native-import", OptionKind.JoinedOrSeparate, NotAccepted, "", R, "it was removed (ADR-04, SA-01); --runtime=system resolves every native function through generated bridges, and --system-library <shared-library> adds a library", "<spec>"),

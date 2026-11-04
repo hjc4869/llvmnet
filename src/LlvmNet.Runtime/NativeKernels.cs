@@ -13,7 +13,7 @@ namespace LlvmNet.Runtime;
 /// </summary>
 public static class NativeKernels
 {
-    private sealed record Package(string Name, string Library, string[] Identifiers, string Directory)
+    private sealed record Package(string Name, string Library, string[] Identifiers, string Directory, bool Available)
     {
         internal nint Handle;
     }
@@ -34,7 +34,11 @@ public static class NativeKernels
         lock (gate)
         {
             string directory = RuntimeFeature.IsDynamicCodeCompiled && image.Location.Length != 0 ? Path.GetDirectoryName(image.Location)! : AppContext.BaseDirectory;
-            packages[name] = new Package(name, library, identifiers.Split(' ', StringSplitOptions.RemoveEmptyEntries), directory);
+            string[] list = identifiers.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            // As NativeAOT, the executable's own identifier, whose static library it linked.
+            bool available = list.Contains(RuntimeIdentifier) &&
+                (!RuntimeFeature.IsDynamicCodeCompiled || File.Exists(Path.Combine(directory, "runtimes", RuntimeIdentifier, "native", FileName(library))));
+            packages[name] = new Package(name, library, list, directory, available);
             if (resolved.Add(image)) NativeLibrary.SetDllImportResolver(image, Resolve);
         }
     }
@@ -68,19 +72,19 @@ public static class NativeKernels
     private static string FileName(string library) =>
         OperatingSystem.IsWindows() ? library + ".dll" : OperatingSystem.IsMacOS() ? "lib" + library + ".dylib" : "lib" + library + ".so";
 
+    /// <summary>Whether the image links the named package and it has a library for the running host (llvmnet_native_kernels,
+    /// shared data, optional kernels), as found when the package was registered.</summary>
+    public static bool IsAvailable(string name)
+    {
+        lock (gate)
+            return packages.TryGetValue(name, out Package? package) && package.Available;
+    }
+
     /// <summary>
     /// int llvmnet_native_kernels(const char *name) (&lt;llvmnet/cpu.h&gt;): 1 when the program links the native kernel package
     /// of that name and it has a library for the running host (as NativeAOT, the executable's own identifier, whose library
     /// it linked), else 0.
     /// </summary>
     [CExport("llvmnet_native_kernels")]
-    public static int Available(nint name)
-    {
-        if (name == 0) return 0;
-        lock (gate)
-        {
-            if (!packages.TryGetValue(Marshal.PtrToStringUTF8(name)!, out Package? package) || !package.Identifiers.Contains(RuntimeIdentifier)) return 0;
-            return !RuntimeFeature.IsDynamicCodeCompiled || File.Exists(Path.Combine(package.Directory, "runtimes", RuntimeIdentifier, "native", FileName(package.Library))) ? 1 : 0;
-        }
-    }
+    public static int Available(nint name) => name != 0 && IsAvailable(Marshal.PtrToStringUTF8(name)!) ? 1 : 0;
 }

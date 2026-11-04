@@ -360,7 +360,7 @@ internal sealed class CilCompiler(CompilerOptions options)
                 throw new NotSupportedException($"External thread-local global requires a bitcode definition: {Llvm.Name(global)}");
             if (Llvm.LLVMGetInitializer(global) == 0 && Host is not null && !Cxx.HasGlobal(Llvm.Name(global)))
                 Host.LibraryFor(Llvm.Name(global));
-            else if (Llvm.LLVMGetInitializer(global) == 0 && !Cxx.HasGlobal(Llvm.Name(global)))
+            else if (Llvm.LLVMGetInitializer(global) == 0 && !Cxx.HasGlobal(Llvm.Name(global)) && kernelStubs?.DataPackageOf(Llvm.Name(global)) is null)
                 throw new NotSupportedException($"Unresolved external global: {Llvm.Name(global)}");
             Globals[global] = FieldHolder().DefineField($"__global{Globals.Count}", typeof(nint), FieldAttributes.Assembly | FieldAttributes.Static);
             if (threadLocal)
@@ -667,6 +667,27 @@ internal sealed class CilCompiler(CompilerOptions options)
         foreach ((nint global, FieldBuilder field) in Globals)
         {
             if (ThreadGlobals.ContainsKey(global)) continue;
+            if (kernelStubs?.DataPackageOf(Llvm.Name(global)) is KernelPackage dataPackage)
+            {
+                // Shared with a kernel package (SV-13): the library's storage where the host has the library, which the
+                // program's initializer fills below, so that its code and the program read one copy; otherwise the
+                // program's own. Data only the library defines gets zeroed storage of its declared size there, as LLVM
+                // may load from a declared global speculatively.
+                Label own = il.DefineLabel(), store = il.DefineLabel();
+                il.Emit(OpCodes.Ldstr, dataPackage.Name);
+                il.Emit(OpCodes.Call, typeof(NativeKernels).GetMethod(nameof(NativeKernels.IsAvailable))!);
+                il.Emit(OpCodes.Brfalse, own);
+                il.Emit(OpCodes.Call, kernelStubs.Accessor(dataPackage, Llvm.Name(global)));
+                il.Emit(OpCodes.Br, store);
+                il.MarkLabel(own);
+                nint type = Llvm.LLVMGlobalGetValueType(global);
+                il.Emit(OpCodes.Ldc_I8, Math.Max(Types.Size(type), 1));
+                il.Emit(OpCodes.Ldc_I4, Math.Max(checked((int)Llvm.LLVMGetAlignment(global)), Types.Alignment(type)));
+                il.Emit(OpCodes.Call, typeof(Memory).GetMethod(nameof(Memory.AllocateGlobal))!);
+                il.MarkLabel(store);
+                il.Emit(OpCodes.Stsfld, field);
+                continue;
+            }
             if (Llvm.LLVMGetInitializer(global) == 0)
             {
                 if (Host is not null && !Cxx.HasGlobal(Llvm.Name(global)))
