@@ -9,8 +9,9 @@ case "$runtime" in
 esac
 prefix="${LLVMNET_DEPS_PREFIX:-$root/artifacts/deps$suffix}"
 simd128="${FFMPEG_SIMD128:-0}"
-# FFMPEG_X86ASM=1: ffmpeg's nasm kernels in a native kernel package (docs/user/native-kernels.md, SV-13), which nasm
-# assembles into the libraries' archives beside the C bitcode; its CPU detection selects them at run time.
+# FFMPEG_X86ASM=1: ffmpeg's nasm kernels, which nasm assembles into the libraries' archives beside the C bitcode and its
+# CPU detection selects at run time: in portable mode from a native kernel package (docs/user/native-kernels.md, SV-13),
+# in system mode linked into the image's native library (SV-15).
 x86asm="${FFMPEG_X86ASM:-0}"
 simd_flags=()
 architecture=(--arch=x86_64 --disable-asm --disable-x86asm --disable-runtime-cpudetect)
@@ -22,8 +23,8 @@ esac
 case "$x86asm" in
     0) ;;
     1)
-        if [[ "$simd128" == 1 || "$runtime" != portable ]]; then
-            printf 'FFMPEG_X86ASM=1 is a portable-mode profile without SIMD128 (system mode links native code with --system-library)\n' >&2
+        if [[ "$simd128" == 1 ]]; then
+            printf 'FFMPEG_X86ASM=1 and FFMPEG_SIMD128=1 are separate profiles\n' >&2
             exit 2
         fi
         command -v nasm >/dev/null || { printf 'FFMPEG_X86ASM=1 needs nasm\n' >&2; exit 1; }
@@ -125,7 +126,7 @@ archives=(
 )
 kernel_flags=()
 cpu_detection=()
-if [[ "$x86asm" == 1 ]]; then
+if [[ "$x86asm" == 1 && "$runtime" == portable ]]; then
     # The package: the archives' native members (the nasm kernels) except the CPU detection, which is C here, and the
     # data the kernels share with the C. llvmnet links the archives' bitcode and leaves their native members to it. The C
     # calls ff_emms_asm, which clears MMX state for the x87 code of later kernels, whatever the CPU: optional, it does
@@ -139,7 +140,8 @@ if [[ "$x86asm" == 1 ]]; then
 fi
 "$root/bin/llvmnet" --runtime="$runtime" "${simd_flags[@]}" -pthread -O1 -I"$build_dir" -I"$source_dir" "$root/tests/ffmpeg/decode.c" \
     "${cpu_detection[@]}" "${kernel_flags[@]}" "${archives[@]}" -lm --keep-ir "$build_dir/decode.bc" -o "$build_dir/decode.dll"
-if [[ "$runtime" != portable && "$simd128" == 0 ]]; then
+# The native decoder of the scalar system build is the reference the tests compare with; the assembly is not in decode.bc.
+if [[ "$runtime" != portable && "$simd128" == 0 && "$x86asm" == 0 ]]; then
     clang-22 -O1 "$build_dir/decode.bc" -lm -pthread -o "$build_dir/decode-native"
 fi
 printf 'Built browser-profile threaded ffmpeg decoder libraries (%s ABI, SIMD128=%s, X86ASM=%s) in %s\n' "$runtime" "$simd128" "$x86asm" "$build_dir"

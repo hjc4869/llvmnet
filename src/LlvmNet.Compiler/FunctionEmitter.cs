@@ -1348,7 +1348,7 @@ internal sealed class FunctionEmitter : ValueEmitter
                 return;
             }
             if (!commentOnly || TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0)
-                throw new NotSupportedException("Inline assembly with instructions or outputs is not supported; use a pure C configuration.");
+                throw new NotSupportedException("Inline assembly with instructions or outputs is not supported; " + InlineAssemblyAdvice);
             Il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.MemoryBarrier))!);
             return;
         }
@@ -1508,7 +1508,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         else if (Llvm.LLVMIsAFunction(target) != 0)
             Il.Emit(OpCodes.Call, Compiler.ResolveFunction(target));
         else if (Llvm.LLVMIsAInlineAsm(target) != 0)
-            throw new NotSupportedException("Inline assembly is not supported; use a pure C configuration.");
+            throw new NotSupportedException("Inline assembly is not supported; " + InlineAssemblyAdvice);
         else
         {
             Load(target);
@@ -1758,6 +1758,14 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         return true;
     }
+
+    /// <summary>
+    /// What the inline assembly rejection advises (BE-24, SV-15): the projects' switches that leave it out, and where
+    /// assembly goes instead.
+    /// </summary>
+    internal const string InlineAssemblyAdvice = "build the project without it (ffmpeg: --disable-inline-asm; OpenSSL: no-asm; " +
+        "libjpeg-turbo: -DWITH_SIMD=0) and keep assembly in .S or .asm files, which system mode links as native objects and " +
+        "portable mode calls through a native kernel package (docs/user/native-kernels.md).";
 
     /// <summary>
     /// The registers a CPUID (4) or XGETBV (2) inline-assembly form returns, or 0 for other assembly. CPUID is "cpuid"

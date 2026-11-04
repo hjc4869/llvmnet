@@ -35,6 +35,15 @@ internal sealed class CompilerOptions
     internal List<ExtensionPackage> SystemExtensions { get; } = [];
     /// <summary>The native kernel packages the image calls (--native-kernels, SV-13).</summary>
     internal List<KernelPackage> KernelPackages { get; } = [];
+    /// <summary>System mode: native object files (assembled kernels) linked into the image's native library (SV-15).</summary>
+    internal List<NativeObject> NativeObjects { get; } = [];
+}
+
+/// <summary>A native object file and its global symbols: the functions and data it defines and the symbols it references.
+/// <paramref name="Source"/> is how messages name it: the input, the assembly source or archive(member).</summary>
+internal sealed record NativeObject(string Path, IReadOnlySet<string> Functions, IReadOnlySet<string> Data, IReadOnlySet<string> Undefined)
+{
+    internal string Source { get; init; } = Path;
 }
 
 /// <summary>One link input: a source or object with the language in effect for it (from -x), or an archive with its whole-archive state.</summary>
@@ -384,9 +393,35 @@ internal static class Driver
         try
         {
             List<(string Path, bool WholeArchive)> bitcode = [];
+            // System mode: native objects (assembled kernels) for the image's native library (SV-15).
+            List<string> nativeInputs = [];
+            Dictionary<string, string> assemblySources = [];
+            string members = Path.Combine(temporary, "native-members");
             foreach (LinkInput input in inputs)
             {
                 string extension = Path.GetExtension(input.Path);
+                if (input.Language is "assembler" or "assembler-with-cpp" || input.Language is null && extension is ".s" or ".S" or ".sx" or ".asm")
+                {
+                    string assembled = invocation.CompileOnly ? invocation.Output ?? Path.GetFileNameWithoutExtension(input.Path) + ".o" : Path.Combine(temporary, $"native{nativeInputs.Count}.o");
+                    int assembly = Assemble(input, assembled, options, clang, frontend, verbose);
+                    if (assembly != 0) return assembly;
+                    if (!invocation.CompileOnly && !invocation.DryRun)
+                    {
+                        nativeInputs.Add(assembled);
+                        assemblySources[assembled] = input.Path;
+                    }
+                    continue;
+                }
+                if (input.Language is null && IsNativeObject(input.Path))
+                {
+                    // A native object on the link line: system mode links it into the image's native library, and a
+                    // portable link with a kernel package leaves it to the package, as it does archives' native members.
+                    if (invocation.CompileOnly) throw new NotSupportedException($"-c needs a source, LLVM IR or a bitcode object; {input.Path} is a native object file.");
+                    if (options.Runtime == "system") nativeInputs.Add(input.Path);
+                    else if (options.KernelPackages.Count == 0)
+                        throw new NotSupportedException($"{input.Path} is a native object file, such as assembled code; llvmnet links bitcode, and portable mode calls native code through a native kernel package (--native-kernels, docs/user/native-kernels.md); system mode (--runtime=system) links native objects into the image's native library.");
+                    continue;
+                }
                 // A linker input is what its content says, as for a native linker: an archive named .so or .lib, say.
                 if (input.Language is null && !SourceExtensions.Contains(extension) && !IsFortran(input))
                     extension = LinkerInputKind(input.Path) ?? extension;
@@ -498,6 +533,19 @@ internal static class Driver
                 foreach (string archive in new[] { "libflang_rt.runtime.a", "libclang_rt.builtins.a" })
                     if (Path.Combine(Toolchain.Root, "sysroot", "system-linux-x64-v1", "lib", archive) is string path && File.Exists(path))
                         bitcode.Add((path, false));
+            // System mode links the native objects given on the command line and the native members of the archives
+            // into the image's native library, and every symbol they reference stays in the bitcode link (SV-15).
+            if (options.Runtime == "system")
+            {
+                Directory.CreateDirectory(members);
+                foreach (string native in nativeInputs)
+                    options.NativeObjects.AddRange(Llvm.NativeObjects(native, members).Select(item => item with { Source = assemblySources.GetValueOrDefault(native, native) }));
+                foreach ((string path, _) in bitcode)
+                    if (LinkerInputKind(path) == ".a")
+                        options.NativeObjects.AddRange(Llvm.NativeObjects(path, members).Select(item => item with { Source = $"{path}({Path.GetFileName(item.Path).Split('-', 2)[^1]})" }));
+            }
+            HashSet<string> nativeDefined = [.. options.NativeObjects.SelectMany(native => native.Functions.Concat(native.Data))];
+            string[] nativeReferences = [.. options.NativeObjects.SelectMany(native => native.Undefined).Where(name => !nativeDefined.Contains(name)).Distinct().Order(StringComparer.Ordinal)];
             string linked = Path.Combine(temporary, "linked.bc");
             // An executable's root is its entry point, which an archive member may define (gtest_main, Catch2's main),
             // as crt1.o's reference to main extracts it natively. A library or a relocatable object has no entry point.
@@ -512,8 +560,8 @@ internal static class Driver
             string[] dataNames = invocation.KernelData is null ? [] : [.. File.ReadAllLines(invocation.KernelData).Select(line => line.Trim()).Where(line => line.Length != 0)];
             string[] kernelData = [.. options.KernelPackages.SelectMany(package => package.Data), .. dataNames];
             Llvm.Link([.. bitcode.Select(input => input.Path)], [.. bitcode.Select(input => input.WholeArchive)], linked, options.AbiTag,
-                executable && invocation.KernelData is null ? ["main", "_QQmain"] : [], [.. threadAttachment, .. kernelData],
-                nativeMembers: options.KernelPackages.Count != 0 || invocation.KernelData is not null);
+                executable && invocation.KernelData is null ? ["main", "_QQmain"] : [], [.. threadAttachment, .. kernelData, .. nativeReferences],
+                nativeMembers: options.KernelPackages.Count != 0 || invocation.KernelData is not null || options.Runtime == "system");
             if (invocation.KernelData is not null)
             {
                 using var dataModule = new LlvmModule(linked);
@@ -549,7 +597,7 @@ internal static class Driver
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
             if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (options.Runtime == "portable" ? ",__llvmnet_libc_main,__llvmnet_register_finalizer,__llvmnet_cxx_can_catch" : "") +
                 (options.Extensions.Count != 0 && options.Runtime == "portable" ? ",__llvmnet_attach_thread,__llvmnet_detach_thread" : "") +
-                string.Concat(options.KernelPackages.SelectMany(package => package.Data).Select(data => "," + data)));
+                string.Concat(options.KernelPackages.SelectMany(package => package.Data).Concat(nativeReferences).Select(data => "," + data)));
             int optimizeResult = Toolchain.Run(Toolchain.Executable("opt-22", "LLVMNET_OPT"), optimization, verbose);
             if (optimizeResult != 0)
                 return optimizeResult;
@@ -601,11 +649,12 @@ internal static class Driver
 
     /// <summary>
     /// The C source of a native kernel package's shared data (--print-kernel-data, SV-13), which the package's build
-    /// compiles into its libraries: storage of each named variable the program's bitcode defines, with its size and
+    /// compiles into its libraries, and of system mode's native objects' (SV-15), which llvmnet links into the image's
+    /// native library: storage of each named variable the program's bitcode defines, with its size and
     /// alignment, declarations of those the package defines itself, and for each an accessor, llvmnet_kernel_data_&lt;name&gt;,
     /// that returns its address and through which the program uses the package's copy.
     /// </summary>
-    private static string KernelDataSource(nint module, IEnumerable<string> names)
+    internal static string KernelDataSource(nint module, IEnumerable<string> names)
     {
         nint layout = Llvm.LLVMCreateTargetData(Llvm.LLVMGetDataLayoutStr(module));
         var source = new System.Text.StringBuilder("/* Generated by llvmnet --print-kernel-data: the data this kernel package shares with the program. */\n");
@@ -683,6 +732,52 @@ internal static class Driver
     }
 
     private static readonly HashSet<string> SourceExtensions = new(StringComparer.Ordinal) { ".c", ".cc", ".cpp", ".cxx", ".C", ".i", ".ii", ".ll", ".bc" };
+
+    /// <summary>Whether a file is a native object (ELF, COFF or Mach-O), by its content.</summary>
+    internal static bool IsNativeObject(string path)
+    {
+        Span<byte> magic = stackalloc byte[20];
+        int read;
+        try
+        {
+            using FileStream stream = File.OpenRead(path);
+            read = stream.ReadAtLeast(magic, magic.Length, throwOnEndOfStream: false);
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        // ELF: the relocatable type (1) at offset 16; Mach-O's 64- and 32-bit magic; COFF objects for x64 and ARM64.
+        if (read >= 18 && magic[..4].SequenceEqual((ReadOnlySpan<byte>)[0x7F, (byte)'E', (byte)'L', (byte)'F'])) return magic[16] == 1 && magic[17] == 0;
+        if (read >= 4 && (magic[..4].SequenceEqual((ReadOnlySpan<byte>)[0xCF, 0xFA, 0xED, 0xFE]) || magic[..4].SequenceEqual((ReadOnlySpan<byte>)[0xCE, 0xFA, 0xED, 0xFE]))) return true;
+        return read >= 2 && (magic[..2].SequenceEqual((ReadOnlySpan<byte>)[0x64, 0x86]) || magic[..2].SequenceEqual((ReadOnlySpan<byte>)[0x64, 0xAA]));
+    }
+
+    /// <summary>
+    /// Assembles an assembly source natively (SV-15): .s and .S (and -x assembler, assembler-with-cpp) with Clang for
+    /// x86-64 Linux, with the command line's preprocessor and target options, and .asm with nasm (elf64, its -I and -D
+    /// options). Only system mode links native objects; portable mode calls assembly through a kernel package.
+    /// </summary>
+    private static int Assemble(LinkInput input, string destination, CompilerOptions options, string clang, List<string> frontend, bool verbose)
+    {
+        if (options.Runtime != "system")
+            throw new NotSupportedException($"{input.Path} is assembly, which llvmnet does not translate; portable mode calls assembled code through a native kernel package (--native-kernels, docs/user/native-kernels.md), and system mode (--runtime=system) links it into the image's native library.");
+        if (input.Language is null && Path.GetExtension(input.Path) == ".asm")
+        {
+            List<string> nasm = ["-f", "elf64"];
+            for (int index = 0; index < frontend.Count; index++)
+            {
+                string argument = frontend[index];
+                string? value = argument is "-I" or "-D" && index + 1 < frontend.Count ? frontend[++index] : argument.Length > 2 && argument[0] == '-' && argument[1] is 'I' or 'D' ? argument[2..] : null;
+                if (value is null) continue;
+                nasm.Add((argument[1] == 'I' ? "-I" : "-D") + (argument[1] == 'I' && !value.EndsWith('/') ? value + "/" : value));
+            }
+            nasm.AddRange([input.Path, "-o", destination]);
+            return Toolchain.Run(Toolchain.Executable("nasm", "LLVMNET_NASM"), nasm, verbose);
+        }
+        List<string> command = ["--target=x86_64-linux-gnu", "-c", .. WithoutFortranOptions(frontend)];
+        if (input.Language is not null) command.AddRange(["-x", input.Language]);
+        command.AddRange([input.Path, "-o", destination]);
+        return Toolchain.Run(clang, command, verbose);
+    }
 
     /// <summary>
     /// What a file whose extension names no language is, read from its content: Clang hands such a file to the linker,

@@ -54,7 +54,7 @@ Each row is a small LLVM IR module compiled with `llvmnet --runtime=portable`. *
 | `freeze` | translated |  |
 | `inline asm (empty barrier)` | translated |  |
 | `inline asm (empty, tied output)` | translated |  |
-| `inline asm (instructions)` | rejected | Inline assembly with instructions or outputs is not supported; use a pure C configuration. |
+| `inline asm (instructions)` | rejected | Inline assembly with instructions or outputs is not supported; build the project without it (ffmpeg: --disable-inline-asm; OpenSSL: no-asm; libjpeg-turbo: -DWITH_SIMD=0) and keep assembly in .S or .asm files, which system mode links as native objects and portable mode calls through a native kernel package (docs/user/native-kernels.md). |
 | `callbr (asm goto)` | rejected | Unsupported LLVM opcode 67 |
 | `va_arg instruction` | rejected | Unsupported LLVM opcode 49 |
 | `tail / notail call` | translated |  |

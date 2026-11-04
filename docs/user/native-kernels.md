@@ -1,6 +1,6 @@
 # Native kernel packages
 
-Codecs and math libraries keep their fastest code in assembly files (ffmpeg's and dav1d's nasm, OpenSSL's generated assembly, BLAS kernels), which llvmnet does not translate. A **native kernel package** ships that code beside a portable program: the project's build assembles its kernels natively for each runtime identifier it supports, and llvmnet calls them from the program's CIL, while the program keeps its C paths for every other host ([ADR-16](../plan/decisions.md#adr-16-simd-levels) Level 3). This is portable mode's; in system mode the program is native x86-64 code's peer and links such libraries with `--system-library`.
+Codecs and math libraries keep their fastest code in assembly files (ffmpeg's and dav1d's nasm, OpenSSL's generated assembly, BLAS kernels), which llvmnet does not translate. A **native kernel package** ships that code beside a portable program: the project's build assembles its kernels natively for each runtime identifier it supports, and llvmnet calls them from the program's CIL, while the program keeps its C paths for every other host ([ADR-16](../plan/decisions.md#adr-16-simd-levels) Level 3). This is portable mode's; in system mode the program is native x86-64 code's peer, links a project's assembled objects into its own native library and calls them directly ([linking.md](linking.md#native-objects-and-assembly-system-mode)), and links native shared libraries with `--system-library`.
 
 ## A package
 

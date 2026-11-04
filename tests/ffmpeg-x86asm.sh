@@ -8,15 +8,20 @@
 # (DOTNET_EnableAVX=0, so ffmpeg selects its SSE kernels) and as NativeAOT; each must hash every frame as the image does
 # through its C paths, which it takes when CPUID reports nothing (DOTNET_EnableHWIntrinsic=0, as on an ARM64 host).
 # Without the package's library the C paths still decode, and a kernel call ends the process with llvmnet's message.
+# The system-mode profile links the same kernels into the image's native library (SV-15) and must hash as well.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 output="$root/artifacts/tests/ffmpeg-x86asm"
 build="$root/artifacts/ffmpeg-browser-portable-x86asm"
+system="$root/artifacts/ffmpeg-browser-system-x86asm"
 rm -rf "$output"
 mkdir -p "$output"
 if [[ "${FFMPEG_X86ASM_SKIP_BUILD:-0}" != 1 ]]; then
-    LLVMNET_RUNTIME=portable bash "$root/scripts/build-dependencies.sh" >"$output/deps.log" 2>&1
+    for runtime in portable system; do
+        LLVMNET_RUNTIME="$runtime" bash "$root/scripts/build-dependencies.sh" >"$output/deps-$runtime.log" 2>&1
+    done
     LLVMNET_RUNTIME=portable FFMPEG_X86ASM=1 FFMPEG_BUILD_DIR="$build" bash "$root/scripts/build-ffmpeg.sh" >"$output/build.log" 2>&1
+    LLVMNET_RUNTIME=system FFMPEG_X86ASM=1 FFMPEG_BUILD_DIR="$system" bash "$root/scripts/build-ffmpeg.sh" >"$output/build-system.log" 2>&1
 fi
 grep -q '^#define HAVE_X86ASM 1$' "$build/config.h"
 dotnet "$checks" inspect "$build/decode.dll" >"$output/inspect.txt"
@@ -48,3 +53,15 @@ dotnet "$build/decode.dll" "$output/hevc8.mp4" 1000 video 1 >/dev/null 2>"$outpu
 test "$code" -eq 127
 grep -q '^llvmnet: native kernel ff_[a-z0-9_]* of package ffmpeg-x86 was called, but its linux-x64 library .*libffmpeg-x86-kernels.so does not load' "$output/missing.err"
 printf 'PASS: without the library the C paths decode, and a kernel call stops the process\n'
+
+# System mode: the kernels in the image's native library, under the JIT and as NativeAOT, which links the archives' native
+# members again from the command line.
+trap - EXIT
+mv "$output/hidden" "$build/runtimes/linux-x64"
+"$llvmnet" --runtime=system --nativeaot "$system/decode.bc" "$system/libavcodec/libavcodec.a" "$system/libavutil/libavutil.a" \
+    "$system/libswscale/libswscale.a" "$system/libswresample/libswresample.a" -o "$output/decode-system-aot" >"$output/system-aot.log" 2>&1
+for clip in hevc8 hevc10 h264; do
+    dotnet "$system/decode.dll" "$output/$clip.mp4" 1000 video 4 frame 2>/dev/null | diff -u "$output/$clip-c.txt" -
+    "$output/decode-system-aot" "$output/$clip.mp4" 1000 video 4 slice 2>/dev/null | diff -u "$output/$clip-c.txt" -
+done
+printf 'PASS: the system-mode profile decodes through its linked kernels (JIT, NativeAOT)\n'

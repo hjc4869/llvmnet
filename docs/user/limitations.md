@@ -18,7 +18,7 @@ Programs are compiled through Clang and Flang 22 and translated from LLVM IR to 
 | Types: `<vscale x 4 x i32>` | Unsupported LLVM type: <vscale x 4 x i32> |
 | Instructions: `indirectbr (computed goto)` | Unresolved value: ptr blockaddress(@probe, %b) |
 | Instructions: `atomicrmw uinc_wrap` | Atomic RMW operation 15 |
-| Instructions: `inline asm (instructions)` | Inline assembly with instructions or outputs is not supported; use a pure C configuration. |
+| Instructions: `inline asm (instructions)` | Inline assembly with instructions or outputs is not supported; build the project without it (ffmpeg: --disable-inline-asm; OpenSSL: no-asm; libjpeg-turbo: -DWITH_SIMD=0) and keep assembly in .S or .asm files, which system mode links as native objects and portable mode calls through a native kernel package (docs/user/native-kernels.md). |
 | Instructions: `callbr (asm goto)` | Unsupported LLVM opcode 67 |
 | Instructions: `va_arg instruction` | Unsupported LLVM opcode 49 |
 | Instructions: `musttail call with a byval argument` | musttail call to probe: a byval argument cannot be a tail call, because its copy is in the caller's frame. |

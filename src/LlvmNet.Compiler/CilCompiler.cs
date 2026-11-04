@@ -667,6 +667,13 @@ internal sealed class CilCompiler(CompilerOptions options)
         foreach ((nint global, FieldBuilder field) in Globals)
         {
             if (ThreadGlobals.ContainsKey(global)) continue;
+            // Shared with system mode's native objects (SV-15): the image's native library holds it.
+            if (Host?.DataAccessor(global) is MethodInfo shared)
+            {
+                il.Emit(OpCodes.Call, shared);
+                il.Emit(OpCodes.Stsfld, field);
+                continue;
+            }
             if (kernelStubs?.DataPackageOf(Llvm.Name(global)) is KernelPackage dataPackage)
             {
                 // Shared with a kernel package (SV-13): the library's storage where the host has the library, which the
