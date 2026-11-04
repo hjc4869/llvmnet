@@ -6,7 +6,7 @@ What llvmnet does not do, in one place. The two tables are generated from code: 
 
 Programs are compiled through Clang and Flang 22 and translated from LLVM IR to CIL; what the frontends reject is theirs to report. The backend rejects the constructs below with a compile error naming the function and the instruction ([driver.md](driver.md#exit-status)); everything else in the support matrix is translated.
 
-32 of the 232 probed constructs are rejected (200 translated).
+33 of the 235 probed constructs are rejected (202 translated).
 
 | Construct | Diagnostic |
 | --- | --- |
@@ -39,14 +39,15 @@ Programs are compiled through Clang and Flang 22 and translated from LLVM IR to 
 | Intrinsics: floating (x86_fp80): `llvm.fptosi.sat.i32.f80` | Saturated conversion type: llvm.fptosi.sat.i32.f80 |
 | Intrinsics: vector: `llvm.get.active.lane.mask` | Unsupported intrinsic: llvm.get.active.lane.mask.v4i1.i64 |
 | Intrinsics: vector: `llvm.vp.add (vector predication)` | Unsupported intrinsic: llvm.vp.add.v4i32 |
-| Intrinsics: x86: `SSE and AVX operations (llvm.x86.sse2.psad.bw)` | x86 target intrinsic llvm.x86.sse2.psad.bw is not translated; build the code's portable C path instead |
+| Intrinsics: x86: `AVX and later (llvm.x86.avx2.psad.bw)` | x86 target intrinsic llvm.x86.avx2.psad.bw is not translated; llvmnet translates the SSE to SSE4.2 and PCLMULQDQ intrinsics, so build the code's SSE4.2, SSE2 or C path instead (--isa=x86-64-v2 selects SSE4.2 paths, the baseline a library's C paths) |
+| Intrinsics: x86: `MXCSR write (llvm.x86.sse.ldmxcsr)` | x86 target intrinsic llvm.x86.sse.ldmxcsr is not translated; translated code keeps the default MXCSR (round to nearest, no flush to zero), so _mm_setcsr and the _MM_SET macros cannot change it |
 | Linkage: `ifunc` | GNU indirect function (ifunc) i is not supported; build without ifunc resolvers. |
 | Linkage: `external thread_local global` | External thread-local global requires a bitcode definition: t |
 
 Further limits of the translation:
 
-- Vector IR (LLVM's vectorizers with `-fvectorize`, which stay off by default (ADR-11), and Clang's vector extensions) runs as `Vector128` code at 128 bits, wider vectors as 128-bit fragments (ADR-16 Level 1). Functions whose vectors have lanes of no CIL vector type, or that use vector intrinsics without a lowering yet, and functions that use vectors mostly as containers run as scalar code. x86, AArch64 and WebAssembly target intrinsics are not translated yet (Level 2); the opt-in `--simd128` header path maps `wasm_simd128.h` intrinsics to `Vector128` ([simd128.md](simd128.md)).
-- x86 target intrinsics (`llvm.x86.*`, from SSE and AVX code paths) are not translated, apart from `_mm_pause` and the SSE fences: compiling a unit that contains one warns, and linking a program that reaches it fails. System mode predefines `__SSE__` and `__SSE2__`, so libraries take such paths there; `-U__SSE__ -U__SSE2__` or the library's own switch selects its C path ([modes.md](modes.md#system-abi)).
+- Vector IR (LLVM's vectorizers with `-fvectorize`, which stay off by default (ADR-11), and Clang's vector extensions) runs as `Vector128` code at 128 bits, wider vectors as 128-bit fragments (ADR-16 Level 1). Functions whose vectors have lanes of no CIL vector type, or that use vector intrinsics without a lowering yet, and functions that use vectors mostly as containers run as scalar code. The x86 target intrinsics of SSE to SSE4.2 and PCLMULQDQ run as runtime helpers, the host's instruction or an exact composition (Level 2, [x86-intrinsics.md](x86-intrinsics.md)); AArch64 and WebAssembly target intrinsics are not translated yet, and the opt-in `--simd128` header path maps `wasm_simd128.h` intrinsics to `Vector128` ([simd128.md](simd128.md)).
+- x86 target intrinsics beyond SSE4.2 and PCLMULQDQ (AVX and later, AES), the MXCSR write (`_mm_setcsr` and the `_MM_SET_*` macros) and `monitor`/`mwait` are not translated: compiling a unit that contains one warns, and linking a program that reaches it fails. Portable code sees the x86 macros only with `--isa=x86-64-v2` or its `-m` aliases, and there a library's CPUID-based feature detection is inline assembly, which portable mode rejects until SV-12; such libraries need their switch for compile-time selection ([x86-intrinsics.md](x86-intrinsics.md#cpu-detection)). System mode predefines `__SSE__` and `__SSE2__` as native x86-64 does ([modes.md](modes.md#system-abi)).
 - `longjmp` cannot cross native frames (system mode), and an external thread-local global needs a bitcode definition (SA-03).
 - A `musttail` call (`[[clang::musttail]]`) becomes a CIL `tail.` call and runs in constant stack under the JIT and NativeAOT; a function that makes one takes its allocas and variadic call area from llvmnet's per-thread arena instead of the CLR stack, because NativeAOT reuses the frame only when it has no `localloc`. The `musttail` calls in the table above are rejected: a `byval` argument, an argument or result of more than 16 bytes (which Windows x64 and ARM64 pass by reference to a copy in the caller's frame), and forwarded variadic arguments. Windows x64 also passes 16-byte vectors, `long double` and 128-bit integers by reference, so there a NativeAOT executable makes a `musttail` call with one an ordinary call (the JIT keeps the guarantee through its tail-call helpers). In system mode a `musttail` call to a native function is an ordinary call. Ordinary `tail` calls stay ordinary calls: the prefix would keep RyuJIT from inlining the callee.
 - A function with very many aggregate values or `setjmp` sites can exceed the CLR's limits on locals, and a very large function runs without JIT optimization; `--diagnose-limits` reports both (BE-25, BE-26).
@@ -85,7 +86,7 @@ Behavior that differs from a Linux kernel, in short ([dev/host-abi.md](../dev/ho
 - The process runs as user and group 1000 and owns every file it can see; inode numbers are hashes of the path.
 - Descriptor-relative calls (`openat` and the other `*at` calls) resolve against the directory's path, so they are not safe against a directory being replaced between calls.
 - Only the C and C.UTF-8 locales exist; the floating-point environment is fixed to round-to-nearest without exception flags.
-- `__linux__`, `__unix__`, `__x86_64__` and the other host macros are not defined (ADR-14); a program that selects platform code by them needs a portable path or a documented per-program flag.
+- `__linux__`, `__unix__` and the other host macros are not defined (ADR-14), nor `__x86_64__` unless `--isa=x86-64-v2` is given; a program that selects platform code by them needs a portable path or a documented per-program flag.
 - Thread stacks are at least 8 MB and `CLOCK_THREAD_CPUTIME_ID` reports process time.
 - Native libraries are reached only through native extensions ([extensions.md](extensions.md)), which pass integers, floating point, pointers and structures by value without unions or bit-fields; Vulkan's window-system extensions, variadic functions and C++ interfaces are not proxied, a callback on a thread the host library started gets thread state without thread-local or key destructors, and `dlopen` serves only the libraries of the linked extensions.
 

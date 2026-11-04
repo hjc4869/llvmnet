@@ -1762,6 +1762,17 @@ internal sealed class FunctionEmitter : ValueEmitter
             registers = 4;
             arguments = 2;
         }
+        else if (assembly == "  xchg$(q$|$)  $(%$|$)rbx,${1:q}\n  cpuid\n  xchg$(q$|$)  $(%$|$)rbx,${1:q}")
+        {
+            // Clang's <cpuid.h> on x86-64: __cpuid, and __cpuid_count with the subleaf in ECX.
+            registers = 4;
+            arguments = constraints switch
+            {
+                "={ax},=r,={cx},={dx},0,~{dirflag},~{fpsr},~{flags}" => 1,
+                "={ax},=r,={cx},={dx},0,2,~{dirflag},~{fpsr},~{flags}" => 2,
+                _ => 0
+            };
+        }
         else if (assembly == ".byte 0x0f, 0x01, 0xd0" && constraints == "={ax},={dx},{cx},~{dirflag},~{fpsr},~{flags}")
         {
             registers = 2;
@@ -1776,6 +1787,11 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     private void Intrinsic(nint instruction, string name)
     {
+        if (TargetIntrinsics.Helper(name) is MethodInfo target)
+        {
+            TargetIntrinsic(instruction, name, target);
+            return;
+        }
         if (Vectors.Intrinsic(instruction, name))
             return;
         if (name == "llvm.get.rounding")
@@ -2445,17 +2461,48 @@ internal sealed class FunctionEmitter : ValueEmitter
     }
 
     /// <summary>
+    /// A call of a target intrinsic the runtime implements (<see cref="TargetIntrinsics"/>): the operands, vectors
+    /// converted to the helper's lanes, then the helper, whose vector result is converted back. Scalar operands pass as
+    /// they are: an i8, i16 or i32 as the helper's int, an i64 as its long, a pointer as its nint.
+    /// </summary>
+    private void TargetIntrinsic(nint instruction, string name, MethodInfo helper)
+    {
+        static bool IsVector(Type type) => type.IsGenericType && (type.GetGenericTypeDefinition() == typeof(System.Runtime.Intrinsics.Vector128<>) ||
+            type.GetGenericTypeDefinition() == typeof(System.Runtime.Intrinsics.Vector256<>));
+        ParameterInfo[] parameters = helper.GetParameters();
+        if (parameters.Length != Llvm.LLVMGetNumArgOperands(instruction))
+            throw new NotSupportedException($"{name} has {Llvm.LLVMGetNumArgOperands(instruction)} operands where its runtime helper takes {parameters.Length}.");
+        for (uint index = 0; index < parameters.Length; index++)
+        {
+            nint operand = Llvm.LLVMGetOperand(instruction, index);
+            nint type = Llvm.LLVMTypeOf(operand);
+            Type expected = parameters[index].ParameterType, actual = Types.Map(type);
+            if (IsVector(expected) && !IsVector(actual))
+                throw new NotSupportedException($"{name} needs the typed vector lowering, which --vector-lowering=scalar turns off.");
+            if (!IsVector(expected) && (expected == typeof(int) ? TypeSystem.Kind(type) != 8 || TypeSystem.Width(type) > 32 : expected != actual))
+                throw new NotSupportedException($"{name}: operand {index} is {Llvm.PrintType(type)} where its runtime helper takes {expected.Name}.");
+            Load(operand);
+            if (IsVector(expected)) Vectors.Convert(actual, expected);
+        }
+        Il.Emit(OpCodes.Call, helper);
+        if (IsVector(helper.ReturnType)) Vectors.Convert(helper.ReturnType, Types.Map(Llvm.LLVMTypeOf(instruction)));
+    }
+
+    /// <summary>
     /// The x86 target intrinsics the backend translates: the spin-wait hint, which libstdc++'s atomic waits use on
-    /// x86-64, and the SSE fences. They carry no vector data; every other llvm.x86 intrinsic comes from an SSE or AVX
-    /// code path and is rejected when a module is translated, after a warning when its unit was compiled (Driver).
+    /// x86-64, the SSE fences, and the SSE to SSE4.2 intrinsics the runtime implements (<see cref="TargetIntrinsics"/>).
+    /// Every other llvm.x86 intrinsic (MMX, AVX and later, the MXCSR write) is rejected when a module is translated, after
+    /// a warning when its unit was compiled (Driver).
     /// </summary>
     internal static bool TranslatesX86Intrinsic(string name) =>
-        name is "llvm.x86.sse2.pause" or "llvm.x86.sse2.mfence" or "llvm.x86.sse2.lfence" or "llvm.x86.sse.sfence";
+        name is "llvm.x86.sse2.pause" or "llvm.x86.sse2.mfence" or "llvm.x86.sse2.lfence" or "llvm.x86.sse.sfence" || TargetIntrinsics.Helper(name) is not null;
 
     internal static string X86IntrinsicMessage(string name, bool system, bool compiling = false) =>
-        $"x86 target intrinsic {name} is not translated{(compiling ? ", so linking a program that reaches it fails" : "")}; build the code's portable C path instead" + (system
-            ? " (system mode predefines __SSE__ and __SSE2__ as native x86-64 does, and libraries usually select their SSE paths by them: try -U__SSE__ -U__SSE2__ or the library's own SIMD option)"
-            : "");
+        $"x86 target intrinsic {name} is not translated{(compiling ? ", so linking a program that reaches it fails" : "")}; " + (name == "llvm.x86.sse.ldmxcsr"
+            ? "translated code keeps the default MXCSR (round to nearest, no flush to zero), so _mm_setcsr and the _MM_SET macros cannot change it"
+            : "llvmnet translates the SSE to SSE4.2 and PCLMULQDQ intrinsics, so build the code's SSE4.2, SSE2 or C path instead" + (system
+                ? " (system mode takes the instruction sets of -m and -march as native code does: try -march=x86-64-v2 or the library's own SIMD option)"
+                : " (--isa=x86-64-v2 selects SSE4.2 paths, the baseline a library's C paths)"));
 
     private unsafe void Aggregate(nint instruction, bool insert)
     {

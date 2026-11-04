@@ -289,6 +289,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.abi", options.AbiTag]));
         assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.version", BuildInfo.Version]));
         assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.llvm", Llvm.Version]));
+        if (Llvm.IsaLevels(module) is { Length: > 0 } levels)
+            assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.isa", levels]));
         foreach (string reference in options.CilReferences)
         {
             Assembly library = Assembly.LoadFrom(reference);

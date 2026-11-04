@@ -25,7 +25,7 @@ internal static class PortableAbi
     /// <summary>The target triple the frontends compile portable code for; -dumpmachine reports it in portable mode.</summary>
     internal const string Triple = "x86_64-unknown-none";
 
-    internal static List<string> Arguments(IReadOnlyList<string> frontend, bool fortran, bool cpp)
+    internal static List<string> Arguments(IReadOnlyList<string> frontend, bool fortran, bool cpp, string isa)
     {
         // The driver's option table rejects the options that would change the ABI (-target, --sysroot, -m<...>,
         // -fshort-wchar and the others); this is the backstop for a caller that bypasses it. Plain char's signedness
@@ -38,10 +38,13 @@ internal static class PortableAbi
         string include = Path.Combine(Sysroot, "include");
         List<string> result = ["--target=" + Triple, "-D__LLVMNET__=1", "-D__LLVMNET_PORTABLE__=1", "-D__LLVMNET_ABI_VERSION=2"];
         if (fortran) return result;
-        // The fixed x86-64 data layout must not imply x86 instruction sets: portable code is scalar CIL, and headers
-        // such as libc++'s size their SIMD helpers from these macros.
-        result.AddRange(["-nostdinc", "-U__x86_64__", "-U__amd64__", "-U__amd64", "-U__SSE__", "-U__SSE2__", "-U__MMX__",
-            "-U__SSE_MATH__", "-U__SSE2_MATH__", "-U__FXSR__"]);
+        // The fixed x86-64 data layout must not imply x86 instruction sets: libraries select x86 code paths by these
+        // macros. --isa=x86-64-v2 keeps them, with the SSE3 to SSE4.2 ones -march adds, because the runtime translates
+        // those intrinsics, and the MMX ones, which Clang implements with SSE2 (ADR-16 Level 2); the layouts do not
+        // depend on them.
+        result.Add("-nostdinc");
+        if (isa != "x86-64-v2")
+            result.AddRange(["-U__x86_64__", "-U__amd64__", "-U__amd64", "-U__SSE__", "-U__SSE2__", "-U__MMX__", "-U__SSE_MATH__", "-U__SSE2_MATH__", "-U__FXSR__"]);
         if (cpp)
         {
             string cppInclude = Path.Combine(Sysroot, "include", "c++", "v1");

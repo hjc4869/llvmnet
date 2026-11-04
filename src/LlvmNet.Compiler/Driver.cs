@@ -8,7 +8,9 @@ internal sealed class CompilerOptions
     internal string Runtime { get; set; } = "portable";
     internal bool Verbose { get; set; }
     internal bool NativeAot { get; set; }
-    internal bool Simd128 { get; set; }
+    /// <summary>The instruction set the frontend may assume (--isa, ADR-16): baseline, x86-64-v2 or wasm-simd128.</summary>
+    internal string Isa { get; set; } = "baseline";
+    internal bool Simd128 => Isa == "wasm-simd128";
     /// <summary>
     /// The hidden --vector-lowering choice, for comparisons and tests: auto (the default) lowers vector code to Vector128
     /// except in the functions VectorEmitter.Legalize scalarizes, typed scalarizes only what the lowering cannot
@@ -146,14 +148,22 @@ internal sealed class Invocation
                 case "-Xlinker": linker.Add(value); break;
                 case "--runtime": break;
                 case "--portable-sysroot": PortableAbi.SysrootOverride = Path.GetFullPath(value); break;
-                case "--simd128": Options.Simd128 = true; break;
+                case "--simd128": Options.Isa = "wasm-simd128"; break;
                 case "--isa=":
-                    // The instruction set the frontend may assume (ADR-16): baseline, or wasm-simd128, the SIMD128 header
-                    // path (--simd128); the x86 and NEON levels come with their intrinsic helpers.
-                    if (value is "x86-64-v2" or "x86-64-v3" or "neon")
-                        throw new ArgumentException($"--isa={value} is not implemented yet; the supported levels are baseline and wasm-simd128.");
-                    if (value is not ("baseline" or "wasm-simd128")) throw new ArgumentException("--isa requires baseline or wasm-simd128.");
-                    Options.Simd128 = value == "wasm-simd128";
+                    // The instruction set the frontend may assume (ADR-16): baseline; x86-64-v2, whose macros and SSE to
+                    // SSE4.2 intrinsics the runtime's helpers translate (Level 2); or wasm-simd128, the SIMD128 header path
+                    // (--simd128). x86-64-v3 and neon come with their helpers (SV-09, SV-11).
+                    if (value is "x86-64-v3" or "neon")
+                        throw new ArgumentException($"--isa={value} is not implemented yet; the supported levels are baseline, x86-64-v2 and wasm-simd128.");
+                    if (value is not ("baseline" or "x86-64-v2" or "wasm-simd128")) throw new ArgumentException("--isa requires baseline, x86-64-v2 or wasm-simd128.");
+                    Options.Isa = value;
+                    break;
+                case var alias when DriverOptions.IsaAliases.Contains(alias):
+                    // An x86 SIMD feature flag in portable mode (system mode forwards it): the x86-64-v2 level, and the flag
+                    // itself for Clang, which enables what it names (-mpclmul beyond the level).
+                    if (Options.Isa == "wasm-simd128") throw new ArgumentException($"{argument.Text} selects x86-64-v2, which cannot be combined with --isa=wasm-simd128.");
+                    Options.Isa = "x86-64-v2";
+                    Frontend.Add(argument.Text);
                     break;
                 case "--vector-width=":
                     if (value is not ("128" or "256")) throw new ArgumentException("--vector-width requires 128 or 256.");
@@ -178,7 +188,7 @@ internal sealed class Invocation
                     break;
                 case "--aot-instruction-set":
                     AotInstructionSet = value;
-                    if (AotInstructionSet is not ("baseline" or "x86-64-v3" or "native")) throw new ArgumentException("--aot-instruction-set requires baseline, x86-64-v3 or native.");
+                    if (AotInstructionSet is not ("baseline" or "x86-64-v2" or "x86-64-v3" or "native")) throw new ArgumentException("--aot-instruction-set requires baseline, x86-64-v2, x86-64-v3 or native.");
                     break;
                 case "--aot-debug": AotDebug = true; break;
                 case "--keep-ir": KeepIr = Path.GetFullPath(value); break;
@@ -340,8 +350,9 @@ internal static class Driver
             if (invocation.Output is not null)
                 preprocessing.AddRange(["-o", invocation.Output]);
             bool fortranInput = driver == "flang" || inputs.Any(IsFortran);
-            if (options.Runtime == "portable") preprocessing.InsertRange(0, PortableAbi.Arguments(frontend, fortranInput, driver == "clang++" || inputs.Any(IsCpp)));
+            if (options.Runtime == "portable") preprocessing.InsertRange(0, PortableAbi.Arguments(frontend, fortranInput, driver == "clang++" || inputs.Any(IsCpp), options.Isa));
             else if (!fortranInput) preprocessing.InsertRange(0, ["-idirafter", Extensions.InterfaceInclude]);
+            if (!fortranInput) preprocessing.InsertRange(0, IsaArguments(options.Isa));
             if (driver == "clang++") preprocessing.Insert(0, "--driver-mode=g++");
             return Toolchain.Run(fortranInput ? flang : clang, preprocessing, verbose, options.Runtime == "portable");
         }
@@ -384,7 +395,7 @@ internal static class Driver
                 if (!frontend.Contains("-fvectorize") && !frontend.Contains("-fslp-vectorize")) command.AddRange(["-fno-vectorize", "-fno-slp-vectorize"]);
                 if (driver == "clang++") command.Add("--driver-mode=g++");
                 // LLVM IR gets the mode's target and macros only; its headers and feature macros do not apply.
-                if (options.Runtime == "portable") command.AddRange(ir ? PortableAbi.Arguments(frontend, true, false) : PortableAbi.Arguments(frontend, fortran, cpp));
+                if (options.Runtime == "portable") command.AddRange(ir ? PortableAbi.Arguments(frontend, true, false, "baseline") : PortableAbi.Arguments(frontend, fortran, cpp, options.Isa));
                 // <llvmnet/ext.h> after the host's headers, so that it shadows nothing.
                 else if (!fortran && !ir) command.AddRange(["-idirafter", Extensions.InterfaceInclude]);
                 if (fortran)
@@ -394,6 +405,7 @@ internal static class Driver
                 }
                 else
                     command.Add("-fno-stack-protector");
+                if (!fortran && !ir) command.AddRange(IsaArguments(options.Isa));
                 // Mixed-language builds pass Fortran module options to every input; Clang does not accept them.
                 command.AddRange(fortran ? frontend : WithoutFortranOptions(frontend));
                 command.AddRange(["-emit-llvm", invocation.Textual ? "-S" : "-c"]);
@@ -405,7 +417,7 @@ internal static class Driver
                 if (invocation.DryRun) continue;
                 if (!File.Exists(destination))
                     throw new InvalidOperationException($"the frontend did not write {destination}; an option such as -fdriver-only or a -print query stops it before code generation.");
-                try { Llvm.StampAbi(destination, options.AbiTag, invocation.Textual); }
+                try { Llvm.StampAbi(destination, options.AbiTag, options.Isa, invocation.Textual); }
                 catch (InvalidOperationException error)
                 {
                     throw new InvalidOperationException($"the frontend's output {destination} is not LLVM {(invocation.Textual ? "IR" : "bitcode")} ({error.Message}); an option such as --analyze, -emit-ast or --precompile changes what the frontend writes.");
@@ -528,12 +540,13 @@ internal static class Driver
                 error.KeptIr = kept;
                 throw;
             }
+            string levels = Llvm.IsaLevels(module.Handle);
             if (invocation.AotProject is not null)
             {
-                Toolchain.AotProject(payload, invocation.AotProject, invocation.AotPreference, invocation.AotInstructionSet ?? "baseline", invocation.AotDebug, options.SystemLibraries);
+                Toolchain.AotProject(payload, invocation.AotProject, invocation.AotPreference, AotInstructionSet(invocation, levels), invocation.AotDebug, options.SystemLibraries);
                 return 0;
             }
-            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, invocation.RuntimeId, invocation.AotPreference, invocation.AotInstructionSet ?? "baseline", verbose, invocation.AotDebug, options.SystemLibraries);
+            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, invocation.RuntimeId, invocation.AotPreference, AotInstructionSet(invocation, levels), verbose, invocation.AotDebug, options.SystemLibraries);
             if (launcher) Toolchain.Launcher(output, payload);
             return 0;
         }
@@ -551,6 +564,22 @@ internal static class Driver
     /// (flang-rt's floating-point exception accessors read MXCSR). Bitcode keeps symbol names verbatim in its string
     /// table, so a unit without the prefix is not parsed a second time.
     /// </summary>
+    /// <summary>
+    /// ILC's instruction set: the one given, or for an x64 program with objects compiled at --isa=x86-64-v2 (the image's
+    /// llvmnet.isa levels) that level, which such a program requires as it does natively; otherwise the baseline, where
+    /// SSE4.2 is only an opportunistic set that the helpers test at run time and the generic Vector128 operations do not use.
+    /// </summary>
+    private static string AotInstructionSet(Invocation invocation, string levels) =>
+        invocation.AotInstructionSet ?? (levels.Split(',').Contains("x86-64-v2") &&
+            (invocation.RuntimeId ?? System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier).EndsWith("-x64", StringComparison.Ordinal) ? "x86-64-v2" : "baseline");
+
+    /// <summary>
+    /// The frontend options of an ISA level for C and C++: x86-64-v2 selects SSE3 to SSE4.2 and POPCNT as -march does,
+    /// with their macros, intrinsics and vectorizer costs, but not CMPXCHG16B, so that 16-byte atomics stay the library
+    /// calls objects of every level share.
+    /// </summary>
+    private static List<string> IsaArguments(string isa) => isa == "x86-64-v2" ? ["-march=x86-64-v2", "-mno-cx16"] : [];
+
     private static void WarnX86Intrinsics(string path, bool system, Diagnostics diagnostics)
     {
         if (File.ReadAllBytes(path).AsSpan().IndexOf("llvm.x86."u8) < 0) return;

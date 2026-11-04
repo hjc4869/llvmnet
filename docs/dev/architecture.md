@@ -30,6 +30,8 @@ LLVM 22's scalarizer can corrupt the terminator of an `invoke` that returns a ve
 
 The opt-in [SIMD128 path](../user/simd128.md) (`--simd128`, `--isa=wasm-simd128`) is a header on the typed lowering: `wasm_simd128.h` writes most intrinsics as vector extensions, and the operations Clang's header takes from `llvm.wasm.*` intrinsics call `__llvmnet_simd128_*` helpers that take and return `Vector128<byte>`. A call to a runtime method reinterprets a vector argument or result of the same width with other lanes (`Vector128.As`, free; `CilCompiler.Reinterpretable`), since the header's vector types differ from the helpers'.
 
+x86 target intrinsics (ADR-16 Level 2, [x86-intrinsics.md](../user/x86-intrinsics.md)) are runtime methods marked `[LlvmIntrinsic("llvm.x86....")]` in `LlvmNet.Runtime.X86`; `TargetIntrinsics` collects them by name, and a call of one loads its operands, converts each vector to the helper's lanes (with `--vector-width=256`, the low half of a `Vector256` to `Vector128` and back) and calls the helper, which the JIT and ILC inline. An immediate operand stays the call's constant, so after inlining `Sse41.DotProduct` and its siblings get their immediate form; a helper left as a call takes .NET's jump table. Each helper branches on `IsSupported` for the x86 instruction (a constant for the JIT, a run-time test for ILC's opportunistic sets), then for the AdvSimd one, and composes the result from `Vector128` operations otherwise. A function that calls one stays vector code (`VectorEmitter.Unsupported` accepts the table's names). The level a unit was compiled for (`--isa`) is the object's `llvmnet.isa` module flag (`AppendUnique`, so objects of all levels link); the driver gives a NativeAOT program with `x86-64-v2` objects ILC's `x86-64-v2` instruction set.
+
 ## Memory and Calls
 
 Pointers are native integers into unmanaged memory. Globals and constant aggregates are allocated before their initializers and relocations are installed. Large initialized globals are embedded in data fields of at most 1 MiB and copied into one contiguous allocation before relocations are applied. Function pointers use `ldftn`, and calls to translated targets use `calli`.
@@ -55,7 +57,7 @@ In system mode, translated callbacks passed to native code get unmanaged-callabl
 `LlvmNet.Runtime` is a .NET assembly copied next to every output. Its public static methods marked with `CExportAttribute` resolve C symbols; the compiler checks them against the LLVM signatures. It contains:
 
 - The host layer (`Host/`, portable mode): the Linux system calls musl issues, implemented over .NET for files, the file system, memory mappings, processes and signals, threads (musl's `clone` on managed threads, futexes) and time. [dev/host-abi.md](host-abi.md) is its contract.
-- Compiler helpers: atomics, `Float80`, wide integers, math intrinsics, varargs, stack allocation, nonlocal jumps, thread-local storage, vector lanes (`Vectors`), SIMD128 and `--check-indirect-calls`.
+- Compiler helpers: atomics, `Float80`, wide integers, math intrinsics, varargs, stack allocation, nonlocal jumps, thread-local storage, vector lanes (`Vectors`), SIMD128, x86 intrinsics (`X86`) and `--check-indirect-calls`.
 - The C++ exception bridge (`Cxx.cs`, [dev/cxx-eh-bridge.md](cxx-eh-bridge.md)).
 - System-mode adapters: native callbacks, `pthread_create` and key destructors, and `atexit`/`exit` ordering.
 

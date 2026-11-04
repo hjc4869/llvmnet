@@ -1,5 +1,5 @@
-/* A library-style SIMD switch: the SSE2 path when __SSE2__ is defined, the portable C path otherwise. Native x86-64
-   and llvmnet's system mode define __SSE2__; the SSE2 path uses psadbw, an x86 target intrinsic llvmnet rejects. */
+/* A library-style SIMD switch: the SSE2 path when __SSE2__ is defined, the portable C path otherwise. Native x86-64,
+   llvmnet's system mode and --isa=x86-64-v2 define __SSE2__; the SSE2 path uses psadbw, an x86 target intrinsic. */
 #include <stdio.h>
 #ifdef __SSE2__
 #include <emmintrin.h>

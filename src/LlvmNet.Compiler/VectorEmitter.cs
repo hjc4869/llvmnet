@@ -109,7 +109,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             case 45:
                 nint target = Llvm.LLVMGetCalledValue(instruction);
                 string name = Llvm.LLVMIsAFunction(target) != 0 ? Llvm.Name(target) : "";
-                if (name.StartsWith("llvm.", StringComparison.Ordinal) && !Intrinsics(name, result))
+                if (name.StartsWith("llvm.", StringComparison.Ordinal) && !Intrinsics(name, result) && TargetIntrinsics.Helper(name) is null)
                     return name;
                 return null;
         }
@@ -445,6 +445,30 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         Type source = from.GetGenericArguments()[0], target = to.GetGenericArguments()[0];
         il.Emit(OpCodes.Call, Methods.GetOrAdd((owner, "As", source, target.FullName!), _ =>
             owner.GetMethods().Single(method => method.Name == "As" && method.GetGenericArguments().Length == 2).MakeGenericMethod(source, target)));
+    }
+
+    /// <summary>
+    /// Converts the vector on the stack to or from a target intrinsic helper's vector type: reinterpreted as the helper's
+    /// lanes, and with --vector-width=256, where a 128-bit value is the low half of a Vector256, narrowed to the helper's
+    /// Vector128 or widened from it.
+    /// </summary>
+    internal void Convert(Type from, Type to)
+    {
+        if (CilCompiler.Reinterpretable(from, to))
+        {
+            Reinterpret(from, to);
+            return;
+        }
+        Type source = from.GetGenericArguments()[0], target = to.GetGenericArguments()[0];
+        if (from.GetGenericTypeDefinition() == typeof(Vector256<>))
+        {
+            il.Emit(OpCodes.Call, Lookup(typeof(Vector256), "GetLower", source, [from]));
+            Reinterpret(typeof(Vector128<>).MakeGenericType(source), to);
+            return;
+        }
+        Type half = typeof(Vector128<>).MakeGenericType(target);
+        Reinterpret(from, half);
+        il.Emit(OpCodes.Call, Lookup(typeof(Vector128), "ToVector256", target, [half]));
     }
 
     /// <summary>Turns the typed vector on the stack into the bytes a function returns it as (<see cref="TypeSystem.Return"/>).</summary>
