@@ -38,9 +38,11 @@ done
 	"$root/bin/llvmnet" --runtime=system --nativeaot -O1 "$root/tests/c/cpu-query.c" -o "$output/cpu-aot"
 	"$output/cpu-aot" > "$output/cpu-aot.txt"
 	diff -u "$output/cpu-native.txt" "$output/cpu-aot.txt"
-	if "$root/bin/llvmnet" --runtime=portable -O1 "$root/tests/c/cpu-query.c" -o "$output/cpu-portable.dll" > "$output/cpu-portable.log" 2>&1; then
-		printf 'FAIL: portable ABI accepted host CPU-query assembly\n' >&2
-		exit 1
-	fi
-	grep -q 'Inline assembly with instructions or outputs is not supported' "$output/cpu-portable.log"
-	printf 'PASS: system traps and exact CPU queries in JIT/NativeAOT; other assembly and portable CPU queries rejected\n'
+	# Portable code's CPU queries answer from the runtime (SV-12): the host's CPUID on x64, nothing where .NET runs no
+	# x86 instructions (here with hardware intrinsics off).
+	"$root/bin/llvmnet" --runtime=portable -O1 "$root/tests/c/cpu-query.c" -o "$output/cpu-portable.dll"
+	dotnet "$output/cpu-portable.dll" > "$output/cpu-portable.txt"
+	diff -u "$output/cpu-native.txt" "$output/cpu-portable.txt"
+	DOTNET_EnableHWIntrinsic=0 dotnet "$output/cpu-portable.dll" > "$output/cpu-portable-none.txt"
+	printf 'vendor=00000000 00000000 00000000 maximum=0\n' | diff -u - "$output/cpu-portable-none.txt"
+	printf 'PASS: system traps and exact CPU queries in JIT/NativeAOT, portable CPU queries from the runtime; other assembly rejected\n'

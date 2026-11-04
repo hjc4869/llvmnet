@@ -72,6 +72,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 - `scripts/benchmark.py --vectorized` also builds and times the benchmark set with both compilers' vectorizers on (`--vector-flags` changes their flags), and the nightly job reports that column (SV-05).
 - The x86 intrinsics of SSE to SSE4.2 and PCLMULQDQ translate in both modes (ADR-16 Level 2, SV-08): Clang's `xmmintrin.h` to `nmmintrin.h`, `_mm_clmulepi64_si128` and the SSE2-based MMX functions run as the host's x86 instructions, as ARM64 instructions of the same meaning or as `Vector128` compositions with the instructions' results. `--isa=x86-64-v2` gives portable code the x86 macros up to SSE4.2 without changing the data ABI, and portable mode takes `-msse4.2`, `-mssse3`, `-mpclmul`, `-march=x86-64-v2` and the other SIMD feature flags up to that level as its aliases. Objects and images record the level (`llvmnet.isa`). See `docs/user/x86-intrinsics.md`.
 - `--aot-instruction-set x86-64-v2`, the default for a NativeAOT program with `x86-64-v2` objects (SV-08).
+- CPU detection works in both modes (SV-12): portable code's CPUID and XGETBV inline assembly (`<cpuid.h>`, ffmpeg's, LLVM's and Eigen's spellings) answers with the host's CPUID on x64 and nothing elsewhere, `__builtin_cpu_supports`, `__builtin_cpu_is` and `target_clones` link (compiler-rt's CPU model is in both sysroots), system mode resolves GNU ifuncs at start, portable programs get the host's `AT_HWCAP`, and `<llvmnet/cpu.h>` reports the instruction sets the host executes.
 
 ### Changed
 

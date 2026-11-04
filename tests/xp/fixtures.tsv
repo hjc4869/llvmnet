@@ -33,6 +33,7 @@ ctype	-	c/ctype.c	-O1	-	-
 time	-	c/time.c	-O1	-	-
 vector-loops	aot	c/vector-loops.c	-O3 -fvectorize -fslp-vectorize	-	-
 x86-sse-conformance	aot	c/x86-sse-conformance.c	-O0 --isa=x86-64-v2	portable	-
+cpu-detection	aot	c/cpu-detection.c	-O2 --isa=x86-64-v2	consistency	-
 cpp-core	aot	cpp/core.cpp	-O1 -std=c++17	-	-
 cpp-rtti	-	cpp/rtti.cpp	-O1 -std=c++17	-	-
 cpp-catch-clauses	aot	cpp/catch-clauses.cpp	-O1 -std=c++17	-	-

@@ -1302,11 +1302,30 @@ internal sealed class FunctionEmitter : ValueEmitter
         {
             nint text = Llvm.LLVMGetInlineAsmAsmString(target, out nuint length);
             string assembly = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(text, checked((int)length))!;
-            if (Compiler.Host is not null && NativeCpuQuery(instruction, target, assembly))
+            if (CpuQuery(instruction, target, assembly) is int registers and not 0)
             {
-                for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
-                    Load(Llvm.LLVMGetOperand(instruction, index));
-                Il.Emit(OpCodes.Call, Compiler.Host.Resolve(0, instruction));
+                if (Compiler.Host is not null)
+                {
+                    for (uint index = 0; index < Llvm.LLVMGetNumArgOperands(instruction); index++)
+                        Load(Llvm.LLVMGetOperand(instruction, index));
+                    Il.Emit(OpCodes.Call, Compiler.Host.Resolve(0, instruction));
+                    return;
+                }
+                // Portable code asks the runtime, which answers for the host from .NET's view (SV-12): the registers are
+                // written into the result's explicit-layout structure, EAX first.
+                LocalBuilder result = Il.DeclareLocal(Types.Map(Llvm.LLVMTypeOf(instruction)));
+                Il.Emit(OpCodes.Ldloca, result);
+                Il.Emit(OpCodes.Initobj, result.LocalType);
+                Il.Emit(OpCodes.Ldloca, result);
+                Il.Emit(OpCodes.Conv_U);
+                Load(Llvm.LLVMGetOperand(instruction, 0));
+                if (registers == 4)
+                {
+                    if (Llvm.LLVMGetNumArgOperands(instruction) == 2) Load(Llvm.LLVMGetOperand(instruction, 1));
+                    else Il.Emit(OpCodes.Ldc_I4_0);
+                }
+                Il.Emit(OpCodes.Call, typeof(CpuFeatures).GetMethod(registers == 4 ? nameof(CpuFeatures.CpuId) : nameof(CpuFeatures.XGetBv))!);
+                Il.Emit(OpCodes.Ldloc, result);
                 return;
             }
             if (Compiler.Host is not null && length == 4 && TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) == 0 && Llvm.LLVMGetNumArgOperands(instruction) == 0 &&
@@ -1740,49 +1759,47 @@ internal sealed class FunctionEmitter : ValueEmitter
         return true;
     }
 
-    private static bool NativeCpuQuery(nint instruction, nint target, string assembly)
+    /// <summary>
+    /// The registers a CPUID (4) or XGETBV (2) inline-assembly form returns, or 0 for other assembly. CPUID is "cpuid"
+    /// with its four outputs, or "cpuid" between a mov or xchg that keeps RBX in another register (LLVM's and Eigen's host
+    /// detection, ffmpeg's, Clang's &lt;cpuid.h&gt;); its inputs are the leaf, in EAX or tied to it, and optionally the
+    /// subleaf, in ECX or tied to it. XGETBV is "xgetbv" or its encoding, with the register's index in ECX. The text is
+    /// compared without white space or operand-size suffixes, with LLVM's spelling of Clang's {att|intel} alternatives,
+    /// $(att$|intel$), taken as its AT&amp;T part. System mode runs them in native thunks, portable mode asks
+    /// <see cref="CpuFeatures"/>.
+    /// </summary>
+    internal static int CpuQuery(nint instruction, nint target, string assembly)
     {
         nint text = Llvm.LLVMGetInlineAsmConstraintString(target, out nuint length);
-        string constraints = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(text, checked((int)length))!;
+        string[] constraints = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(text, checked((int)length))!.Split(',')
+            .Where(constraint => !constraint.StartsWith('~')).ToArray();
+        string[] outputs = constraints.Where(constraint => constraint.StartsWith('=')).ToArray();
+        string[] inputs = constraints.Where(constraint => !constraint.StartsWith('=')).ToArray();
+        string attSyntax = System.Text.RegularExpressions.Regex.Replace(assembly, @"\$\(([^$|]*)(\$\|[^$]*)?\$\)", "$1");
+        string[] instructions = attSyntax.Split('\n', ';').Select(line => System.Text.RegularExpressions.Regex.Replace(line, @"\s+", "").ToLowerInvariant())
+            .Where(line => line.Length != 0).ToArray();
         int registers = 0;
-        int arguments = 0;
-        if (assembly == "movq\t%rbx, %rsi\n\tcpuid\n\txchgq\t%rbx, %rsi\n\t")
-        {
+        if (instructions is ["cpuid"] && outputs is ["={ax}", "={bx}", "={cx}", "={dx}"])
             registers = 4;
-            arguments = constraints switch
-            {
-                "={ax},={si},={cx},={dx},{ax},~{dirflag},~{fpsr},~{flags}" => 1,
-                "={ax},={si},={cx},={dx},{ax},{cx},~{dirflag},~{fpsr},~{flags}" => 2,
-                _ => 0
-            };
-        }
-        else if (assembly == "xchg$(q$)\t$(%$)rbx, ${1:q}; cpuid; xchg$(q$)\t$(%$)rbx, ${1:q}" &&
-            constraints == "={ax},=&r,={cx},={dx},0,2,~{dirflag},~{fpsr},~{flags}")
-        {
+        else if (instructions is [string save, "cpuid", string restore] && outputs is ["={ax}", string kept, "={cx}", "={dx}"] &&
+            System.Text.RegularExpressions.Regex.Match(save, @"^(movq?|xchgq?)%rbx,(%r[sd]i|\$\{1:q\})$") is { Success: true } match &&
+            System.Text.RegularExpressions.Regex.IsMatch(restore, @"^xchgq?%rbx," + System.Text.RegularExpressions.Regex.Escape(match.Groups[2].Value) + "$") &&
+            (match.Groups[2].Value.StartsWith('%') ? kept == "={" + match.Groups[2].Value[2..] + "}" : kept is "=r" or "=&r"))
             registers = 4;
-            arguments = 2;
-        }
-        else if (assembly == "  xchg$(q$|$)  $(%$|$)rbx,${1:q}\n  cpuid\n  xchg$(q$|$)  $(%$|$)rbx,${1:q}")
-        {
-            // Clang's <cpuid.h> on x86-64: __cpuid, and __cpuid_count with the subleaf in ECX.
-            registers = 4;
-            arguments = constraints switch
-            {
-                "={ax},=r,={cx},={dx},0,~{dirflag},~{fpsr},~{flags}" => 1,
-                "={ax},=r,={cx},={dx},0,2,~{dirflag},~{fpsr},~{flags}" => 2,
-                _ => 0
-            };
-        }
-        else if (assembly == ".byte 0x0f, 0x01, 0xd0" && constraints == "={ax},={dx},{cx},~{dirflag},~{fpsr},~{flags}")
-        {
+        else if (instructions is [".byte0x0f,0x01,0xd0"] or ["xgetbv"] && outputs is ["={ax}", "={dx}"] && inputs is ["{cx}"])
             registers = 2;
-            arguments = 1;
-        }
+        int arguments = registers == 2 ? 1 : inputs switch
+        {
+            ["0" or "{ax}"] => 1,
+            ["0" or "{ax}", "2" or "{cx}"] => 2,
+            _ => 0
+        };
         nint result = Llvm.LLVMTypeOf(instruction);
-        return arguments != 0 && Llvm.LLVMGetNumArgOperands(instruction) == arguments && TypeSystem.Kind(result) == 10 &&
+        return registers != 0 && arguments != 0 && Llvm.LLVMGetNumArgOperands(instruction) == arguments && TypeSystem.Kind(result) == 10 &&
             Llvm.LLVMCountStructElementTypes(result) == registers &&
             Enumerable.Range(0, registers).All(index => TypeSystem.Width(Llvm.LLVMStructGetTypeAtIndex(result, (uint)index)) == 32) &&
-            Enumerable.Range(0, arguments).All(index => TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index))) == 32);
+            Enumerable.Range(0, arguments).All(index => TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index))) == 32)
+            ? registers : 0;
     }
 
     private void Intrinsic(nint instruction, string name)

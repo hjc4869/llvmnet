@@ -17,6 +17,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Transforms/Utils/ModuleUtils.h>
 #include <algorithm>
 #include <memory>
 #include <string>
@@ -299,6 +300,18 @@ extern "C" int llvmnet_link(const char *const *paths, const int *wholeArchive, u
             progress = true;
         }
     } while (progress);
+    // GNU indirect functions (system mode's target_clones and ifunc attributes) become a table that a priority-10
+    // constructor fills by calling the resolvers, before the program's constructors, as the dynamic loader would resolve
+    // them first (LLVM's LowerIFunc). The table and the constructor it creates are named for the translator.
+    if (!linked->ifunc_empty()) {
+        std::vector<llvm::GlobalObject *> unnamed;
+        for (auto &object : linked->global_objects())
+            if (!object.hasName()) unnamed.push_back(&object);
+        llvm::lowerGlobalIFuncUsersAsGlobalCtor(*linked, {});
+        for (auto &object : linked->global_objects())
+            if (!object.hasName() && std::find(unnamed.begin(), unnamed.end(), &object) == unnamed.end())
+                object.setName(llvm::isa<llvm::Function>(object) ? "__llvmnet_resolve_ifuncs" : "__llvmnet_ifunc_table");
+    }
     std::string verification;
     llvm::raw_string_ostream verifier(verification);
     if (llvm::verifyModule(*linked, &verifier))

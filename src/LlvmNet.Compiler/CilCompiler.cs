@@ -283,8 +283,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         if (options.Simd128)
             foreach (string name in runtimeExports.Keys.Where(name => name.StartsWith("__llvmnet_simd128_", StringComparison.Ordinal)))
                 managedImports.Add(name);
-        // <llvmnet/ext.h> answers from the runtime in both modes, not from a native library in system mode.
-        managedImports.UnionWith(["llvmnet_ext_available", "llvmnet_ext_library"]);
+        // <llvmnet/ext.h> and <llvmnet/cpu.h> answer from the runtime in both modes, not from a native library in system mode.
+        managedImports.UnionWith(["llvmnet_ext_available", "llvmnet_ext_library", "llvmnet_cpu_features", "llvmnet_native_kernels"]);
         ConstructorInfo metadataAttribute = typeof(AssemblyMetadataAttribute).GetConstructor([typeof(string), typeof(string)])!;
         assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.abi", options.AbiTag]));
         assembly.SetCustomAttribute(new CustomAttributeBuilder(metadataAttribute, ["llvmnet.version", BuildInfo.Version]));
@@ -701,7 +701,12 @@ internal sealed class CilCompiler(CompilerOptions options)
                 lifecycle.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.AtFini))!);
         }
         foreach (nint function in LifecycleFunctions("llvm.global_ctors"))
-            lifecycle.Emit(OpCodes.Call, ResolveFunction(function));
+        {
+            // A constructor's result is ignored, as the ELF loader ignores it (compiler-rt's __cpu_indicator_init returns int).
+            MethodInfo constructor = ResolveFunction(function);
+            lifecycle.Emit(OpCodes.Call, constructor);
+            if (constructor.ReturnType != typeof(void)) lifecycle.Emit(OpCodes.Pop);
+        }
         lifecycle.Emit(OpCodes.Ret);
 
         IEnumerable<nint> LifecycleFunctions(string name)
@@ -717,7 +722,7 @@ internal sealed class CilCompiler(CompilerOptions options)
                 nint function = Llvm.LLVMGetAggregateElement(entry, 1);
                 if (Llvm.LLVMIsNull(function) != 0)
                     continue;
-                if (Llvm.LLVMCountParams(function) != 0 || Types.Map(Llvm.LLVMGetReturnType(Llvm.LLVMGlobalGetValueType(function))) != typeof(void))
+                if (Llvm.LLVMCountParams(function) != 0 || name == "llvm.global_dtors" && Types.Map(Llvm.LLVMGetReturnType(Llvm.LLVMGlobalGetValueType(function))) != typeof(void))
                     throw new NotSupportedException($"Unsupported global constructor/destructor signature: {Llvm.Name(function)}");
                 functions.Add((Llvm.LLVMConstIntGetSExtValue(Llvm.LLVMGetAggregateElement(entry, 0)), function));
             }

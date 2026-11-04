@@ -474,10 +474,12 @@ internal static class Driver
                         if ((invocation.CxxLibraries || archive is not ("libc++.a" or "libc++abi.a")) && File.Exists(PortableAbi.Library(archive)))
                             bitcode.Add((PortableAbi.Library(archive), false));
             }
-            // System executables take the Fortran runtime from flang-rt built against glibc; the C library is native.
-            string systemFortran = Path.Combine(Toolchain.Root, "sysroot", "system-linux-x64-v1", "lib", "libflang_rt.runtime.a");
-            if (options.Runtime == "system" && !options.Library && !invocation.Relocatable && invocation.DefaultLibraries && File.Exists(systemFortran))
-                bitcode.Add((systemFortran, false));
+            // System executables take the Fortran runtime from flang-rt built against glibc, and compiler-rt's x86 CPU model
+            // (__builtin_cpu_supports, target_clones), which the native libraries do not export; the C library is native.
+            if (options.Runtime == "system" && !options.Library && !invocation.Relocatable && invocation.DefaultLibraries)
+                foreach (string archive in new[] { "libflang_rt.runtime.a", "libclang_rt.builtins.a" })
+                    if (Path.Combine(Toolchain.Root, "sysroot", "system-linux-x64-v1", "lib", archive) is string path && File.Exists(path))
+                        bitcode.Add((path, false));
             string linked = Path.Combine(temporary, "linked.bc");
             // An executable's root is its entry point, which an archive member may define (gtest_main, Catch2's main),
             // as crt1.o's reference to main extracts it natively. A library or a relocatable object has no entry point.

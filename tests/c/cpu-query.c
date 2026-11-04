@@ -17,6 +17,19 @@ static void query_preserving_base(unsigned leaf, unsigned subleaf, unsigned regi
         : "0"(leaf), "2"(subleaf));
 }
 
+/* ffmpeg's cpuid macro (libavutil/x86/cpu.c with inline assembly), and the plain form that names EBX as an output. */
+static void query_ffmpeg(unsigned leaf, unsigned registers[4])
+{
+    __asm__ volatile("mov %%rbx, %%rsi \n\t cpuid \n\t xchg %%rbx, %%rsi"
+        : "=a"(registers[0]), "=S"(registers[1]), "=c"(registers[2]), "=d"(registers[3])
+        : "0"(leaf), "2"(0));
+}
+
+static void query_plain(unsigned leaf, unsigned registers[4])
+{
+    __asm__ volatile("cpuid" : "=a"(registers[0]), "=b"(registers[1]), "=c"(registers[2]), "=d"(registers[3]) : "a"(leaf), "c"(0));
+}
+
 int main(void)
 {
     unsigned registers[4];
@@ -30,12 +43,25 @@ int main(void)
     for (unsigned index = 0; index < 4; ++index)
         if (preserved[index] != registers[index])
             return 1;
+    unsigned other[4];
+    query_ffmpeg(0, other);
+    for (unsigned index = 0; index < 4; ++index)
+        if (other[index] != registers[index])
+            return 5;
+    query_plain(0, other);
+    for (unsigned index = 0; index < 4; ++index)
+        if (other[index] != registers[index])
+            return 6;
     query(1, 0, registers);
     if ((registers[2] & (1u << 27)) != 0) {
         unsigned lower;
         unsigned upper;
         __asm__(".byte 0x0f, 0x01, 0xd0" : "=a"(lower), "=d"(upper) : "c"(0));
         printf("xcr0=%08x%08x\n", upper, lower);
+        unsigned mnemonic_lower, mnemonic_upper;
+        __asm__("xgetbv" : "=a"(mnemonic_lower), "=d"(mnemonic_upper) : "c"(0));
+        if (mnemonic_lower != lower || mnemonic_upper != upper)
+            return 7;
     }
 #ifdef __x86_64__
     /* Clang's <cpuid.h> macros, which libraries' feature detection uses. */

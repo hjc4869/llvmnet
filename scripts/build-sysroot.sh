@@ -2,7 +2,7 @@
 # Build the portable sysroot sysroot/dotnet64-v2: musl 1.2.5 with ports/musl, the compiler-rt complex arithmetic
 # builtins, libc++/libc++abi, the OpenMP runtime (libomp, with ports/openmp) and flang-rt 22.1.8 compiled to LLVM
 # bitcode by llvmnet, with their headers; and the system-mode sysroot sysroot/system-linux-x64-v1, which holds
-# flang-rt built against the host's glibc.
+# flang-rt built against the host's glibc and compiler-rt's x86 CPU model.
 #   scripts/build-sysroot.sh [--force]
 # The sysroots are rebuilt only when an input changes: the pinned musl and LLVM sources, ports/, these build scripts,
 # the compiler sources that define the portable ABI and compile flags, or the Clang version; --force rebuilds them
@@ -38,7 +38,7 @@ mkdir -p "$build"
 start=$(date +%s)
 steps=("libc:build-portable-libc.sh $build" "builtins:build-portable-builtins.sh $build" "cxx:build-portable-cxx.sh $build"
     "openmp:build-portable-openmp.sh $build" "flang-rt:build-flang-rt.sh portable $build"
-    "flang-rt-system:build-flang-rt.sh system $build/system")
+    "flang-rt-system:build-flang-rt.sh system $build/system" "builtins-system:build-portable-builtins.sh --system $build/system")
 for step in "${steps[@]}"; do
     name="${step%%:*}"
     read -r -a command <<<"${step#*:}"
@@ -79,7 +79,7 @@ rm -rf "${sysroot:?}.old"
 system_stage="$system_sysroot.new"
 rm -rf "${system_stage:?}"
 mkdir -p "$system_stage/lib" "$system_stage/share/licenses"
-cp "$build/system/lib/libflang_rt.runtime.a" "$system_stage/lib/"
+cp "$build/system/lib/libflang_rt.runtime.a" "$build/system/lib/libclang_rt.builtins.a" "$system_stage/lib/"
 cp "$sysroot/share/licenses/flang-rt.LICENSE.TXT" "$system_stage/share/licenses/"
 printf '%s\n' "$inputs" >"$system_stage/.llvmnet-inputs"
 rm -rf "${system_sysroot:?}.old"

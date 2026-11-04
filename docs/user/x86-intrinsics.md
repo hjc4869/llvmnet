@@ -36,7 +36,15 @@ AVX and later, AES, SHA, `monitor`/`mwait` and the MXCSR write. Compiling a unit
 
 ## CPU detection
 
-Libraries that choose their SIMD paths at run time ask the processor with the CPUID instruction, through inline assembly or `<cpuid.h>`. System mode answers those queries through native thunks, including `<cpuid.h>`'s `__cpuid` and `__cpuid_count`. Portable mode rejects the inline assembly, and `__builtin_cpu_supports` does not link in either mode; both come with SV-12 ([plan](../plan/12-simd.md)). Until then, build such a library with its compile-time selection in portable mode, for example `-DWUFFS_CONFIG__AVOID_CPU_ARCH` for wuffs; a library without one, such as Chromium's zlib, needs its feature check replaced. A library that tests only the macros, such as abseil's swiss tables or astc-encoder's core, needs nothing.
+Libraries that choose their SIMD paths at run time ask the processor, and their detection code works unchanged in both modes:
+
+- **CPUID and XGETBV inline assembly**, in the spellings of `<cpuid.h>` (`__get_cpuid`, `__cpuid_count`), ffmpeg, LLVM and Eigen and the plain `cpuid` that names EBX. System mode runs them in native thunks. In portable mode the runtime answers: on x64 with the host's own CPUID, and on ARM64, or with .NET's hardware intrinsics off, with nothing (a maximum leaf of 0), so a library selects its x86 paths only where they run as x86 instructions. XCR0 is the processor's supported state without the AVX and AVX-512 components where .NET does not use them: under `DOTNET_EnableAVX=0` and in a NativeAOT executable whose instruction set has no AVX (the baseline and `x86-64-v2`), a library sees an operating system without AVX state and takes its SSE paths.
+- **`__builtin_cpu_supports`, `__builtin_cpu_is` and `__builtin_cpu_init`**, from compiler-rt's CPU model, which both sysroots carry and which reads the same CPUID.
+- **`target_clones`** functions, which call the clone the CPU model selects. In system mode they are GNU indirect functions; llvmnet resolves every ifunc in a constructor that runs before the program's own, as the dynamic loader would. The portable target is not Linux, where Clang ignores the `ifunc` attribute itself (with a warning), so a hand-written ifunc stays unresolved there.
+- **`getauxval(AT_HWCAP)`** returns what Linux gives native processes: CPUID leaf 1's EDX on x64 and the `HWCAP_*` bits of the instruction sets .NET reports on ARM64.
+- **`<llvmnet/cpu.h>`**: `llvmnet_cpu_features()` returns the instruction sets the host executes as .NET reports them (`LLVMNET_CPU_SSE4_2`, `LLVMNET_CPU_AVX2`, `LLVMNET_CPU_NEON` and the others), for a program that wants to ask without CPUID.
+
+ffmpeg's `ff_get_cpu_flags_x86`, Chromium zlib's `cpu_features.c`, wuffs and astc-encoder's command-line check report the host's features in both modes ([evidence](../evidence/2026-11-04-cpu-detection.md)). Detection written in assembly files, such as dav1d's and ffmpeg's `cpuid.asm`, needs a native kernel package (SV-13).
 
 ## Speed
 
