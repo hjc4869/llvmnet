@@ -140,6 +140,238 @@ public static unsafe class Vectors
         return result;
     }
 
+    // Bit counts and reversals per lane, composed from shifts, masks and adds that every host executes as vector
+    // instructions (no ISA has a vector popcount below AVX-512 BITALG and NEON's byte cnt). A count of a zero lane is
+    // the lane width, which ctlz and cttz leave as the defined result when their zero-is-poison flag is clear.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<byte> PopCount(Vector128<byte> value)
+    {
+        value -= (value >>> 1) & Vector128.Create((byte)0x55);
+        value = (value & Vector128.Create((byte)0x33)) + ((value >>> 2) & Vector128.Create((byte)0x33));
+        return (value + (value >>> 4)) & Vector128.Create((byte)0x0f);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ushort> PopCount(Vector128<ushort> value)
+    {
+        Vector128<ushort> bytes = PopCount(value.AsByte()).AsUInt16();
+        return (bytes & Vector128.Create((ushort)0xff)) + (bytes >>> 8);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> PopCount(Vector128<uint> value)
+    {
+        Vector128<uint> halves = PopCount(value.AsUInt16()).AsUInt32();
+        return (halves & Vector128.Create(0xffffu)) + (halves >>> 16);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ulong> PopCount(Vector128<ulong> value)
+    {
+        Vector128<ulong> halves = PopCount(value.AsUInt32()).AsUInt64();
+        return (halves & Vector128.Create(0xfffffffful)) + (halves >>> 32);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<byte> LeadingZeroCount(Vector128<byte> value)
+    {
+        value |= value >>> 1;
+        value |= value >>> 2;
+        value |= value >>> 4;
+        return Vector128.Create((byte)8) - PopCount(value);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ushort> LeadingZeroCount(Vector128<ushort> value)
+    {
+        value |= value >>> 1;
+        value |= value >>> 2;
+        value |= value >>> 4;
+        value |= value >>> 8;
+        return Vector128.Create((ushort)16) - PopCount(value);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> LeadingZeroCount(Vector128<uint> value)
+    {
+        value |= value >>> 1;
+        value |= value >>> 2;
+        value |= value >>> 4;
+        value |= value >>> 8;
+        value |= value >>> 16;
+        return Vector128.Create(32u) - PopCount(value);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ulong> LeadingZeroCount(Vector128<ulong> value)
+    {
+        value |= value >>> 1;
+        value |= value >>> 2;
+        value |= value >>> 4;
+        value |= value >>> 8;
+        value |= value >>> 16;
+        value |= value >>> 32;
+        return Vector128.Create(64ul) - PopCount(value);
+    }
+
+    // The trailing zeros are the ones of ~x & (x - 1).
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<byte> TrailingZeroCount(Vector128<byte> value) => PopCount(Vector128.AndNot(value - Vector128<byte>.One, value));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ushort> TrailingZeroCount(Vector128<ushort> value) => PopCount(Vector128.AndNot(value - Vector128<ushort>.One, value));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> TrailingZeroCount(Vector128<uint> value) => PopCount(Vector128.AndNot(value - Vector128<uint>.One, value));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ulong> TrailingZeroCount(Vector128<ulong> value) => PopCount(Vector128.AndNot(value - Vector128<ulong>.One, value));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ushort> ByteSwap(Vector128<ushort> value) =>
+        Vector128.Shuffle(value.AsByte(), Vector128.Create((byte)1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14)).AsUInt16();
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> ByteSwap(Vector128<uint> value) =>
+        Vector128.Shuffle(value.AsByte(), Vector128.Create((byte)3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12)).AsUInt32();
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ulong> ByteSwap(Vector128<ulong> value) =>
+        Vector128.Shuffle(value.AsByte(), Vector128.Create((byte)7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8)).AsUInt64();
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<byte> ReverseBits(Vector128<byte> value)
+    {
+        value = ((value >>> 1) & Vector128.Create((byte)0x55)) | ((value & Vector128.Create((byte)0x55)) << 1);
+        value = ((value >>> 2) & Vector128.Create((byte)0x33)) | ((value & Vector128.Create((byte)0x33)) << 2);
+        return (value >>> 4) | (value << 4);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ushort> ReverseBits(Vector128<ushort> value) => ReverseBits(ByteSwap(value).AsByte()).AsUInt16();
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> ReverseBits(Vector128<uint> value) => ReverseBits(ByteSwap(value).AsByte()).AsUInt32();
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ulong> ReverseBits(Vector128<ulong> value) => ReverseBits(ByteSwap(value).AsByte()).AsUInt64();
+
+    /// <summary>llvm.fshl and llvm.fshr lane by lane with a count per lane, taken modulo the lane width: the high bits of
+    /// high:low shifted left, or its low bits shifted right.</summary>
+    public static Vector128<T> FunnelShift<T>(Vector128<T> high, Vector128<T> low, Vector128<T> count, bool right) where T : unmanaged, IBinaryInteger<T>, IUnsignedNumber<T>
+    {
+        int width = Unsafe.SizeOf<T>() * 8;
+        Vector128<T> result = Vector128<T>.Zero;
+        for (int lane = 0; lane < Vector128<T>.Count; lane++)
+        {
+            int shift = int.CreateTruncating(count.GetElement(lane)) & (width - 1);
+            T upper = high.GetElement(lane), lower = low.GetElement(lane);
+            T value = shift == 0 ? right ? lower : upper
+                : right ? (lower >>> shift) | (upper << (width - shift)) : (upper << shift) | (lower >>> (width - shift));
+            result = result.WithElement(lane, value);
+        }
+        return result;
+    }
+
+    // The same operations on 256-bit fragments (--vector-width=256): what Vector256 has no single operation for, by
+    // halves or lane by lane.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<byte> LoadWide(nint address, int size) => size <= 16
+        ? Vector256.Create(size == 16 ? Unsafe.ReadUnaligned<Vector128<byte>>((void*)address) : Load(address, size), Vector128<byte>.Zero)
+        : Vector256.Create(Unsafe.ReadUnaligned<Vector128<byte>>((void*)address), Load(address + 16, size - 16));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void StoreWide(nint address, Vector256<byte> value, int size)
+    {
+        if (size <= 16)
+        {
+            if (size == 16) Unsafe.WriteUnaligned((void*)address, value.GetLower());
+            else Store(address, value.GetLower(), size);
+            return;
+        }
+        Unsafe.WriteUnaligned((void*)address, value.GetLower());
+        Store(address + 16, value.GetUpper(), size - 16);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<sbyte> Mask8Wide(ulong bits) => Vector256.Create(Mask8(bits), Mask8(bits >> 16));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<short> Mask16Wide(ulong bits) => Vector256.Create(Mask16(bits), Mask16(bits >> 8));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<int> Mask32Wide(ulong bits) => Vector256.Create(Mask32(bits), Mask32(bits >> 4));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<long> Mask64Wide(ulong bits) => Vector256.Create(Mask64(bits), Mask64(bits >> 2));
+
+    public static Vector256<T> Divide<T>(Vector256<T> left, Vector256<T> right, int lanes) where T : unmanaged, INumber<T> =>
+        Vector256.Create(Divide(left.GetLower(), right.GetLower(), Math.Min(lanes, Vector128<T>.Count)),
+            Divide(left.GetUpper(), right.GetUpper(), Math.Max(0, lanes - Vector128<T>.Count)));
+
+    public static Vector256<T> Remainder<T>(Vector256<T> left, Vector256<T> right, int lanes) where T : unmanaged, INumber<T> =>
+        Vector256.Create(Remainder(left.GetLower(), right.GetLower(), Math.Min(lanes, Vector128<T>.Count)),
+            Remainder(left.GetUpper(), right.GetUpper(), Math.Max(0, lanes - Vector128<T>.Count)));
+
+    public static Vector256<T> ShiftLeft<T>(Vector256<T> value, Vector256<T> count) where T : unmanaged, IBinaryInteger<T> =>
+        Vector256.Create(ShiftLeft(value.GetLower(), count.GetLower()), ShiftLeft(value.GetUpper(), count.GetUpper()));
+
+    public static Vector256<T> ShiftRightArithmetic<T>(Vector256<T> value, Vector256<T> count) where T : unmanaged, IBinaryInteger<T> =>
+        Vector256.Create(ShiftRightArithmetic(value.GetLower(), count.GetLower()), ShiftRightArithmetic(value.GetUpper(), count.GetUpper()));
+
+    public static Vector256<T> ShiftRightLogical<T>(Vector256<T> value, Vector256<T> count) where T : unmanaged, IBinaryInteger<T> =>
+        Vector256.Create(ShiftRightLogical(value.GetLower(), count.GetLower()), ShiftRightLogical(value.GetUpper(), count.GetUpper()));
+
+    public static Vector256<T> FunnelShift<T>(Vector256<T> high, Vector256<T> low, Vector256<T> count, bool right) where T : unmanaged, IBinaryInteger<T>, IUnsignedNumber<T> =>
+        Vector256.Create(FunnelShift(high.GetLower(), low.GetLower(), count.GetLower(), right), FunnelShift(high.GetUpper(), low.GetUpper(), count.GetUpper(), right));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<byte> PopCount(Vector256<byte> value) => Vector256.Create(PopCount(value.GetLower()), PopCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ushort> PopCount(Vector256<ushort> value) => Vector256.Create(PopCount(value.GetLower()), PopCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<uint> PopCount(Vector256<uint> value) => Vector256.Create(PopCount(value.GetLower()), PopCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ulong> PopCount(Vector256<ulong> value) => Vector256.Create(PopCount(value.GetLower()), PopCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<byte> LeadingZeroCount(Vector256<byte> value) => Vector256.Create(LeadingZeroCount(value.GetLower()), LeadingZeroCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ushort> LeadingZeroCount(Vector256<ushort> value) => Vector256.Create(LeadingZeroCount(value.GetLower()), LeadingZeroCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<uint> LeadingZeroCount(Vector256<uint> value) => Vector256.Create(LeadingZeroCount(value.GetLower()), LeadingZeroCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ulong> LeadingZeroCount(Vector256<ulong> value) => Vector256.Create(LeadingZeroCount(value.GetLower()), LeadingZeroCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<byte> TrailingZeroCount(Vector256<byte> value) => Vector256.Create(TrailingZeroCount(value.GetLower()), TrailingZeroCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ushort> TrailingZeroCount(Vector256<ushort> value) => Vector256.Create(TrailingZeroCount(value.GetLower()), TrailingZeroCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<uint> TrailingZeroCount(Vector256<uint> value) => Vector256.Create(TrailingZeroCount(value.GetLower()), TrailingZeroCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ulong> TrailingZeroCount(Vector256<ulong> value) => Vector256.Create(TrailingZeroCount(value.GetLower()), TrailingZeroCount(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ushort> ByteSwap(Vector256<ushort> value) => Vector256.Create(ByteSwap(value.GetLower()), ByteSwap(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<uint> ByteSwap(Vector256<uint> value) => Vector256.Create(ByteSwap(value.GetLower()), ByteSwap(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ulong> ByteSwap(Vector256<ulong> value) => Vector256.Create(ByteSwap(value.GetLower()), ByteSwap(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<byte> ReverseBits(Vector256<byte> value) => Vector256.Create(ReverseBits(value.GetLower()), ReverseBits(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ushort> ReverseBits(Vector256<ushort> value) => Vector256.Create(ReverseBits(value.GetLower()), ReverseBits(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<uint> ReverseBits(Vector256<uint> value) => Vector256.Create(ReverseBits(value.GetLower()), ReverseBits(value.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ulong> ReverseBits(Vector256<ulong> value) => Vector256.Create(ReverseBits(value.GetLower()), ReverseBits(value.GetUpper()));
+
+    public static Vector256<float> SignedToSingleWide(Vector256<long> lower, Vector256<long> upper) =>
+        Vector256.Create(SignedToSingle(lower.GetLower(), lower.GetUpper()), SignedToSingle(upper.GetLower(), upper.GetUpper()));
+
+    public static Vector256<float> UnsignedToSingleWide(Vector256<long> lower, Vector256<long> upper) =>
+        Vector256.Create(UnsignedToSingle(lower.GetLower(), lower.GetUpper()), UnsignedToSingle(upper.GetLower(), upper.GetUpper()));
+
     /// <summary>Four floats from the four signed 64-bit lanes of two vectors, each rounded once, as the scalar conversion.</summary>
     public static Vector128<float> SignedToSingle(Vector128<long> lower, Vector128<long> upper) =>
         Vector128.Create(lower.GetElement(0), lower.GetElement(1), upper.GetElement(0), upper.GetElement(1));

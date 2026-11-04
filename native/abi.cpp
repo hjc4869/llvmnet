@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <llvm-c/Core.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/IR/Constants.h>
@@ -11,7 +12,9 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
 
-extern "C" int llvmnet_stamp_abi(const char *path, const char *tag, int textual, char **message)
+// Records the ABI tag, which every object of a link must share, and the ISA level (--isa) unless it is the baseline:
+// objects of different levels link, and the image records the levels its objects were compiled for.
+extern "C" int llvmnet_stamp_abi(const char *path, const char *tag, const char *isa, int textual, char **message)
 {
     llvm::LLVMContext context;
     llvm::SMDiagnostic diagnostic;
@@ -21,6 +24,8 @@ extern "C" int llvmnet_stamp_abi(const char *path, const char *tag, int textual,
         return 1;
     }
     module->addModuleFlag(llvm::Module::Error, "llvmnet.abi", llvm::MDString::get(context, tag));
+    if (*isa)
+        module->addModuleFlag(llvm::Module::AppendUnique, "llvmnet.isa", llvm::MDTuple::get(context, {llvm::MDString::get(context, isa)}));
     std::error_code error;
     llvm::raw_fd_ostream destination(path, error, llvm::sys::fs::OF_None);
     if (error) {
@@ -35,6 +40,20 @@ extern "C" int llvmnet_stamp_abi(const char *path, const char *tag, int textual,
         return 1;
     }
     return 0;
+}
+
+// The ISA levels a linked module's objects recorded, sorted and comma-separated; empty when all are the baseline.
+extern "C" char *llvmnet_isa_levels(LLVMModuleRef moduleRef)
+{
+    std::vector<std::string> levels;
+    if (auto *tuple = llvm::dyn_cast_or_null<llvm::MDTuple>(llvm::unwrap(moduleRef)->getModuleFlag("llvmnet.isa")))
+        for (auto &operand : tuple->operands())
+            if (auto *level = llvm::dyn_cast<llvm::MDString>(operand)) levels.push_back(level->getString().str());
+    std::sort(levels.begin(), levels.end());
+    levels.erase(std::unique(levels.begin(), levels.end()), levels.end());
+    std::string joined;
+    for (auto &level : levels) joined += (joined.empty() ? "" : ",") + level;
+    return LLVMCreateMessage(joined.c_str());
 }
 
 extern "C" LLVMModuleRef llvmnet_create_native_shim(LLVMModuleRef source)

@@ -25,7 +25,7 @@ include_dir="$("$llvm_config" --includedir)"
 sources=("$root/native/constants.cpp" "$root/native/linker.cpp" "$root/native/abi.cpp" "$root/native/fp.cpp" "$root/native/vectors.cpp")
 read -r -a include_flags <<<"$("$llvm_config" --cxxflags)"
 read -r -a link_flags <<<"$("$llvm_config" --ldflags)"
-read -r -a libraries <<<"$("$llvm_config" --libs core bitreader bitwriter irreader linker object passes)"
+read -r -a libraries <<<"$("$llvm_config" --libs core bitreader bitwriter irreader linker object passes codegen)"
 mkdir -p "$output"
 library="$output/libllvmnet-llvm.so"
 stamp="$output/libllvmnet-llvm.stamp"

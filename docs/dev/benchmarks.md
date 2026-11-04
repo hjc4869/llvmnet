@@ -11,7 +11,9 @@
 - **suite**: free programs from `llvm-test-suite` (`scripts/fetch-sources.sh` pins it): SingleSource benchmarks, Olden, Ptrdist, MiBench, tramp3d-v4, Bullet, mafft and nbench.
 - **ffmpeg**: the decode harness of the ffmpeg integration build (`tests/ffmpeg/decode.c`) on two clips the harness generates with the system ffmpeg from its own test pattern (1080p HEVC 10-bit and H.264, 240 frames), with one and four decoder threads. Native is the system-mode bitcode compiled by `clang-22`, as `scripts/build-ffmpeg.sh` builds it.
 
-Both compilers get `-O2 -fno-vectorize -fno-slp-vectorize`: llvmnet keeps the vectorizers off by default ([ADR-11](../plan/decisions.md#adr-11-driver-defaults); the vectorized column is SV-05's), so turning them off on both sides makes the ratio measure the translation rather than the vectorizer. Native programs link against glibc.
+Both compilers get `-O2 -fno-vectorize -fno-slp-vectorize`: llvmnet keeps the vectorizers off by default ([ADR-11](../plan/decisions.md#adr-11-driver-defaults)), so turning them off on both sides makes the ratio measure the translation rather than the vectorizer. Native programs link against glibc.
+
+`--vectorized` adds three engines that build the same sources with `-O2 -fvectorize -fslp-vectorize` on both compilers (SV-05): `native-vec`, whose ratio is to the scalar native build, so it is native's own vectorization gain, and `jit-vec` and `aot-vec`, whose ratios are to `native-vec`. `--vector-flags` replaces those flags for both compilers, to compare vectorizer settings. The ffmpeg entries have only the scalar engines (their profile is built by `scripts/build-ffmpeg.sh`), and the vectorized engines have no baseline: they are reported, not judged.
 
 ## Method
 
@@ -27,6 +29,7 @@ scripts/benchmark.py                                # everything: build, validat
 scripts/benchmark.py --group micro --repeats 3      # one group
 scripts/benchmark.py --only 'olden-*,fannkuch'      # selected benchmarks
 scripts/benchmark.py --engines native,jit           # skip the NativeAOT builds
+scripts/benchmark.py --vectorized                   # also the vectorized engines (SV-05)
 scripts/benchmark.py --validate-only                # build and check outputs, measure nothing
 scripts/benchmark.py --update-baseline              # write this run's medians to tests/perf/baseline.tsv
 scripts/benchmark.py --compare artifacts/bench/<run>/results.tsv   # apply the thresholds to an earlier run

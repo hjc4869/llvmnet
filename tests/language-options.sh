@@ -3,7 +3,8 @@
 # requires: flang
 # TC-04: -g locates compiler errors, -fno-exceptions and -fno-rtti build C++ without landing pads or type_info,
 # -fvisibility=hidden controls what a managed library exports, the language-standard defaults follow the frontend per
-# driver alias, and -m flags are rejected in portable mode with a message.
+# driver alias, and -m flags are rejected in portable mode with a message, except the x86 SIMD feature flags up to SSE4.2,
+# which are aliases of --isa=x86-64-v2.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"
@@ -72,11 +73,13 @@ for runtime in system portable; do
     dotnet "$checks" inspect VisibleAll-$runtime.dll | grep -q '^exports: exported_function exported_user hidden_function uses_both$'
 done
 printf 'PASS: -fvisibility=hidden and visibility attributes select the exports of a managed library\n'
-# -m flags are rejected in portable mode with a message, and passed to the frontend in system mode.
-if "$llvmnet" --runtime=portable -msse4.2 -c "$root/tests/c/smoke.c" -o m.o >m.log 2>&1; then
-    printf 'FAIL: -msse4.2 was accepted in portable mode\n' >&2
+# -m flags are rejected in portable mode with a message, and passed to the frontend in system mode; the x86 SIMD feature
+# flags up to SSE4.2 are aliases of --isa=x86-64-v2 in portable mode (docs/user/x86-intrinsics.md).
+if "$llvmnet" --runtime=portable -mcx16 -c "$root/tests/c/smoke.c" -o m.o >m.log 2>&1; then
+    printf 'FAIL: -mcx16 was accepted in portable mode\n' >&2
     exit 1
 fi
-grep -q "option '-msse4.2' is not accepted in portable mode" m.log
-"$llvmnet" --runtime=system -msse4.2 -c "$root/tests/c/smoke.c" -o m.o
-printf 'PASS: -m flags are rejected in portable mode with a message and accepted in system mode\n'
+grep -q "option '-mcx16' is not accepted in portable mode" m.log
+"$llvmnet" --runtime=system -mcx16 -c "$root/tests/c/smoke.c" -o m.o
+"$llvmnet" --runtime=portable -msse4.2 -c "$root/tests/c/smoke.c" -o m.o
+printf 'PASS: -m flags are rejected in portable mode with a message, but for the x86 SIMD aliases, and accepted in system mode\n'

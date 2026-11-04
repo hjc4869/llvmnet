@@ -9,13 +9,40 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 - **Items** live in the workstream files below. Each looks like `- [ ] **<prefix>-<number>** (size, priority) ...` with a done condition. Tick the box and append the PR or commit when done. Add `— blocked: <reason>` or `— descoped: <ADR>` rather than deleting an item.
 - **Sizes**: S about a day, M about a week, L several weeks, XL needs its own breakdown before it starts. **Priorities**: P0 blocks 1.0, P1 should ship in 1.0, P2 is a post-1.0 candidate.
 - **Milestones** (M0 to M9) have exit criteria that name the items they need. A milestone is done when its exit criteria hold on CI, not when the items are ticked.
-- **Decisions** (ADR-01 to ADR-16 in [decisions.md](decisions.md)) are Proposed until the project owner marks them Accepted. Items that depend on a decision say so.
+- **Decisions** (ADR-01 to ADR-17 in [decisions.md](decisions.md)) are Proposed until the project owner marks them Accepted. Items that depend on a decision say so.
 - **Review cadence**: once a week, update the status board below, tick items, and add new items with the next free number in their workstream. Never renumber. If an issue tracker is used, one issue per item with the ID in the title and a label per workstream and milestone.
 - **Evidence**: a claim that something works belongs in `docs/evidence/` (dated, produced by CI) or in a test, not in this plan.
 
 ## Decisions (2026-10-31)
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
+
+## Progress (2026-11-04, SV-08)
+
+Measurements are in [evidence/2026-11-04-x86-intrinsics.md](../evidence/2026-11-04-x86-intrinsics.md); the user documentation is [x86-intrinsics.md](../user/x86-intrinsics.md).
+
+- **SV-08 (done).** The SSE to SSE4.2 intrinsics and PCLMULQDQ run in both modes as runtime helpers: the x86 instruction behind an `IsSupported` test, the ARM64 instruction of the same meaning, or a `Vector128` composition, so a portable image built for `x86-64-v2` runs on every host. A conformance program over all helpers and every immediate, and a sweep of the 535 intrinsics of Clang's headers, match the native instructions bit for bit on x64, and with NaN results canonicalized on ARM64 and the composed paths. `--isa=x86-64-v2`, and in portable mode `-msse4.2` and the other feature flags as its aliases, give portable code the x86 macros without changing the data ABI. The survey's SSE users run in both modes with native output: astc-encoder's SSE4.1 build is 2.8 times faster than its scalar build under the JIT and 3.4 times as NativeAOT, Chromium zlib's SIMD deflate 1.3 to 1.6 times, and abseil's swiss tables run their SSE group. SA-12's option (c) is done.
+- **Found on the way.** At NativeAOT's baseline instruction set the helpers' run-time tests work, but the generic vector code around them is compiled for SSE2, so programs with `x86-64-v2` objects now get ILC's `x86-64-v2` set (1.8 times faster on astc-encoder). System mode did not recognize `<cpuid.h>`'s CPUID; it does now. Portable builds of libraries that detect the CPU with CPUID need their compile-time switch until SV-12.
+- **Proposed for the owner.** Confirming the NativeAOT default, and keeping system mode's SSE macros, which closes SA-12 ([decisions.md](decisions.md#proposed-for-the-owner-2026-11-04-sv-08)).
+
+## Progress (2026-11-04, CIL shaped for RyuJIT)
+
+The owner asked whether CoreCLR's JIT is tuned for particular IL patterns, and whether llvmnet could emit them. The design is a new workstream, [13-jit-patterns.md](13-jit-patterns.md) (prefix JP, milestone M12, placement for the owner), with [ADR-17](decisions.md#adr-17-readytorun-for-jit-deployments). Measurements are in [evidence/2026-11-04-jit-patterns.md](../evidence/2026-11-04-jit-patterns.md), from RyuJIT's sources (dotnet/runtime `main`, after `release/11.0`) and scratch builds of the compiler. Nothing in `src/` changed.
+
+- **Tiering delay.** Tier1 promotion waits until 100 ms pass without a first call to any method, and translated programs keep making first calls. `CallCountingDelayMs` 0, a `runtimeconfig.json` property PF-06 did not try, makes 22 benchmarks 9% faster under the JIT (geometric mean): lame by 43%, tramp3d by 27%, bullet by 24%, ffmpeg's H.264 decode by 12%. Four short programs get slower, by 6 to 12% (JP-02).
+- **Limits.** RyuJIT compiles a method with MinOpts past 20,000 IL instructions, 60,000 IL bytes, 2,000 blocks, 2,000 locals or 8,000 local references. It inlines nothing into a method with 921 locals or more. In ffmpeg's decoder, 49 methods are over a limit, 48 of them on the instruction count, and 150 cannot inline. Each over-limit method is compiled twice, because its Tier1 attempt is discarded. BE-33's local sharing fixes the locals. With it, 26 methods are still over: on local references, which sharing does not reduce, the instruction count and IL size. `--diagnose-limits` reports 16 of them, as it does not model the first two (JP-05, BE-46).
+- **ReadyToRun.** crossgen2 never falls back to MinOpts, and the runtime keeps its code for over-limit methods. A precompiled image runs the H.264 decode 27% faster under the JIT (2.03 to 1.47 times native, NativeAOT's ratio). It also runs 22 benchmarks at 0.85 of the JIT's time, and tramp3d 3.5 times faster. But it is tied to one host: the linux-x64 image fails to load on macOS ARM64 and Windows x64. And it is slower where a hot loop never leaves precompiled code (dhrystone 22%). So it is proposed as an opt-in output for one runtime identifier (JP-06, ADR-17).
+- **CIL forms.** llvmnet's compare chain for an LLVM `switch` makes a 40-case interpreter 2.6 to 2.8 times slower than a CIL `switch`, under the JIT and NativeAOT (JP-03). Global address fields marked `initonly` become constants in optimized JIT code: 12% on PF-17's kernel, nothing under NativeAOT (JP-04). Both are neutral on the benchmark set (0.994) except almabench, 3% slower. `cpblk` for small constant copies helps NativeAOT only (JP-08).
+- **Found on the way.** RyuJIT never if-converts inside a loop, and integer `Math.Min`/`Max` are not intrinsics on x64 or ARM64; this bears on PF-15 and PF-18. JIT settings come only from the environment. The .NET 11 RC2 runtime runs the subset at 10.0.14's speed.
+- **Proposed for the owner.** ADR-17; M12's placement; the order of JP-02 to JP-05, which change only what the compiler emits ([decisions.md](decisions.md#proposed-for-the-owner-2026-11-04-jit-patterns)).
+
+## Progress (2026-11-04, SV-05, SV-07 and BE-33)
+
+Measurements are in [the vector lowering evidence](../evidence/2026-11-03-vector-lowering.md#sv-05-autovectorization) and [evidence/2026-11-04-be33-local-sharing.md](../evidence/2026-11-04-be33-local-sharing.md).
+
+- **SV-05 (measured, decision pending).** The benchmark harness builds the vectorized engines on request (`--vectorized`, also in the nightly). The first run made llvmnet 9 to 12% slower vectorized than scalar; the causes were RyuJIT leaving `Vector128` methods uninlined in methods of about 920 locals, functions past the 1,024 locals RyuJIT keeps in registers, and lane inserts through memory without SSE4.1, and all three are fixed. Vectorized llvmnet builds now gain about what native ones gain on the benchmark set and run the survey's SIMD kernels 2 to 5 times faster than scalar ones. Whether `-O2` and above vectorize as Clang's do is proposed to the owner ([decisions](decisions.md#proposed-for-the-owner-2026-11-04-sv-05)); the library reproducers are still to be measured.
+- **SV-07 (done).** The SIMD128 header is written over Clang's vector extensions, as Clang's own is, with helpers only for the `llvm.wasm.*` operations, and `--simd128` is now `--isa=wasm-simd128` on the typed lowering. Its tests pass unchanged, and ffmpeg's SIMD128 HEVC profile is faster in every engine, by a fifth as baseline NativeAOT, where it now beats the scalar profile instead of trailing it.
+- **BE-33 (locals done, IL density open).** Functions of more than 512 values share IL locals between values whose live ranges do not meet. ffmpeg's decoder has no method left past RyuJIT's locals threshold (38 before), its IL is a fifth smaller, H.264 decoding is 10 to 17% faster, and the scalar benchmark set is 1 to 2% faster overall. Smaller functions keep a local per value: RyuJIT allocates registers per local, and sharing cost small hot loops moves. A side finding, RyuJIT storing a spilled loop bound back on every iteration, is PF-20.
 
 ## Progress (2026-11-03, PF-19)
 
@@ -25,7 +52,7 @@ Measurements are in [evidence/2026-11-03-pf19-vectored-io.md](../evidence/2026-1
 
 ## Progress (2026-11-03, SIMD Level 1 core)
 
-The owner asked to start implementing [12-simd.md](12-simd.md). SV-01 is done (ADR-16 accepted) and SV-02 is done ([evidence](../evidence/2026-11-03-vector-lowering.md)): LLVM vector IR of 8- to 64-bit integer, pointer, `float`, `double` and `i1` lanes becomes `Vector128<T>` code (`VectorEmitter.cs`), wider vectors 128-bit fragments, masks all-ones lanes, at every optimization level including `-O0`, which never translated before; functions the lowering does not translate, or whose vectors mostly move lanes (the x86-64 ABI's two-float pairs, SROA's small arrays), are scalarized per function as before. Clang's vector extensions and the vectorizers' output match native in both modes under the JIT, without hardware intrinsics and as NativeAOT, on Linux x64, Windows x64 and macOS ARM64 and under the Linux ARM64 JIT; the scalar benchmark set is unchanged (49 of 54 images byte-identical, five within noise). Two findings changed the design text: LLVM's `scalarizer<min-bits=128>` does not split comparisons, so the backend fragments wide vectors itself, and NativeAOT makes no tail call through a function pointer that returns a `Vector128`, so small vector results return as bytes. Proposed for the owner ([decisions](decisions.md#proposed-for-the-owner-2026-11-03-sv-02)): reword M11's "byte-identical" criterion, because the sysroot (musl's complex functions, libc++'s locale, libomp, flang-rt) carries vector IR, and keep the new `--vector-lowering` option hidden.
+The owner asked to start implementing [12-simd.md](12-simd.md). SV-01 is done (ADR-16 accepted) and SV-02 is done ([evidence](../evidence/2026-11-03-vector-lowering.md)): LLVM vector IR of 8- to 64-bit integer, pointer, `float`, `double` and `i1` lanes becomes `Vector128<T>` code (`VectorEmitter.cs`), wider vectors 128-bit fragments, masks all-ones lanes, at every optimization level including `-O0`, which never translated before; functions the lowering does not translate, or whose vectors mostly move lanes (the x86-64 ABI's two-float pairs, SROA's small arrays), are scalarized per function as before. Clang's vector extensions and the vectorizers' output match native in both modes under the JIT, without hardware intrinsics and as NativeAOT, on Linux x64, Windows x64 and macOS ARM64 and under the Linux ARM64 JIT; the scalar benchmark set is unchanged (49 of 54 images byte-identical, five within noise). Two findings changed the design text: LLVM's `scalarizer<min-bits=128>` does not split comparisons, so the backend fragments wide vectors itself, and NativeAOT makes no tail call through a function pointer that returns a `Vector128`, so small vector results return as bytes. The owner accepted both proposals that followed ([decisions](decisions.md#decided-by-the-owner-2026-11-03-sv-02)): M11's "byte-identical" criterion now applies to programs without vector operations, because the sysroot (musl's complex functions, libc++'s locale, libomp, flang-rt) carries vector IR, and the `--vector-lowering` option stays hidden.
 
 ## Progress (2026-11-03, native extensions implemented)
 
@@ -241,6 +268,7 @@ Non-goals for 1.0: native C++ ABI interoperability, sockets in portable mode, sy
 | [M9](#m9-workload-gates-and-10) Workload gates and 1.0 | Full suites on the release candidate | all | 4 to 6 |
 | [M10](#m10-native-extensions) Native extensions (before 1.0) | Proxied host libraries for portable programs: `dlopen` in the runtime, extension packages, the generator, the `gles` extension | M6, M7 | 6 to 10 |
 | [M11](#m11-simd) SIMD (before 1.0) | Vector lowering to `Vector128`/`Vector256`, intrinsic helpers, native kernel packages, CPU detection, vectorizer policy | M6, M8 | 12 to 20 |
+| [M12](#m12-cil-shaped-for-ryujit) CIL shaped for RyuJIT (proposed) | Tiering settings, switch lowering, constant global addresses, a per-method JIT budget, ReadyToRun for one runtime identifier | M8 | 3 to 5 |
 
 The effort column is a rough order of magnitude for one experienced engineer and will be wrong in detail; it exists so milestones can be compared and so the total (roughly 45 to 65 engineer-weeks) is visible. M6, M7 and M8 can run in parallel with M4 and M5 once M3 is done.
 
@@ -262,6 +290,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M9 | 1.0-rc | in progress: WG-02, 03, 04, 05, 09 done, WG-01 at 99.1% portable and 98.8% system (target 99%), WG-06 not run (FD-21); RL-02, 05, 08, 09 done; two nightlies on a release candidate need GitHub (FD-19) | 2 (WG-01, WG-06) | 2026-11-01 |
 | M10 | before 1.0 | exit items done (NX-02 to NX-06): images without extensions byte-identical, ABI freeze unchanged, `gles` native pixels on Linux x64, Windows x64 and macOS ARM64; the CI jobs need FD-19. P2: NX-07 to NX-13 done; NX-14 deferred by the owner | 0 | 2026-11-03 |
 | M11 | before 1.0 | in progress: SV-01, SV-02 done (vector IR runs as `Vector128` code; benchmark set unchanged); SV-03 started | 0 | 2026-11-03 |
+| M12 | proposed | proposed 2026-11-04: RyuJIT review done, measured on kernels, ffmpeg and 22 benchmarks; ADR-17 and the placement are the owner's | 0 | 2026-11-04 |
 
 ### M0: Foundations
 
@@ -309,7 +338,11 @@ Exit: NX-02 through NX-06 done; a portable program using the `gles` extension re
 
 ### M11: SIMD
 
-Exit: SV-02 through SV-05, SV-07, SV-08, SV-12, SV-13, SV-15, SV-19 and SV-20 done; vectorized and intrinsic-using code from the survey corpus runs as vector code on all four hosts with output identical to native; the ffmpeg browser profile runs its nasm kernels from a kernel package on Linux x64 (JIT and NativeAOT) and its C paths elsewhere, with native hashes; the benchmark table shows no regression at any level; programs without the new options are byte-identical to before; the ABI freeze test passes unchanged. Accepted, and required before 1.0 by the owner's decision of 2026-11-03 ([ADR-16](decisions.md#adr-16-simd-levels)). Details: [12-simd.md](12-simd.md).
+Exit: SV-02 through SV-05, SV-07, SV-08, SV-12, SV-13, SV-15, SV-19 and SV-20 done; vectorized and intrinsic-using code from the survey corpus runs as vector code on all four hosts with output identical to native; the ffmpeg browser profile runs its nasm kernels from a kernel package on Linux x64 (JIT and NativeAOT) and its C paths elsewhere, with native hashes; the benchmark table shows no regression at any level; a program whose IR has no vector operations is byte-identical to before, and no program of the benchmark set is slower (reworded by the owner on 2026-11-03, [decisions](decisions.md#decided-by-the-owner-2026-11-03-sv-02)); the ABI freeze test passes unchanged. Accepted, and required before 1.0 by the owner's decision of 2026-11-03 ([ADR-16](decisions.md#adr-16-simd-levels)). Details: [12-simd.md](12-simd.md).
+
+### M12: CIL shaped for RyuJIT
+
+Exit: JP-02 to JP-07 and JP-09 done. The benchmark set's JIT geometric mean is lower than before the milestone, and no benchmark is slower beyond the nightly's thresholds, under the JIT or NativeAOT. The portable image stays one platform-neutral file, and the ABI freeze test passes unchanged. Proposed 2026-11-04; placement before or after 1.0 and [ADR-17](decisions.md#adr-17-readytorun-for-jit-deployments) are the owner's. Details: [13-jit-patterns.md](13-jit-patterns.md).
 
 ## Workstreams
 
@@ -328,6 +361,7 @@ Exit: SV-02 through SV-05, SV-07, SV-08, SV-12, SV-13, SV-15, SV-19 and SV-20 do
 | RL | [10-release.md](10-release.md) | Pre-release train and the 1.0 checklist |
 | NX | [11-native-extensions.md](11-native-extensions.md) | Proxied host libraries (EGL/GLES, Vulkan) for portable programs; ADR-15 accepted, M10 before 1.0 |
 | SV | [12-simd.md](12-simd.md) | SIMD levels: vector lowering, intrinsic helpers, native kernel packages, CPU detection; ADR-16 accepted, M11 before 1.0 |
+| JP | [13-jit-patterns.md](13-jit-patterns.md) | CIL and runtime settings shaped for RyuJIT's limits and patterns, ReadyToRun for JIT deployments; proposed 2026-11-04 (M12, ADR-17) |
 
 ## Risks
 

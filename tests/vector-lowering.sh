@@ -5,7 +5,7 @@
 # with hardware intrinsics disabled (the software paths of Vector128) and as NativeAOT, and run as vector code: Vector128
 # calls in the image. The hidden --vector-lowering=typed builds keep every function the lowering translates as vector
 # code, which the default leaves to the scalarizer where lanes move more than they compute (most of this fixture's
-# printing); there only the function whose operations have no lowering (popcount, __int128 lanes) is scalarized.
+# printing); there only the function whose operations have no lowering (__int128 lanes) is scalarized.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"
@@ -43,6 +43,11 @@ for runtime in portable system; do
     DOTNET_EnableHWIntrinsic=0 dotnet "$test_output/$runtime-O2-typed.dll" >"$test_output/$runtime-software.txt"
     diff -u "$test_output/native-O2.txt" "$test_output/$runtime-software.txt"
 done
+# --vector-width=256: Vector256 fragments, with AVX and without (where .NET computes them as halves).
+"$llvmnet" --runtime=portable -O2 --vector-width=256 --vector-lowering=typed -w "$source_file" -o "$test_output/portable-256.dll"
+dotnet "$test_output/portable-256.dll" | diff -u "$test_output/native-O2.txt" -
+DOTNET_EnableAVX=0 dotnet "$test_output/portable-256.dll" | diff -u "$test_output/native-O2.txt" -
+vector_code "$test_output/portable-256.dll"
 "$llvmnet" --runtime=portable -O2 --vector-lowering=typed -w --nativeaot "$source_file" -o "$test_output/portable-aot" >"$test_output/portable-aot.log" 2>&1
 "$test_output/portable-aot" | diff -u "$test_output/native-O2.txt" -
 "$llvmnet" --runtime=system -O0 --vector-lowering=typed -w --nativeaot "$source_file" -o "$test_output/system-aot" >"$test_output/system-aot.log" 2>&1

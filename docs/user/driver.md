@@ -86,7 +86,10 @@ Every option falls into one of four classes, per runtime mode:
 | --- | --- |
 | `--runtime=<mode>` | portable (the default; ABI dotnet64-v2, runs on every supported .NET host) or system (the native Linux x86-64 ABI, system-linux-x64-v1) |
 | `--portable-sysroot=<dir>` | Use another portable sysroot instead of the toolchain's sysroot/dotnet64-v2 |
-| `--simd128` | Compile wasm_simd128.h intrinsics to Vector128 helper calls (docs/user/simd128.md) |
+| `--isa=<level>` | The instruction set intrinsics and headers may assume, without changing the data layout (ADR-16): baseline (the default); x86-64-v2, the SSE to SSE4.2 macros and intrinsics, which run as the host's instructions or exact compositions on every host (docs/user/x86-intrinsics.md); or wasm-simd128, the wasm_simd128.h header (docs/user/simd128.md); x86-64-v3 and neon follow with their intrinsic helpers |
+| `--simd128` | --isa=wasm-simd128: compile wasm_simd128.h intrinsics to Vector128 code (docs/user/simd128.md) |
+| `--vector-width=<bits>` | 128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a 256-bit vector as one instruction where the host has AVX2 and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128 |
+| `-msse4.2` | Portable mode: an alias of --isa=x86-64-v2, with no ABI effect, that also reaches Clang as given (as do -msse, -msse2, -msse3, -mssse3, -msse4, -msse4.1, -mpopcnt, -mpclmul, -mcrc32 and -march=x86-64-v2; -mno-sse3 and the other -mno- forms above SSE2 pass through without changing the level). System mode: as in Clang |
 
 ### Managed and native libraries
 
@@ -104,7 +107,7 @@ Every option falls into one of four classes, per runtime mode:
 | `--runtime-id=<rid>` | NativeAOT target runtime identifier (default: this host; linux-arm64 cross-publishes from Linux x64; system mode needs linux-x64) |
 | `--aot-project=<dir>` | Write the NativeAOT project into <dir> for publishing on another host (dotnet publish -r <rid>) instead of publishing here |
 | `--aot-optimize=<preference>` | Balanced (default), Speed or Size |
-| `--aot-instruction-set=<set>` | baseline (default: SSE2 on x64), x86-64-v3 (AVX2, BMI2, FMA: x64 CPUs since about 2015) or native (this host's CPU; the executable may not run elsewhere) |
+| `--aot-instruction-set=<set>` | baseline (default: SSE2 on x64), x86-64-v2 (SSE4.2 and POPCNT: x64 CPUs since about 2009; the default for a program with objects compiled at --isa=x86-64-v2), x86-64-v3 (AVX2, BMI2, FMA: x64 CPUs since about 2015) or native (this host's CPU; the executable may not run elsewhere) |
 | `--aot-debug` | Keep native debug symbols and the map file |
 
 ### Diagnostics and debugging
@@ -176,7 +179,7 @@ Each of these fails with the reason in the table, as `llvmnet: error: option '<o
 | `-fsanitize=<check>` | not accepted | the sanitizer runtimes are not part of the sysroot or the system-mode link |
 | `-fprofile-instr-generate` | not accepted | the profiling runtime is not part of the sysroot or the system-mode link (also -fprofile-instr-generate=, -fprofile-generate, -fprofile-arcs, -ftest-coverage, --coverage) |
 | `-nolibc` | portable: not accepted; system: passed to the frontend | portable: the C library cannot be left out on its own (crt1.o needs it); -nodefaultlibs leaves out every sysroot library |
-| `-m<option>` | portable: not accepted; system: passed to the frontend | portable: -m<option> selects a CPU, instruction set or native ABI detail, and it would change the versioned portable ABI (dotnet64-v2), whose target, data layout and headers are fixed; use --runtime=system for a native target; -mllvm, -mmlir, -mtune= and the -module... options are the exceptions |
+| `-m<option>` | portable: not accepted; system: passed to the frontend | portable: -m<option> selects a CPU, instruction set or native ABI detail, and it would change the versioned portable ABI (dotnet64-v2), whose target, data layout and headers are fixed; use --runtime=system for a native target; -mllvm, -mmlir, -mtune=, the x86 SIMD feature flags up to SSE4.2 (aliases of --isa=x86-64-v2) and the -module... options are the exceptions |
 | `--target=<triple>` | portable: not accepted; system: passed to the frontend | portable: it would change the versioned portable ABI (dotnet64-v2), whose target, data layout and headers are fixed; use --runtime=system for a native target (also -target <triple>, --sysroot, -isysroot, -fshort-wchar, -fshort-enums, -fpack-struct) |
 
 ### -Wl, and -Xlinker options

@@ -20,6 +20,7 @@ Each decision is recorded in the style of an architecture decision record: conte
 | ADR-14 | Linux identity of the portable target | M3 | Accepted 2026-10-31 (owner, option 3); parity exclusions extended 2026-10-31 |
 | ADR-15 | Native extensions of the portable ABI | M10, before 1.0 | Accepted 2026-11-03 (owner, option 4; work pulled before 1.0) |
 | ADR-16 | SIMD levels: vector lowering, intrinsic helpers, native kernel packages | M11, before 1.0 | Accepted 2026-11-03 (owner; work pulled before 1.0) |
+| ADR-17 | ReadyToRun for JIT deployments | M12 (proposed) | Proposed 2026-11-04 |
 
 ## ADR-01: Portable C library strategy
 
@@ -222,12 +223,35 @@ Each decision is recorded in the style of an architecture decision record: conte
 **Consequences.**
 
 - The data ABI is unchanged at every level: `--isa` changes instructions, macros and vectorizer features only, and the ABI freeze test keeps checking the layouts. Objects of different ISA levels link together.
-- A program built without the new options is byte-identical to today's until SV-05 changes the vectorizer default, which is a separate owner decision.
+- A program whose IR has no vector operations is byte-identical to today's until SV-05 changes the vectorizer default, which is a separate owner decision; vector IR that arises without the new options (the sysroot's complex, locale and OpenMP members, Clang's vector extensions, SROA, the x86-64 ABI's two-float pairs) is lowered by Level 1, and no program of the benchmark set may be slower for it (reworded by the owner on 2026-11-03).
 - Portable images stay one file for every host through Levels 1 and 2. Level 3 adds native libraries the project's build produced, per identifier, next to the image, and the program's C paths remain the fallback; Level 4 would make llvmnet itself a producer of native code and is decided separately.
 - `LlvmNet.Runtime` grows a helper table (a few hundred small methods) that must be exact to the instruction; the conformance test against the native instruction on x64 is part of the definition of done.
 - System mode's SSE macro question (SA-12 option (b)) stays the owner's; Level 2 makes option (c) real and removes the failure the survey found for the common intrinsics.
 
 **Status.** Accepted 2026-11-03 by the owner: Levels 1 to 3 as proposed, a spike (SV-17) before any decision on Level 4. The owner also pulled the workstream before 1.0 (see the 2026-11-03 section below).
+
+## ADR-17: ReadyToRun for JIT deployments
+
+**Context.** Under the JIT, a translated function too large for RyuJIT's limits runs as MinOpts code. The limits are 60,000 bytes of IL, 20,000 IL instructions, 2,000 blocks, 2,000 locals and 8,000 local references, and they are constants in release builds. Large C functions reach them: 49 of ffmpeg's decoder methods, including H.264's CABAC decoder and deblocking filters, so H.264 runs at 2.0 times native under the JIT against 1.46 as NativeAOT. Short programs pay for compilation instead: jpeg, lame and tramp3d run at 5 to 36 times native under the JIT (PF-06, PF-10). AOT compilation never falls back to MinOpts. A ReadyToRun image keeps the IL, adds code compiled by crossgen2 with RyuJIT, and still tiers hot methods up to Tier1 at run time. For an over-limit method the Tier1 recompilation falls back to MinOpts, and the runtime discards it and keeps the precompiled code. Measured 2026-11-04 ([evidence](../evidence/2026-11-04-jit-patterns.md#readytorun)): the ffmpeg decodes take 27% (H.264) and 15% (HEVC) less time with a ReadyToRun image, at the same hashes. Over 22 benchmarks of the set it takes 0.847 of the JIT's time, from 0.28 (tramp3d) to 1.22 (dhrystone), and it adds up with the tiering setting JP-02 proposes (bullet on 4 cores: 2.63 s by default, 1.89 s without the delay, 1.78 s with both). A linux-x64 ReadyToRun image fails with `BadImageFormatException` on macOS ARM64 and on Windows x64, where the IL-only image runs.
+
+**Options.**
+
+1. *Status quo.* IL-only images under the JIT; NativeAOT where speed matters; outlining (BE-26) for over-limit functions. Outlining is still needed for NativeAOT's code size and the JIT's other limits, but it is large work and does not address compile time.
+2. *ReadyToRun in the portable image* for the build host's identifier. Rejected: the image then fails to load on every other host (measured), which breaks R4.
+3. *A ReadyToRun output for one runtime identifier* (`--readytorun <rid>`, beside `--nativeaot`), recommended. The portable image is unchanged; a deployment that knows its host gets precompiled code and keeps everything the JIT offers (tiering, reflection, loading extensions). Builds take seconds, against minutes for NativeAOT.
+4. *One portable folder with precompiled copies per identifier*, which the host selects through `deps.json` runtime targets with the IL image as fallback. This keeps one deployment for every host but multiplies its size. Whether the host applies runtime targets to the application's own assembly has not been checked; it needs a spike before it can be chosen.
+5. *Partial ReadyToRun* (JP-10): only the methods over the JIT's limits are precompiled, so the rest keeps Tier0, on-stack replacement and Tier1's knowledge of initialized classes. It is also specific to one identifier, so it refines option 3 or 4.
+
+**Recommendation.** Option 3 as JP-06, opt-in; option 5 measured as its refinement; option 4 only after a spike.
+
+**Consequences.**
+
+- The toolchain or the offline feed (TC-12) carries the crossgen2 package for each host identifier it supports, as it does ILCompiler for NativeAOT.
+- Images grow: ffmpeg's decoder goes from 27 to 45 MB.
+- ReadyToRun is not always faster. Precompiled code knows nothing about class initialization, and a loop that never leaves precompiled code is not replaced by on-stack replacement: dhrystone takes 22% longer. The option stays opt-in, and the evidence lists where it loses.
+- The data ABI and the portable image are unaffected; the ABI freeze test does not change.
+
+**Status.** Proposed 2026-11-04.
 
 ## Proposed for the owner (2026-10-31)
 
@@ -293,9 +317,36 @@ Questions from the [SIMD survey](../evidence/2026-11-03-simd-survey.md) and the 
 - **Native code in portable images.** Accepted: Level 3 ships native libraries next to a portable image when a project opts in (a *portable program with native kernels*). Whether llvmnet itself generates such libraries (Level 4) is decided after SV-17.
 - **Test hardware.** Accepted: the build host (AVX-512) covers x64, the `xp` hosts (`fluorite`, `mainmac`) cover Windows x64 and macOS ARM64, and an ARM64 Linux runner is added for the NEON paths.
 
-## Proposed for the owner (2026-11-03, SV-02)
+## Decided by the owner (2026-11-03, SV-02)
 
-Questions from the typed vector lowering ([evidence](../evidence/2026-11-03-vector-lowering.md)); the implementation follows the proposals, so each can be accepted or changed as it works.
+Questions from the typed vector lowering ([evidence](../evidence/2026-11-03-vector-lowering.md)), proposed and accepted the same day as recommended: the M11 exit criterion and ADR-16's consequence are reworded as proposed, and the option stays hidden.
 
-- **"Byte-identical without the new options" (M11 exit criterion, ADR-16 consequences).** The criterion assumed that only the vectorizers produce vector IR. The portable sysroot does too: musl's `float complex` functions (`<2 x float>` is their ABI type), libc++'s `locale.o`, libomp's `kmp_atomic.o`, flang-rt's complex `matmul`, `dot-product` and reductions, compiler-rt's `mulsc3` and `divsc3`; and so do Clang's vector extensions, SROA and the x86-64 ABI's coercion of small float structures. Level 1 lowers that vector IR without any option, so every C++ program using iostreams gets different bytes. Measured on the benchmark set: 49 of 54 images and the ffmpeg decoder byte-identical, the other five within noise. Proposed: reword the criterion as "a program whose IR has no vector operations is byte-identical to today's; no program of the benchmark set is slower", and ADR-16's consequence to match.
-- **The hidden `--vector-lowering=auto|typed|scalar`.** For comparisons and tests: `typed` keeps every function the lowering translates as vector code (the default `auto` scalarizes those that move more lanes than they compute on), `scalar` scalarizes everything as before SV-02. Proposed: keep it hidden, as `-fslp-vectorize` and the other alias options are, and list it in [dev/architecture.md](../dev/architecture.md) only.
+- **"Byte-identical without the new options" (M11 exit criterion, ADR-16 consequences).** The criterion assumed that only the vectorizers produce vector IR. The portable sysroot does too: musl's `float complex` functions (`<2 x float>` is their ABI type), libc++'s `locale.o`, libomp's `kmp_atomic.o`, flang-rt's complex `matmul`, `dot-product` and reductions, compiler-rt's `mulsc3` and `divsc3`; and so do Clang's vector extensions, SROA and the x86-64 ABI's coercion of small float structures. Level 1 lowers that vector IR without any option, so every C++ program using iostreams gets different bytes. Measured on the benchmark set: 49 of 54 images and the ffmpeg decoder byte-identical, the other five within noise. Accepted: reword the criterion as "a program whose IR has no vector operations is byte-identical to today's; no program of the benchmark set is slower", and ADR-16's consequence to match.
+- **The hidden `--vector-lowering=auto|typed|scalar`.** For comparisons and tests: `typed` keeps every function the lowering translates as vector code (the default `auto` scalarizes those that move more lanes than they compute on), `scalar` scalarizes everything as before SV-02. Accepted: keep it hidden, as `-fslp-vectorize` and the other alias options are, and list it in [dev/architecture.md](../dev/architecture.md) only.
+
+## Proposed for the owner (2026-11-04, JIT patterns)
+
+Questions from the RyuJIT review ([13-jit-patterns.md](13-jit-patterns.md), [evidence](../evidence/2026-11-04-jit-patterns.md)); nothing below has been acted on, and `src/` is unchanged.
+
+- **ADR-17.** Accept ReadyToRun as an opt-in output for one runtime identifier (option 3), with partial images (option 5) measured as its refinement. The alternative is to keep IL-only images and rely on NativeAOT and outlining (BE-26).
+- **M12's placement.** Before or after 1.0. JP-02 to JP-05 change only what the backend emits (`runtimeconfig.json` and the CIL). They are small, measured in this review, and independent of ADR-17.
+- **The order.** Recommended:
+  1. The tiering delay (JP-02): the largest gain for the least change, after the full set is measured on 4 cores.
+  2. Switch lowering (JP-03) and `initonly` fields (JP-04).
+  3. The per-method budget (JP-05).
+  4. ReadyToRun, as ADR-17 decides.
+
+## Proposed for the owner (2026-11-04, SV-05)
+
+Questions from SV-05's measurement of the vectorizers ([evidence](../evidence/2026-11-03-vector-lowering.md#sv-05-autovectorization)) and from BE-33, which it led to ([evidence](../evidence/2026-11-04-be33-local-sharing.md)). Nothing below is changed until the owner decides.
+
+- **Autovectorization at `-O2` and above (ADR-11).** The owner's SIMD decisions left this to SV-05. Measured after this item's fixes: on the benchmark set, which is mostly pointer-chasing integer code, llvmnet's vectorized builds gain about what native's gain (scalar over vectorized time, programs running at least 0.2 s: 1.015 under the JIT and 1.013 as NativeAOT, native 1.021; linpack, perlin and lpbench 1.2 to 1.8 times), and they stand to vectorized native about as the scalar builds stand to scalar native (1.97 and 1.34 against 1.94 and 1.32). On the survey's SIMD kernels the vectorized builds run 2 to 5 times faster than llvmnet's scalar ones, at 1.04 to 2.9 times native SSE2. `-O3` adds nothing for vectorization and can push a function past RyuJIT's IL limit (linpack's `main`, PF-07). The losses are native's own (olden-bh, fftbench) or layout effects (dhrystone under the JIT). Options: (a) Clang's behavior: `-O2` and above run the loop and SLP vectorizers as Clang's do, in both runtime modes, `-fno-vectorize` and `-fno-slp-vectorize` turn them off, and `-O1`, the default, stays scalar as Clang's `-O1` does; (b) keep them off at every level unless `-fvectorize` or `-fslp-vectorize` is given, as today. Recommended: (a), because build systems pass `-O2` and `-O3` expecting Clang's code and the survey's codecs and math libraries are where vectorized loops pay, with Clang's own vectorizer settings (no llvmnet-specific setting measured better). It needs a driver change, the driver reference, [modes.md](../user/modes.md) and the benchmark harness's scalar column, which would then pass `-fno-vectorize` explicitly as today.
+- **The vectorized column in the nightly.** SV-05 adds `--vectorized` to the nightly benchmark step, as the item asks. The full run with it took 31 minutes on the build host; on the 4-core runner, whose scalar run takes about an hour, it adds about another hour to a job that also runs every test tag and the fuzzers within its 6-hour limit. Proposed: keep it in the nightly; if the job gets too long, run the vectorized engines weekly instead.
+- **M11's byte-identical criterion.** The accepted wording is "a program whose IR has no vector operations is byte-identical to today's". BE-33 changes the locals of every function of more than 512 values, and every program links some (musl's `printf_core`, mallocng's `alloc_slot`), so no image is byte-identical to the images before it. Proposed: judge the criterion against images built by the same compiler with the workstream's options and lowering off (`--vector-lowering=scalar`), which shows that Level 1 leaves scalar code alone, rather than against an older compiler.
+
+## Proposed for the owner (2026-11-04, SV-08)
+
+Questions from SV-08 ([evidence](../evidence/2026-11-04-x86-intrinsics.md)).
+
+- **NativeAOT's instruction set for `x86-64-v2` programs (implemented, for confirmation).** A NativeAOT program whose image records `x86-64-v2` objects now gets ILC's `x86-64-v2` instruction set unless `--aot-instruction-set` is given, so the executable requires an SSE4.2 processor (x64 since about 2009), as the same code compiled natively with `-march=x86-64-v2` does. At ILC's baseline SSE4.2 is an opportunistic set: the helpers test it at run time, but the generic `Vector128` operations of the same functions are compiled for SSE2, and astc-encoder's SSE4.1 build ran 4.41 s against 2.42 s. Options: (a) as implemented; (b) keep the baseline default and document `--aot-instruction-set x86-64-v2`. Recommended: (a); `--aot-instruction-set baseline` still gives an executable that starts on every x64 processor.
+- **SA-12's option (b).** The owner left it for after Level 2's results. With the SSE to SSE4.2 intrinsics translated, system mode's predefined `__SSE__` and `__SSE2__` select paths that work, as native x86-64's do, and the survey's three failures run (astc-encoder, Chromium zlib, abseil). Proposed: keep predefining the macros and close SA-12; AVX and later still warn while compiling and fail at the link when reached.

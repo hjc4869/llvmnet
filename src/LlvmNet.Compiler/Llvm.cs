@@ -10,7 +10,9 @@ internal static unsafe class Llvm
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_link")]
     private static extern int LinkFiles(nint* paths, int* wholeArchive, uint count, nint* entry, uint entryCount, nint* required, uint requiredCount, [MarshalAs(UnmanagedType.LPUTF8Str)] string output, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, out nint message);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_stamp_abi")]
-    private static extern int StampFile([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, int textual, out nint message);
+    private static extern int StampFile([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, [MarshalAs(UnmanagedType.LPUTF8Str)] string isa, int textual, out nint message);
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_isa_levels")]
+    private static extern nint IsaLevelsOf(nint module);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_create_native_shim")]
     internal static extern nint CreateNativeShim(nint source);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_lower_constrained_fp")]
@@ -35,12 +37,22 @@ internal static unsafe class Llvm
         }
     }
 
-    internal static void StampAbi(string path, string abi, bool textual)
+    /// <summary>Records the ABI tag and, unless it is the baseline, the ISA level (--isa) in a compiled object.</summary>
+    internal static void StampAbi(string path, string abi, string isa, bool textual)
     {
-        if (StampFile(path, abi, textual ? 1 : 0, out nint message) == 0) return;
+        if (StampFile(path, abi, isa == "baseline" ? "" : isa, textual ? 1 : 0, out nint message) == 0) return;
         string text = Marshal.PtrToStringUTF8(message) ?? "Cannot stamp LLVM ABI";
         LLVMDisposeMessage(message);
         throw new InvalidOperationException(text);
+    }
+
+    /// <summary>The ISA levels other than the baseline that a linked module's objects were compiled for, comma-separated.</summary>
+    internal static string IsaLevels(nint module)
+    {
+        nint message = IsaLevelsOf(module);
+        string levels = Marshal.PtrToStringUTF8(message) ?? "";
+        LLVMDisposeMessage(message);
+        return levels;
     }
 
     /// <summary>

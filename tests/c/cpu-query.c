@@ -1,4 +1,7 @@
 #include <stdio.h>
+#ifdef __x86_64__
+#include <cpuid.h>
+#endif
 
 static void query(unsigned leaf, unsigned subleaf, unsigned registers[4])
 {
@@ -34,12 +37,25 @@ int main(void)
         __asm__(".byte 0x0f, 0x01, 0xd0" : "=a"(lower), "=d"(upper) : "c"(0));
         printf("xcr0=%08x%08x\n", upper, lower);
     }
+#ifdef __x86_64__
+    /* Clang's <cpuid.h> macros, which libraries' feature detection uses. */
+    unsigned header[4];
+    __cpuid(0, header[0], header[1], header[2], header[3]);
+    if (header[0] != maximum || header[1] != preserved[1])
+        return 3;
+#endif
     if (maximum >= 7) {
         query(7, 0, registers);
         query_preserving_base(7, 0, preserved);
         for (unsigned index = 0; index < 4; ++index)
             if (preserved[index] != registers[index])
                 return 2;
+#ifdef __x86_64__
+        __cpuid_count(7, 0, header[0], header[1], header[2], header[3]);
+        for (unsigned index = 0; index < 4; ++index)
+            if (header[index] != registers[index])
+                return 4;
+#endif
         printf("features=%08x %08x %08x %08x\n", registers[0], registers[1], registers[2], registers[3]);
     }
     return 0;

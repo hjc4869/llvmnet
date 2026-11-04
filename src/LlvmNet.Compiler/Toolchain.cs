@@ -133,9 +133,9 @@ internal static class Toolchain
                 // No ICU on Linux and macOS, where the host needs none; Windows needs it to resolve IANA time-zone
                 // names (TZ=Europe/London) to its own zones, so a win-* executable keeps it (PF-10).
                 new XElement("InvariantGlobalization", new XAttribute("Condition", "!$(RuntimeIdentifier.StartsWith('win'))"), "true"),
-                // x86-64-v3 is an x64 level; a relocatable project published for another architecture keeps its default.
-                instructionSet == "x86-64-v3"
-                    ? new XElement("IlcInstructionSet", new XAttribute("Condition", "$(RuntimeIdentifier.EndsWith('-x64'))"), "x86-64-v3")
+                // x86-64-v2 and -v3 are x64 levels; a relocatable project published for another architecture keeps its default.
+                instructionSet is "x86-64-v2" or "x86-64-v3"
+                    ? new XElement("IlcInstructionSet", new XAttribute("Condition", "$(RuntimeIdentifier.EndsWith('-x64'))"), instructionSet)
                     : new XElement("IlcInstructionSet", instructionSet == "native" ? "native" : ""),
                 new XElement("EnableDefaultCompileItems", "false"),
                 // Cross-publishing from Linux x64 to linux-arm64 (XP-05) links with clang and the aarch64 cross sysroot
@@ -241,8 +241,8 @@ internal static class Toolchain
     {
         if (instructionSet == "native" && rid is not null && rid != RuntimeInformation.RuntimeIdentifier)
             throw new ArgumentException("Host CPU instruction selection requires the current host runtime identifier.");
-        if (instructionSet == "x86-64-v3" && !(rid ?? RuntimeInformation.RuntimeIdentifier).EndsWith("-x64", StringComparison.Ordinal))
-            throw new ArgumentException($"--aot-instruction-set x86-64-v3 is an x64 instruction set; the target is {rid ?? RuntimeInformation.RuntimeIdentifier}.");
+        if (instructionSet is "x86-64-v2" or "x86-64-v3" && !(rid ?? RuntimeInformation.RuntimeIdentifier).EndsWith("-x64", StringComparison.Ordinal))
+            throw new ArgumentException($"--aot-instruction-set {instructionSet} is an x64 instruction set; the target is {rid ?? RuntimeInformation.RuntimeIdentifier}.");
         CheckNativeAotPrerequisites(rid ?? RuntimeInformation.RuntimeIdentifier, verbose);
         string projectDirectory = Path.Combine(temporary, "aot");
         string projectPath = Path.Combine(projectDirectory, "NativeHost.csproj");

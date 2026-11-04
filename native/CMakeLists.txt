@@ -11,5 +11,5 @@ add_library(llvmnet-llvm SHARED constants.cpp linker.cpp abi.cpp fp.cpp vectors.
 set_target_properties(llvmnet-llvm PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 target_include_directories(llvmnet-llvm SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(llvmnet-llvm PRIVATE ${LLVM_DEFINITIONS})
-llvm_map_components_to_libnames(llvmnet_llvm_libraries core bitreader bitwriter irreader linker object passes)
+llvm_map_components_to_libnames(llvmnet_llvm_libraries core bitreader bitwriter irreader linker object passes codegen)
 target_link_libraries(llvmnet-llvm PRIVATE ${llvmnet_llvm_libraries})

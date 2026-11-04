@@ -95,7 +95,8 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Pop);
             locals[Llvm.LLVMGetParam(function, index)] = copy;
         }
-        AllocateFunctionLocals(valueCount > 32768 && jumpSites.Count == 0);
+        if (jumpSites.Count == 0 && valueCount is > 512 and <= 32768) ShareFunctionLocals();
+        else AllocateFunctionLocals(valueCount > 32768 && jumpSites.Count == 0);
         if (scopedStack || hasAllocations && jumpSites.Count != 0 || arenaFrame)
         {
             // The thread's alloca arena top on entry, restored on every exit (BE-17).
@@ -375,6 +376,8 @@ internal sealed class FunctionEmitter : ValueEmitter
             case 50 when Types.Vector(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0))) is not null:
                 Vectors.Extract(value);
                 break;
+            case 51 when VectorEmitter.Chained(value):
+                return;
             case 51 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null:
                 Vectors.Insert(value);
                 break;
@@ -984,6 +987,155 @@ internal sealed class FunctionEmitter : ValueEmitter
         Il.Emit(OpCodes.Ceq);
     }
 
+    /// <summary>
+    /// Gives each instruction value a local, shared by values of one CIL type whose live ranges do not meet. RyuJIT
+    /// keeps at most 1024 locals of a method in registers (JitMaxLocalsToTrack) and stops inlining from about 920
+    /// (90% of that), so a local for each value made functions of more than a thousand instructions several times
+    /// slower, vectorized ones the most (SV-05). A live range is the span, in emission order, of the value's
+    /// definition, its uses and the blocks it is live into or out of (SSA liveness); a phi's starts at the edges
+    /// that store it. Ranges that share a position conflict, so an instruction's result never shares a local with its
+    /// operands, as an instruction may store part of its result before it has read all of them. The emitter reads the
+    /// operands of a comparison, a shuffle or an insertelement where those are used (Order, LoadMask, SplatScalar, a
+    /// chain of insertelements built at its end), so they count as used there too. Only functions of more than 512
+    /// values share: RyuJIT allocates registers per local, so values sharing one share an allocation, which added
+    /// moves to small hot loops (heapsort and lpbench 10 to 15% slower). A function with setjmp keeps a local for
+    /// each value, as the jump dispatch re-enters the body at its call sites.
+    /// </summary>
+    private void ShareFunctionLocals()
+    {
+        nint[] blocks = [.. Llvm.Blocks(function)];
+        var blockIndex = new Dictionary<nint, int>();
+        var valueIndex = new Dictionary<nint, int>();
+        var values = new List<nint>();
+        var home = new List<int>();
+        var low = new List<int>();
+        var high = new List<int>();
+        int[] start = new int[blocks.Length], end = new int[blocks.Length];
+        int position = 0;
+        for (int block = 0; block < blocks.Length; block++)
+        {
+            blockIndex.Add(blocks[block], block);
+            start[block] = position;
+            foreach (nint instruction in Llvm.Instructions(blocks[block]))
+            {
+                if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0)
+                {
+                    valueIndex.Add(instruction, values.Count);
+                    values.Add(instruction);
+                    home.Add(block);
+                    low.Add(position);
+                    high.Add(position);
+                }
+                position++;
+            }
+            end[block] = position - 1;
+        }
+        void Extend(int value, int at)
+        {
+            low[value] = Math.Min(low[value], at);
+            high[value] = Math.Max(high[value], at);
+        }
+        // Uses in another block than the definition's are the ones liveness carries between blocks.
+        var uses = new List<(int Value, int Block)>();
+        var seen = new HashSet<nint>();
+        void Use(nint operand, int block, int at)
+        {
+            if (!valueIndex.TryGetValue(operand, out int value)) return;
+            Extend(value, at);
+            if (block != home[value]) uses.Add((value, block));
+            if (Llvm.LLVMGetInstructionOpcode(operand) is 42 or 43 or 51 or 52 && seen.Add(operand))
+                for (int index = 0; index < Llvm.LLVMGetNumOperands(operand); index++)
+                    Use(Llvm.LLVMGetOperand(operand, (uint)index), block, at);
+        }
+        int[][] successors = new int[blocks.Length][];
+        for (int block = 0; block < blocks.Length; block++)
+        {
+            int at = start[block];
+            nint terminator = 0;
+            foreach (nint instruction in Llvm.Instructions(blocks[block]))
+            {
+                terminator = instruction;
+                if (Llvm.LLVMGetInstructionOpcode(instruction) == 44)
+                {
+                    int phi = valueIndex[instruction];
+                    for (uint index = 0; index < Llvm.LLVMCountIncoming(instruction); index++)
+                    {
+                        // The predecessor's edge loads the incoming value and stores the phi's local.
+                        int from = blockIndex[Llvm.LLVMGetIncomingBlock(instruction, index)];
+                        Extend(phi, end[from]);
+                        seen.Clear();
+                        Use(Llvm.LLVMGetIncomingValue(instruction, index), from, end[from]);
+                    }
+                }
+                else
+                {
+                    seen.Clear();
+                    for (int index = 0; index < Llvm.LLVMGetNumOperands(instruction); index++)
+                        Use(Llvm.LLVMGetOperand(instruction, (uint)index), block, at);
+                }
+                at++;
+            }
+            successors[block] = [.. Enumerable.Range(0, (int)Llvm.LLVMGetNumSuccessors(terminator)).Select(index => blockIndex[Llvm.LLVMGetSuccessor(terminator, (uint)index)])];
+        }
+        // Liveness of those values, as bit sets over them, from the blocks that use them back to their definitions.
+        int[] global = [.. uses.Select(use => use.Value).Distinct()];
+        var bit = new Dictionary<int, int>();
+        for (int index = 0; index < global.Length; index++) bit.Add(global[index], index);
+        int words = (global.Length + 63) / 64;
+        ulong[][] used = new ulong[blocks.Length][], defined = new ulong[blocks.Length][], liveIn = new ulong[blocks.Length][], liveOut = new ulong[blocks.Length][];
+        for (int block = 0; block < blocks.Length; block++)
+        {
+            used[block] = new ulong[words];
+            defined[block] = new ulong[words];
+            liveIn[block] = new ulong[words];
+            liveOut[block] = new ulong[words];
+        }
+        foreach ((int value, int block) in uses) used[block][bit[value] >> 6] |= 1UL << bit[value];
+        foreach (int value in global) defined[home[value]][bit[value] >> 6] |= 1UL << bit[value];
+        for (bool changed = true; changed;)
+        {
+            changed = false;
+            for (int block = blocks.Length - 1; block >= 0; block--)
+            {
+                ulong[] output = liveOut[block], input = liveIn[block];
+                foreach (int successor in successors[block])
+                    for (int word = 0; word < words; word++) output[word] |= liveIn[successor][word];
+                for (int word = 0; word < words; word++)
+                {
+                    ulong next = (used[block][word] | output[word]) & ~defined[block][word];
+                    if (next == input[word]) continue;
+                    input[word] = next;
+                    changed = true;
+                }
+            }
+        }
+        for (int block = 0; block < blocks.Length; block++)
+            for (int index = 0; index < global.Length; index++)
+            {
+                if ((liveIn[block][index >> 6] & 1UL << index) != 0) Extend(global[index], start[block]);
+                if ((liveOut[block][index >> 6] & 1UL << index) != 0) Extend(global[index], end[block]);
+            }
+        // Linear scan: a value takes a local of its type that the values before it no longer use.
+        var available = new Dictionary<Type, Stack<LocalBuilder>>();
+        var active = new PriorityQueue<int, int>();
+        foreach (int value in Enumerable.Range(0, values.Count).OrderBy(value => low[value]))
+        {
+            while (active.TryPeek(out int expired, out int last) && last < low[value])
+            {
+                active.Dequeue();
+                LocalBuilder released = locals[values[expired]];
+                if (!available.TryGetValue(released.LocalType, out Stack<LocalBuilder>? free)) available.Add(released.LocalType, free = new());
+                free.Push(released);
+            }
+            Type managed = Types.Map(Llvm.LLVMTypeOf(values[value]));
+            LocalBuilder local = available.TryGetValue(managed, out Stack<LocalBuilder>? pool) && pool.TryPop(out LocalBuilder? previous) ? previous : Il.DeclareLocal(managed);
+            if (local.LocalIndex >= ushort.MaxValue)
+                throw new NotSupportedException($"Function {Llvm.Name(function)} exceeds the CIL local-variable limit.");
+            locals[values[value]] = local;
+            active.Enqueue(value, high[value]);
+        }
+    }
+
     private void AllocateFunctionLocals(bool reuse)
     {
         var available = new Dictionary<Type, Stack<LocalBuilder>>();
@@ -1307,6 +1459,10 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         if (variadic)
             varargs.Pack(instruction);
+        // A runtime method (a SIMD128 helper) may take vectors of other lanes than the call passes: reinterpreted.
+        MethodInfo? runtime = !variadic && Llvm.LLVMIsAFunction(target) != 0 &&
+            (Compiler.Methods.TryGetValue(target, out MethodInfo? resolved) ? resolved : Compiler.ResolveFunction(target)) is MethodInfo direct &&
+            direct is not MethodBuilder ? direct : null;
         uint count = variadic || Llvm.LLVMIsAFunction(target) != 0 ? Llvm.LLVMCountParamTypes(signature) : Llvm.LLVMGetNumArgOperands(instruction);
         for (uint index = 0; index < count; index++)
         {
@@ -1323,6 +1479,8 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Il.Emit(TypeSystem.Kind(parameter) == 12 ? OpCodes.Conv_I : TypeSystem.Width(parameter) == 64 ? OpCodes.Conv_U8 : OpCodes.Conv_I4);
                 Normalize(parameter);
             }
+            if (runtime is not null && index < runtime.GetParameters().Length)
+                Vectors.Reinterpret(Types.Map(Llvm.LLVMTypeOf(argument)), runtime.GetParameters()[index].ParameterType);
         }
         if (variadic)
             varargs.Load();
@@ -1391,6 +1549,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         if (legacyComplete is Label completeLegacy) Il.MarkLabel(completeLegacy);
         if (discardReturn) Il.Emit(OpCodes.Pop);
+        else if (runtime is not null) Vectors.Reinterpret(runtime.ReturnType, Types.Map(Llvm.LLVMGetReturnType(signature)));
         else if (Types.ReturnsBytes(Llvm.LLVMGetReturnType(signature))) Vectors.FromBoundary(Llvm.LLVMGetReturnType(signature));
         if (truncateBooleanReturn) Normalize(Llvm.LLVMTypeOf(instruction));
         if (convertReturn is not null) Il.Emit(convertReturn == typeof(nint) ? OpCodes.Conv_I : OpCodes.Conv_I8);
@@ -1603,6 +1762,17 @@ internal sealed class FunctionEmitter : ValueEmitter
             registers = 4;
             arguments = 2;
         }
+        else if (assembly == "  xchg$(q$|$)  $(%$|$)rbx,${1:q}\n  cpuid\n  xchg$(q$|$)  $(%$|$)rbx,${1:q}")
+        {
+            // Clang's <cpuid.h> on x86-64: __cpuid, and __cpuid_count with the subleaf in ECX.
+            registers = 4;
+            arguments = constraints switch
+            {
+                "={ax},=r,={cx},={dx},0,~{dirflag},~{fpsr},~{flags}" => 1,
+                "={ax},=r,={cx},={dx},0,2,~{dirflag},~{fpsr},~{flags}" => 2,
+                _ => 0
+            };
+        }
         else if (assembly == ".byte 0x0f, 0x01, 0xd0" && constraints == "={ax},={dx},{cx},~{dirflag},~{fpsr},~{flags}")
         {
             registers = 2;
@@ -1617,6 +1787,11 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     private void Intrinsic(nint instruction, string name)
     {
+        if (TargetIntrinsics.Helper(name) is MethodInfo target)
+        {
+            TargetIntrinsic(instruction, name, target);
+            return;
+        }
         if (Vectors.Intrinsic(instruction, name))
             return;
         if (name == "llvm.get.rounding")
@@ -2286,17 +2461,48 @@ internal sealed class FunctionEmitter : ValueEmitter
     }
 
     /// <summary>
+    /// A call of a target intrinsic the runtime implements (<see cref="TargetIntrinsics"/>): the operands, vectors
+    /// converted to the helper's lanes, then the helper, whose vector result is converted back. Scalar operands pass as
+    /// they are: an i8, i16 or i32 as the helper's int, an i64 as its long, a pointer as its nint.
+    /// </summary>
+    private void TargetIntrinsic(nint instruction, string name, MethodInfo helper)
+    {
+        static bool IsVector(Type type) => type.IsGenericType && (type.GetGenericTypeDefinition() == typeof(System.Runtime.Intrinsics.Vector128<>) ||
+            type.GetGenericTypeDefinition() == typeof(System.Runtime.Intrinsics.Vector256<>));
+        ParameterInfo[] parameters = helper.GetParameters();
+        if (parameters.Length != Llvm.LLVMGetNumArgOperands(instruction))
+            throw new NotSupportedException($"{name} has {Llvm.LLVMGetNumArgOperands(instruction)} operands where its runtime helper takes {parameters.Length}.");
+        for (uint index = 0; index < parameters.Length; index++)
+        {
+            nint operand = Llvm.LLVMGetOperand(instruction, index);
+            nint type = Llvm.LLVMTypeOf(operand);
+            Type expected = parameters[index].ParameterType, actual = Types.Map(type);
+            if (IsVector(expected) && !IsVector(actual))
+                throw new NotSupportedException($"{name} needs the typed vector lowering, which --vector-lowering=scalar turns off.");
+            if (!IsVector(expected) && (expected == typeof(int) ? TypeSystem.Kind(type) != 8 || TypeSystem.Width(type) > 32 : expected != actual))
+                throw new NotSupportedException($"{name}: operand {index} is {Llvm.PrintType(type)} where its runtime helper takes {expected.Name}.");
+            Load(operand);
+            if (IsVector(expected)) Vectors.Convert(actual, expected);
+        }
+        Il.Emit(OpCodes.Call, helper);
+        if (IsVector(helper.ReturnType)) Vectors.Convert(helper.ReturnType, Types.Map(Llvm.LLVMTypeOf(instruction)));
+    }
+
+    /// <summary>
     /// The x86 target intrinsics the backend translates: the spin-wait hint, which libstdc++'s atomic waits use on
-    /// x86-64, and the SSE fences. They carry no vector data; every other llvm.x86 intrinsic comes from an SSE or AVX
-    /// code path and is rejected when a module is translated, after a warning when its unit was compiled (Driver).
+    /// x86-64, the SSE fences, and the SSE to SSE4.2 intrinsics the runtime implements (<see cref="TargetIntrinsics"/>).
+    /// Every other llvm.x86 intrinsic (MMX, AVX and later, the MXCSR write) is rejected when a module is translated, after
+    /// a warning when its unit was compiled (Driver).
     /// </summary>
     internal static bool TranslatesX86Intrinsic(string name) =>
-        name is "llvm.x86.sse2.pause" or "llvm.x86.sse2.mfence" or "llvm.x86.sse2.lfence" or "llvm.x86.sse.sfence";
+        name is "llvm.x86.sse2.pause" or "llvm.x86.sse2.mfence" or "llvm.x86.sse2.lfence" or "llvm.x86.sse.sfence" || TargetIntrinsics.Helper(name) is not null;
 
     internal static string X86IntrinsicMessage(string name, bool system, bool compiling = false) =>
-        $"x86 target intrinsic {name} is not translated{(compiling ? ", so linking a program that reaches it fails" : "")}; build the code's portable C path instead" + (system
-            ? " (system mode predefines __SSE__ and __SSE2__ as native x86-64 does, and libraries usually select their SSE paths by them: try -U__SSE__ -U__SSE2__ or the library's own SIMD option)"
-            : "");
+        $"x86 target intrinsic {name} is not translated{(compiling ? ", so linking a program that reaches it fails" : "")}; " + (name == "llvm.x86.sse.ldmxcsr"
+            ? "translated code keeps the default MXCSR (round to nearest, no flush to zero), so _mm_setcsr and the _MM_SET macros cannot change it"
+            : "llvmnet translates the SSE to SSE4.2 and PCLMULQDQ intrinsics, so build the code's SSE4.2, SSE2 or C path instead" + (system
+                ? " (system mode takes the instruction sets of -m and -march as native code does: try -march=x86-64-v2 or the library's own SIMD option)"
+                : " (--isa=x86-64-v2 selects SSE4.2 paths, the baseline a library's C paths)"));
 
     private unsafe void Aggregate(nint instruction, bool insert)
     {

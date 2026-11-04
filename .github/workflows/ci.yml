@@ -120,9 +120,10 @@ jobs:
       # PF-01: the benchmark set against native builds, with the regression thresholds against tests/perf/baseline.tsv.
       # It runs last, alone, so the measurements are not disturbed; a confirmed regression fails the job. Three runs
       # per engine instead of five keep it near an hour on the runner; the thresholds judge each benchmark's fastest run.
+      # --vectorized adds the vectorized engines (SV-05), which are reported without a baseline and about double the time.
       - name: Benchmarks (PF-01)
         if: always()
-        run: python3 scripts/benchmark.py --repeats 3 --output artifacts/bench/nightly
+        run: python3 scripts/benchmark.py --repeats 3 --vectorized --output artifacts/bench/nightly
       - uses: actions/upload-artifact@v4
         with:
           name: xp-bundle
