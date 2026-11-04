@@ -1,6 +1,6 @@
 # Gates
 
-Which tests run when, and what each must reach to pass. The workflows are `.github/workflows/ci.yml` (pull requests, pushes and the nightly schedule) and `.github/workflows/release.yml` (a version tag); the selections are `tests/run.sh` tags ([testing.md](testing.md)). A suite's pass rate counts only the tests that pass natively (clang-22, flang-22, glibc), so it measures parity with a native build. The thresholds are set in the workflow; they are proposals for the owner until accepted ([decisions](../plan/decisions.md#proposed-for-the-owner-2026-11-01-m9)).
+Which tests run when, and what each must reach to pass. The workflows are `.github/workflows/ci.yml` (pull requests, pushes and the nightly schedule) and `.github/workflows/release.yml` (a version tag); the selections are `tests/run.sh` tags ([testing.md](testing.md)). A suite's pass rate counts only the tests that pass natively (clang-22, flang-22, glibc), so it measures parity with a native build. The thresholds are set in the workflow, by the policy the owner accepted on 2026-11-05 ([decisions](../plan/decisions.md#decided-by-the-owner-2026-11-01-m9)).
 
 ## Pull request
 

@@ -1,6 +1,6 @@
 # Workstream JP: CIL shaped for RyuJIT
 
-Prefix `JP`. Owner: unassigned. Milestone: [M12](README.md#m12-cil-shaped-for-ryujit), proposed 2026-11-04; its placement before or after 1.0 is the owner's decision. The decision this workstream depends on is [ADR-17](decisions.md#adr-17-readytorun-for-jit-deployments) (Proposed), which only JP-06 and JP-10 need. The other items change the CIL and `runtimeconfig.json` llvmnet emits, and keep the image one platform-neutral file.
+Prefix `JP`. Owner: unassigned. Milestone: [M12](README.md#m12-cil-shaped-for-ryujit), proposed 2026-11-04 and placed before 1.0 by the owner on 2026-11-05, in the order JP-02, JP-03 and JP-04, JP-05, then ReadyToRun. [ADR-17](decisions.md#adr-17-readytorun-for-jit-deployments), which only JP-06 and JP-10 need, is accepted (option 3: opt-in for one runtime identifier). The other items change the CIL and `runtimeconfig.json` llvmnet emits, and keep the image one platform-neutral file.
 
 The owner asked whether CoreCLR's JIT (RyuJIT, .NET 10 and 11) is tuned for particular shapes of IL, and whether llvmnet can emit those shapes. It is, in three ways that matter for translated C and C++. There are hard per-method limits, past which the JIT stops optimizing or inlining. A few IL forms compile much better than their equivalents. And the tiering policy assumes programs that stop calling new methods soon after start-up. The reading of the JIT's sources and the experiments behind this page are in [evidence/2026-11-04-jit-patterns.md](../evidence/2026-11-04-jit-patterns.md).
 

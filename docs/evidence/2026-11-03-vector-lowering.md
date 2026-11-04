@@ -170,7 +170,7 @@ Vectorized, the kernels other than paeth run 2.2 to 4.9 times faster than llvmne
 
 ### What remains
 
-The survey's library reproducers (Skia's nanobench subset, libjxl, dav1d, libjpeg-turbo and Opus) were not rebuilt with the vectorizers, and the SLP minimum register size was not varied separately (`-fno-slp-vectorize` bounds its effect). The decision on the default is the owner's ([proposal](../plan/decisions.md#proposed-for-the-owner-2026-11-04-sv-05)).
+The survey's library reproducers (Skia's nanobench subset, libjxl, dav1d, libjpeg-turbo and Opus) were not rebuilt with the vectorizers, and the SLP minimum register size was not varied separately (`-fno-slp-vectorize` bounds its effect). The decision on the default is the owner's ([proposal](../plan/decisions.md#decided-by-the-owner-2026-11-04-sv-05)).
 
 ## SV-06: 256-bit fragments
 

@@ -84,7 +84,7 @@ The SSE group gains nothing natively on this workload and costs 3 to 6% under ll
 
 ## NativeAOT instruction sets
 
-ILC's default instruction set on x64 is SSE2 with SSSE3 to SSE4.2 as opportunistic sets. The helpers test those at run time, but the `Vector128` operations the typed lowering emits for the same code's generic IR are compiled for SSE2: 32-bit multiplies, minimums and maximums, lane inserts and extracts become SSE2 sequences, as SV-05 found for `perlin`. astc-encoder's SSE4.1 build runs 4.41 s at the baseline against 2.42 s at `x86-64-v2`. A program compiled with `-march=x86-64-v2` requires an SSE4.2 processor natively, so the driver gives a NativeAOT program whose image records `x86-64-v2` ILC's `x86-64-v2` instruction set unless `--aot-instruction-set` says otherwise ([proposal](../plan/decisions.md#proposed-for-the-owner-2026-11-04-sv-08)).
+ILC's default instruction set on x64 is SSE2 with SSSE3 to SSE4.2 as opportunistic sets. The helpers test those at run time, but the `Vector128` operations the typed lowering emits for the same code's generic IR are compiled for SSE2: 32-bit multiplies, minimums and maximums, lane inserts and extracts become SSE2 sequences, as SV-05 found for `perlin`. astc-encoder's SSE4.1 build runs 4.41 s at the baseline against 2.42 s at `x86-64-v2`. A program compiled with `-march=x86-64-v2` requires an SSE4.2 processor natively, so the driver gives a NativeAOT program whose image records `x86-64-v2` ILC's `x86-64-v2` instruction set unless `--aot-instruction-set` says otherwise ([proposal](../plan/decisions.md#decided-by-the-owner-2026-11-04-sv-08)).
 
 ## What it found besides
 
