@@ -91,7 +91,7 @@ internal static class DriverOptions
     private const string PortableAbiReason = "it would change the versioned portable ABI (" + PortableAbi.Tag + "), whose target, data layout and headers are fixed; use --runtime=system for a native target";
     private const string NativeLinkerReason = "llvmnet links LLVM bitcode and emits CIL, so native linker options have no equivalent";
     private const string PositionReason = "position independence is a property of native code; CIL has none";
-    private const string VectorNote = "Clang's default; llvmnet adds -fno-vectorize -fno-slp-vectorize unless -fvectorize or -fslp-vectorize is given";
+    private const string VectorNote = "Clang's default: the vectorizers run at -O2, -O3, -Os and -Ofast, not at llvmnet's default -O1";
 
     private static readonly Handling H = Handling.Handled, F = Handling.Forwarded, I = Handling.Ignored, R = Handling.Rejected;
 
@@ -187,7 +187,7 @@ internal static class DriverOptions
         new("--print-option-table", OptionKind.Flag, Hidden, "", H),
         new("--print-host-limitations", OptionKind.Flag, Hidden, "", H),
         // Frontend options: the documented examples; every other option that starts with - is forwarded as well.
-        new("-O", OptionKind.Joined, Frontend, "Optimization level. The default is -O1 without automatic vectorization (ADR-11); -O0 is accepted and -O3 fully tested", F, value: "<level>"),
+        new("-O", OptionKind.Joined, Frontend, "Optimization level. The default is -O1, which does not vectorize (ADR-11); -O2 and above vectorize as in Clang; -O0 is accepted and -O3 fully tested", F, value: "<level>"),
         new("-fvectorize", OptionKind.Flag, Frontend, "Enable loop vectorization (also -fslp-vectorize); the vector IR is lowered to Vector128 operations (ADR-16)", F),
         new("-fslp-vectorize", OptionKind.Flag, Hidden, "", F),
         new("-std=", OptionKind.Joined, Frontend, "Language standard; the defaults are the frontends' own (gnu17 for C, gnu++17 for C++, Fortran 2018)", F, value: "<standard>"),

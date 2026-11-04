@@ -151,7 +151,7 @@ for source_spec in "${sources[@]}"; do
             -I"$source_root/../include" -I"$source_root/../libiberty")
     fi
     object="$build/${source_spec//\//_}.o"
-    "$root/bin/llvmnet" --runtime=system -std="$standard" -O2 -fPIC "${compiler_args[@]}" \
+    "$root/bin/llvmnet" --runtime=system -std="$standard" -O2 -fno-vectorize -fno-slp-vectorize -fPIC "${compiler_args[@]}" \
         -Wno-init-priority-reserved -Wno-unknown-warning-option \
         -I"$build/include" -I"$source_root/libsupc++" -I"$source_root/src" -I"$source_root/src/c++11" \
         -c "$source_root/$source" -o "$object"

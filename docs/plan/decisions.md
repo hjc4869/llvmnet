@@ -145,6 +145,8 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Decision (2026-10-31).** Accepted by the owner: `-O1` without vectorization stays the default, and the driver reference states the difference from Clang's `-O0` (TC-03).
 
+**Amendment (2026-11-05).** Decided by the owner after SV-05's measurements ([decision](#decided-by-the-owner-2026-11-04-sv-05)): `-O1` stays the default, and the level decides vectorization as in Clang. `-O1` stays scalar; `-O2`, `-O3`, `-Os` and `-Ofast` run the loop and SLP vectorizers in both runtime modes, and `-fno-vectorize` and `-fno-slp-vectorize` turn them off. The driver no longer passes `-fno-vectorize -fno-slp-vectorize`. The sysroot's runtime libraries are still built with them, as SV-05 measured them, and so are the benchmark harness's scalar columns.
+
 ## ADR-12: Debug information in 1.0
 
 **Context.** No debug information is emitted; stack traces show LLVM symbol names only.

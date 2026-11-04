@@ -40,7 +40,7 @@ for name in ISO_Fortran_binding allocator-registry allocatable array-constructor
 done
 sources+=("$runtime/complex-reduction.c")
 mkdir -p "$prefix/lib"
-printf '%s\n' "${mode[@]}" -c -O2 -fno-exceptions -fno-rtti -Wno-everything \
+printf '%s\n' "${mode[@]}" -c -O2 -fno-vectorize -fno-slp-vectorize -fno-exceptions -fno-rtti -Wno-everything \
     -I"$llvm/flang-rt/include" -I"$llvm/flang/include" -I"$build/generated" -I"$runtime" -D_GLIBCXX_NO_ASSERTIONS >"$build/flags.txt"
 export LLVMNET_SKIP_BUILD=1 build root llvm
 compile() {

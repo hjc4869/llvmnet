@@ -44,8 +44,8 @@ endforeach()
 # Probes link (and try_run runs) real programs, as with a native compiler, so a probe for a function or a feature that
 # does not exist fails. Programs are a launcher beside a managed image; the launcher runs as it is.
 set(CMAKE_CROSSCOMPILING_EMULATOR env)
-set(CMAKE_C_FLAGS_INIT "-O1 -fno-vectorize -fno-slp-vectorize -fno-stack-protector")
-set(CMAKE_CXX_FLAGS_INIT "-O1 -fno-vectorize -fno-slp-vectorize -fno-stack-protector")
+set(CMAKE_C_FLAGS_INIT "-O1 -fno-stack-protector")
+set(CMAKE_CXX_FLAGS_INIT "-O1 -fno-stack-protector")
 
 # CMake identifies a compiler by reading INFO strings out of an object a probe compiles, and llvmnet's objects are LLVM
 # bitcode, where those strings cannot be read. llvmnet is Clang with one 64-bit little-endian data layout in both modes,
