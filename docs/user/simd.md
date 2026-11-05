@@ -48,6 +48,8 @@ The level changes no data layout: objects of every level link together, and the 
 | ARM64 (macOS, Linux, Windows), JIT and NativeAOT | NEON instructions | halves | AdvSimd's instruction where one has the same meaning, else composed |
 | `DOTNET_EnableHWIntrinsic=0` | software | software | composed |
 
+At NativeAOT's default instruction set on x64, vector code built at `-O2` can run slower than the same program built scalar, because the SSE4.1 operations the vectorizers use are composed from SSE2 there: dav1d decodes 1.26 times slower than its scalar build, and 1.35 times faster with `--aot-instruction-set x86-64-v2`, which requires an x64 processor from about 2009 on ([evidence](../evidence/2026-11-03-vector-lowering.md#the-surveys-libraries-2026-11-05)). Making that the default for vectorized programs is proposed for the owner.
+
 The results are the same everywhere, bit for bit, apart from the NaN payloads and approximations [x86-intrinsics.md](x86-intrinsics.md#exactness) lists. A few measured cases, each against the same library's scalar build with llvmnet:
 
 | Code | Gain | Against native | Evidence |

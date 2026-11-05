@@ -31,6 +31,7 @@ scripts/benchmark.py --group micro --repeats 3      # one group
 scripts/benchmark.py --only 'olden-*,fannkuch'      # selected benchmarks
 scripts/benchmark.py --engines native,jit           # skip the NativeAOT builds
 scripts/benchmark.py --vectorized                   # also the vectorized engines (SV-05)
+scripts/benchmark.py --aot-instruction-set x86-64-v2  # the NativeAOT engines at another instruction set
 scripts/benchmark.py --validate-only                # build and check outputs, measure nothing
 scripts/benchmark.py --update-baseline              # write this run's medians to tests/perf/baseline.tsv
 scripts/benchmark.py --compare artifacts/bench/<run>/results.tsv   # apply the thresholds to an earlier run

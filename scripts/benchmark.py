@@ -25,6 +25,7 @@ geomean tolerance. A regression must reproduce in a second measurement before it
     scripts/benchmark.py --vectorized             also the vectorized engines (SV-05): native-vec, jit-vec, aot-vec
     scripts/benchmark.py --vectorized --vector-flags="-O2 -fvectorize -fslp-vectorize -mllvm -force-vector-interleave=1"
                                                   the vectorized engines with other flags (both compilers)
+    scripts/benchmark.py --aot-instruction-set x86-64-v2   the NativeAOT engines at another instruction set
 
 The vectorized engines build the same sources with -O2 -fvectorize -fslp-vectorize on both compilers; their ratio is
 to native-vec, whose own ratio is to the scalar native build (native's vectorization gain). The ffmpeg decoder has
@@ -66,6 +67,8 @@ engines_scalar = ("native", "jit", "aot")
 # vectorized column is SV-05's), so the native build turns it off too and the ratio measures the translation.
 common_flags = ["-O2", "-fno-vectorize", "-fno-slp-vectorize", "-w"]
 vector_flags = ["-O2", "-fvectorize", "-fslp-vectorize", "-w"]
+# Extra llvmnet options of the NativeAOT engines' publishes (--aot-instruction-set).
+aot_options = []
 # Thresholds (proposed for the owner in docs/plan/decisions.md): a benchmark regresses when its host-normalized time
 # grows by more than 25%, an engine when the geometric mean grows by more than 10%.
 default_tolerance = 0.25
@@ -193,7 +196,7 @@ def build_program(benchmark, engines, suite, output):
         if "aot" in engines:
             executable = build / "aot" / benchmark.name
             executable.parent.mkdir(exist_ok=True)
-            if run_logged([llvmnet, "--runtime=portable", "--nativeaot", bitcode, "-o", executable], log_path):
+            if run_logged([llvmnet, "--runtime=portable", "--nativeaot", *aot_options, bitcode, "-o", executable], log_path):
                 return f"NativeAOT build failed (see {log_path})"
             benchmark.programs["aot"] = [str(executable)]
     if "jit-vec" in engines or "aot-vec" in engines:
@@ -208,7 +211,7 @@ def build_program(benchmark, engines, suite, output):
         if "aot-vec" in engines:
             executable = build / "vec" / "aot" / benchmark.name
             executable.parent.mkdir(exist_ok=True)
-            if run_logged([llvmnet, "--runtime=portable", "--nativeaot", bitcode, "-o", executable], log_path):
+            if run_logged([llvmnet, "--runtime=portable", "--nativeaot", *aot_options, bitcode, "-o", executable], log_path):
                 return f"vectorized NativeAOT build failed (see {log_path})"
             benchmark.programs["aot-vec"] = [str(executable)]
     return None
@@ -234,7 +237,7 @@ def prepare_ffmpeg(benchmarks, engines, output, rebuild):
     if "aot" in engines:
         executable = output / "build" / "ffmpeg" / "decode-aot"
         executable.parent.mkdir(parents=True, exist_ok=True)
-        if run_logged([llvmnet, "--runtime=portable", "--nativeaot", portable / "decode.bc", "-o", executable], log_path):
+        if run_logged([llvmnet, "--runtime=portable", "--nativeaot", *aot_options, portable / "decode.bc", "-o", executable], log_path):
             return f"ffmpeg NativeAOT build failed (see {log_path})"
         programs["aot"] = [str(executable)]
     clip_directory = root / "artifacts" / "bench" / "clips"
@@ -595,6 +598,7 @@ def metadata_for(arguments):
         "repeats": arguments.repeats,
         "jit_environment": " ".join(arguments.env),
         "vector_flags": " ".join(vector_flags),
+        "aot_options": " ".join(aot_options),
         "tolerance": arguments.tolerance,
         "geomean_tolerance": arguments.geomean_tolerance,
     }
@@ -607,6 +611,7 @@ def main():
     parser.add_argument("--engines", default=",".join(engines_scalar), help="comma-separated: native, jit, aot, native-vec, jit-vec, aot-vec")
     parser.add_argument("--vectorized", action="store_true", help="add the vectorized engines native-vec, jit-vec and aot-vec")
     parser.add_argument("--vector-flags", help=f"the vectorized engines' compiler flags (default: {' '.join(vector_flags)})")
+    parser.add_argument("--aot-instruction-set", help="the NativeAOT engines' instruction set (llvmnet's --aot-instruction-set; default: llvmnet's)")
     parser.add_argument("--repeats", type=int, default=5, help="measured runs per engine (default 5)")
     parser.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1), help="parallel builds")
     parser.add_argument("--timeout", type=int, default=600, help="seconds per process (default 600)")
@@ -628,6 +633,8 @@ def main():
         jit_environment[name] = value
     if arguments.vector_flags:
         vector_flags[:] = shlex.split(arguments.vector_flags)
+    if arguments.aot_instruction_set:
+        aot_options[:] = ["--aot-instruction-set", arguments.aot_instruction_set]
     if "native" not in engines:
         parser.error("--engines must include native, the reference for validation and the ratios")
 
