@@ -194,6 +194,34 @@ internal sealed class CilCompiler(CompilerOptions options)
     }
 
     /// <summary>
+    /// Marks the translated methods past RyuJIT's IL, block or local thresholds AggressiveOptimization (JP-05). The
+    /// tiered JIT compiles such a method with minimal optimization at its first call, then again for tier 1, where the
+    /// recompilation falls back to MinOpts too and the runtime discards it (TieredCompilationManager); with the flag it
+    /// is compiled once. Methods past only the instruction or reference thresholds stay unmarked: a tier-0 compilation
+    /// that switches to full optimization does not see those two counts (LimitsReport), and the flag would make such a
+    /// method MinOpts code (ffmpeg's ff_h264_filter_mb). The flag is set in the serialized MethodDef rows, as the counts
+    /// come from the finished IL. NativeAOT compiles every method fully regardless.
+    /// </summary>
+    private static void CompileOnce(byte[] image, HashSet<string> translated)
+    {
+        var offsets = new List<int>();
+        using (var stream = new MemoryStream(image, false))
+        using (var reader = new PEReader(stream))
+        {
+            MetadataReader metadata = reader.GetMetadataReader();
+            int table = reader.PEHeaders.MetadataStartOffset + metadata.GetTableMetadataOffset(TableIndex.MethodDef);
+            int rowSize = metadata.GetTableRowSize(TableIndex.MethodDef);
+            foreach ((int token, (string name, LimitsReport.Counts counts)) in LimitsReport.Measure(reader))
+                if (counts.Always && translated.Contains(name))
+                    // A MethodDef row starts with its 4-byte RVA, then the 2-byte implementation flags.
+                    offsets.Add(table + (MetadataTokens.GetRowNumber(MetadataTokens.EntityHandle(token)) - 1) * rowSize + 4);
+        }
+        foreach (int offset in offsets)
+            BinaryPrimitives.WriteUInt16LittleEndian(image.AsSpan(offset, 2),
+                (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(image.AsSpan(offset, 2)) | (ushort)MethodImplAttributes.AggressiveOptimization));
+    }
+
+    /// <summary>
     /// Replaces the random module version ID and the time-based PE timestamp with values derived from a
     /// SHA-256 of the image (with those fields zeroed), so identical inputs produce identical assemblies.
     /// </summary>
@@ -405,12 +433,14 @@ internal sealed class CilCompiler(CompilerOptions options)
         pe.Serialize(image);
         byte[] executable = image.ToArray();
         FinalizeIndirectCalls(executable, indirectFixups);
+        HashSet<string> translated = [.. Methods.Values.OfType<MethodBuilder>().Select(method => method.Name)];
+        CompileOnce(executable, translated);
         MakeDeterministic(executable);
         if (options.ReportSimd)
             SimdReport.Write(executable, scalarized, reductions, types.FragmentBits, Console.Error);
         if (options.DiagnoseLimits)
             LimitsReport.Write(executable, Methods.Where(pair => pair.Value is MethodBuilder).ToDictionary(pair => pair.Value.Name, pair =>
-                (Llvm.Blocks(pair.Key).Count(), Llvm.Blocks(pair.Key).Sum(block => Llvm.Instructions(block).Count()))), Console.Error);
+                Llvm.Blocks(pair.Key).Sum(block => Llvm.Instructions(block).Count())), Console.Error);
         File.WriteAllBytes(output, executable);
         File.WriteAllText(Path.ChangeExtension(output, ".runtimeconfig.json"), JsonSerializer.Serialize(new
         {
