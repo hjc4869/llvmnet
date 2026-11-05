@@ -186,11 +186,12 @@ def build_program(benchmark, engines, suite, output):
         if run_logged([compiler, *vector_flags, *native_flags, *sources, *links, "-o", program], log_path):
             return f"vectorized native build failed (see {log_path})"
         benchmark.programs["native-vec"] = [str(program)]
-        if benchmark.compare == "musl":
-            oracle = build / "native-musl"
-            if run_logged(["bash", root / "scripts" / "musl-native-cc.sh", *common_flags, *native_flags, *sources, "-o", oracle], log_path):
-                return f"native musl build failed (see {log_path})"
-            benchmark.programs["musl"] = [str(oracle)]
+    # The reference output of a program that depends on glibc behavior musl does not share, whichever engines run.
+    if benchmark.compare == "musl" and ("native" in engines or "native-vec" in engines):
+        oracle = build / "native-musl"
+        if run_logged(["bash", root / "scripts" / "musl-native-cc.sh", *common_flags, *native_flags, *sources, "-o", oracle], log_path):
+            return f"native musl build failed (see {log_path})"
+        benchmark.programs["musl"] = [str(oracle)]
     if "jit" in engines or "aot" in engines:
         mode = ["--driver-mode=g++"] if benchmark.cxx else []
         program = build / f"{benchmark.name}.dll"
@@ -757,7 +758,7 @@ def main():
         errors += problems
         if not problems:
             log(f"PASS: {benchmark.name} output matches native ({', '.join(engine for engine in engines_for(benchmark, engines) if engine != 'native')})")
-    invalid = {problem.split()[0] for problem in errors}
+    invalid = {problem.split()[0].rstrip(":") for problem in errors}
     ready = [benchmark for benchmark in ready if benchmark.name not in invalid]
     with open(output / "minopts.tsv", "w") as file:
         file.write("benchmark\tengine\tmethod\n")
