@@ -4,6 +4,8 @@ Code written against Clang's x86 intrinsic headers runs in both runtime modes, f
 
 Clang lowers about half of these intrinsics to generic LLVM vector IR, which the typed vector lowering translates to `Vector128<T>` code ([ADR-16](../plan/decisions.md#adr-16-simd-levels) Level 1). The others stay x86 target intrinsics (`llvm.x86.*`), such as `psadbw`, `pmaddwd`, `pshufb`, the saturating packs, `minps`, `cvtps2dq`, `dpps`, `ptest`, `crc32` and the SSE4.2 string comparisons. Each of those becomes a call of a helper in [src/LlvmNet.Runtime/Simd/X86.cs](../../src/LlvmNet.Runtime/Simd/X86.cs) or, for x86-64-v3's, [X86Avx.cs](../../src/LlvmNet.Runtime/Simd/X86Avx.cs) (Level 2), which the JIT and NativeAOT inline. A helper runs the x86 instruction behind an explicit `IsSupported` test, the AdvSimd instruction of the same meaning on ARM64 where one exists, and a composition of `Vector128` operations elsewhere. A 256-bit helper without AVX or AVX2 runs the 128-bit helper on each half, which is exact because those instructions work within 128-bit lanes; the permutes, gathers, masked loads and stores and tests across lanes have compositions of their own. .NET does not accelerate `Vector256` without AVX2, so the fallbacks never compute with whole `Vector256` values.
 
+[simd.md](simd.md) puts the intrinsics beside the other forms of vector code (the vectorizers, vector extensions, assembly) and shows what to expect per host; `--report-simd` lists the helpers a program calls with the instruction sets each one uses on x64 and ARM64.
+
 ## Selecting the level
 
 ```sh
@@ -20,7 +22,7 @@ The level is recorded in each object compiled with `--isa` or one of its portabl
 
 ## NativeAOT
 
-A NativeAOT executable whose objects were compiled at `x86-64-v2` gets the NativeAOT compiler's `x86-64-v2` instruction set: it requires an x64 processor with SSE4.2 and POPCNT (since about 2009), as native code compiled with `-march=x86-64-v2` does; one with objects at `x86-64-v3` gets `x86-64-v3` and requires AVX2, BMI2 and FMA (since about 2015). `--aot-instruction-set baseline` keeps SSE2, with SSE4.2 as an opportunistic set: the helpers then test it at run time, but the generic `Vector128` operations of the same code are compiled for SSE2, and astc-encoder's SSE4.1 build compresses 1.8 times slower there than at `x86-64-v2` ([evidence](../evidence/2026-11-04-x86-intrinsics.md#nativeaot-instruction-sets)). `x86-64-v3` and `native` select more. Relocatable projects (`--aot-project`) apply the x64 levels only when they are published for an x64 runtime identifier.
+A NativeAOT executable with vector code ([simd.md](simd.md#choosing-a-level)) or whose objects were compiled at `x86-64-v2` gets the NativeAOT compiler's `x86-64-v2` instruction set: it requires an x64 processor with SSE4.2 and POPCNT (since about 2009), as native code compiled with `-march=x86-64-v2` does; one with objects at `x86-64-v3` gets `x86-64-v3` and requires AVX2, BMI2 and FMA (since about 2015). `--aot-instruction-set baseline` keeps SSE2, with SSE4.2 as an opportunistic set: the helpers then test it at run time, but the generic `Vector128` operations of the same code are compiled for SSE2, and astc-encoder's SSE4.1 build compresses 1.8 times slower there than at `x86-64-v2` ([evidence](../evidence/2026-11-04-x86-intrinsics.md#nativeaot-instruction-sets)). `x86-64-v3` and `native` select more. Relocatable projects (`--aot-project`) apply the x64 levels only when they are published for an x64 runtime identifier.
 
 ## Exactness
 

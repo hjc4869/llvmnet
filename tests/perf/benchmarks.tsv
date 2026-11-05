@@ -1,6 +1,7 @@
 # Benchmark set (PF-01) for scripts/benchmark.py; proposed for the owner in docs/plan/decisions.md.
 # Tab-separated: name, group, sources, flags, arguments, comparison, [check arguments].
-#   group        micro (tests/perf), suite (llvm-test-suite), ffmpeg (decode harness), startup (left out of means)
+#   group        micro (tests/perf), suite (llvm-test-suite), ffmpeg (decode harness), startup (left out of means), simd
+#                (vector kernels at each ISA level, run by the vectorized engines only and left out of the set's means)
 #   sources      repository paths or suite:<path under llvm-test-suite>, globs allowed; for ffmpeg the clip name
 #   flags        extra flags for both compilers ({dir} is the first source's directory); - for none
 #   arguments    the measured run's arguments, run in a directory holding links to the source directory's data
@@ -62,6 +63,24 @@ sha	suite	suite:MultiSource/Benchmarks/MiBench/security-sha/*.c	-	input_large.as
 susan	suite	suite:MultiSource/Benchmarks/MiBench/automotive-susan/*.c	-Wno-implicit-int	input_large.pgm /dev/null -s	exact
 mafft	suite	suite:MultiSource/Benchmarks/mafft/Calignm1.c suite:MultiSource/Benchmarks/mafft/constants.c suite:MultiSource/Benchmarks/mafft/defs.c suite:MultiSource/Benchmarks/mafft/Falign.c suite:MultiSource/Benchmarks/mafft/fft.c suite:MultiSource/Benchmarks/mafft/fftFunctions.c suite:MultiSource/Benchmarks/mafft/Galign11.c suite:MultiSource/Benchmarks/mafft/genalign11.c suite:MultiSource/Benchmarks/mafft/genGalign11.c suite:MultiSource/Benchmarks/mafft/Halignmm.c suite:MultiSource/Benchmarks/mafft/io.c suite:MultiSource/Benchmarks/mafft/Lalign11.c suite:MultiSource/Benchmarks/mafft/Lalignmm.c suite:MultiSource/Benchmarks/mafft/mltaln9.c suite:MultiSource/Benchmarks/mafft/MSalign11.c suite:MultiSource/Benchmarks/mafft/MSalignmm.c suite:MultiSource/Benchmarks/mafft/mtxutl.c suite:MultiSource/Benchmarks/mafft/pairlocalalign.c suite:MultiSource/Benchmarks/mafft/partQalignmm.c suite:MultiSource/Benchmarks/mafft/partSalignmm.c suite:MultiSource/Benchmarks/mafft/Qalignmm.c suite:MultiSource/Benchmarks/mafft/Ralignmm.c suite:MultiSource/Benchmarks/mafft/rna.c suite:MultiSource/Benchmarks/mafft/SAalignmm.c suite:MultiSource/Benchmarks/mafft/Salignmm.c suite:MultiSource/Benchmarks/mafft/suboptalign11.c suite:MultiSource/Benchmarks/mafft/tddis.c	-DLLVM	-b 62 -g 0.100 -f 2.00 -h 0.100 -L <pyruvate_decarboxylase.fasta	exact
 nbench	suite	suite:MultiSource/Benchmarks/nbench/*.c	-DBASE_ITERATIONS=25 -Wno-implicit-function-declaration	-	status
+simd-saxpy	simd	tests/perf/simd-kernels.c	-ffp-contract=off	saxpy	exact
+simd-i32mix	simd	tests/perf/simd-kernels.c	-ffp-contract=off	i32mix	exact
+simd-sad8	simd	tests/perf/simd-kernels.c	-ffp-contract=off	sad8	exact
+simd-dot16	simd	tests/perf/simd-kernels.c	-ffp-contract=off	dot16	exact
+simd-max8	simd	tests/perf/simd-kernels.c	-ffp-contract=off	max8	exact
+simd-fdot8	simd	tests/perf/simd-kernels.c	-ffp-contract=off	fdot8	exact
+simd-saxpy-v2	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v2	saxpy	exact
+simd-i32mix-v2	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v2	i32mix	exact
+simd-sad8-v2	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v2	sad8	exact
+simd-dot16-v2	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v2	dot16	exact
+simd-max8-v2	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v2	max8	exact
+simd-fdot8-v2	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v2	fdot8	exact
+simd-saxpy-v3	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v3	saxpy	exact
+simd-i32mix-v3	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v3	i32mix	exact
+simd-sad8-v3	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v3	sad8	exact
+simd-dot16-v3	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v3	dot16	exact
+simd-max8-v3	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v3	max8	exact
+simd-fdot8-v3	simd	tests/perf/simd-kernels.c	-ffp-contract=off --isa=x86-64-v3	fdot8	exact
 ffmpeg-hevc-1t	ffmpeg	hevc-1080p10	-	{clip} 100000 video 1 frame bench	exact	{clip} 100000 video 1 frame hash
 ffmpeg-hevc-4t	ffmpeg	hevc-1080p10	-	{clip} 100000 video 4 frame bench	exact	{clip} 100000 video 4 frame hash
 ffmpeg-h264-1t	ffmpeg	h264-1080p	-	{clip} 100000 video 1 frame bench	exact	{clip} 100000 video 1 frame hash

@@ -6,7 +6,7 @@
 # 64- to 512-bit vectors of i8 to i64, float and double, masks, shuffles, lane access and reductions, with edge
 # values, poison lanes masked and NaN canonicalized, compared bit for bit with the natively compiled module in both
 # modes with every translatable function typed, and in portable mode with the default lowering, with hardware
-# intrinsics disabled and as NativeAOT, and with --vector-width=256 (Vector256 fragments) under the JIT with and without
+# intrinsics disabled and as NativeAOT at the baseline instruction set, and with --vector-width=256 (Vector256 fragments) under the JIT with and without
 # AVX. VECTOR_SEMANTICS_SEED chooses the random lanes and shuffle masks.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
@@ -41,7 +41,9 @@ for runtime in system portable; do
         "$llvmnet" --runtime=portable "$directory/$module.ll" -o "$directory/$module-default.dll"
         dotnet "$directory/$module-default.dll" >"$directory/$module-default.txt"
         compare "portable JIT, default lowering" "$module" "$directory/$module-default.txt"
-        "$llvmnet" --runtime=portable --vector-lowering=typed --nativeaot "$directory/$module.ll" -o "$directory/$module-aot" >"$directory/$module-aot.log"
+        # NativeAOT at its baseline, where ILC composes the SSE4.1 operations from SSE2; the default for vector code,
+        # x86-64-v2, runs in the cross-platform bundle (tests/xp-aot.sh).
+        "$llvmnet" --runtime=portable --vector-lowering=typed --nativeaot --aot-instruction-set baseline "$directory/$module.ll" -o "$directory/$module-aot" >"$directory/$module-aot.log"
         "$directory/$module-aot" >"$directory/$module-aot.txt"
         compare "portable NativeAOT" "$module" "$directory/$module-aot.txt"
         "$llvmnet" --runtime=portable --vector-width=256 --vector-lowering=typed "$directory/$module.ll" -o "$directory/$module-256.dll"

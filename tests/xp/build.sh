@@ -18,7 +18,7 @@ work="$bundle/native/work"
 # RLIMIT_STACK on hosts without one (Windows, macOS); GitHub's Linux runners default to 16 MB. run.sh sets the same.
 ulimit -S -s 8192
 {
-    printf '# name\taot\targuments\tenvironment\trequires\n'
+    printf '# name\taot\targuments\tenvironment\trequires\timage\n'
 } >"$bundle/manifest.tsv"
 count=0
 while IFS=$'\t' read -r name aot sources flags arguments environment; do
@@ -144,6 +144,30 @@ printf '0\n' >"$bundle/expected/kernels.status"
 printf 'kernels\taot\t-\t-\t-\n' >>"$bundle/manifest.tsv"
 count=$((count + 1))
 rm -rf "$kernel_work"
+# The vector forms of the IR semantics probes (SV-04, SV-20): tests/semantics/vectors.py's two modules, compiled natively
+# here for the expected output and translated with every translatable function typed, at 128 bits (also run without
+# hardware intrinsics, where every composition runs, and as NativeAOT) and at 256 (Vector256 fragments, which ARM64 and
+# hosts without AVX2 compute as halves). NaNs are canonicalized in the probes' output, so it is the same on every host.
+probes="$bundle/native/vector-probes"
+seed="${VECTOR_SEMANTICS_SEED:-20261103}"
+python3 "$root/tests/semantics/vectors.py" "$probes/native" "" "$seed" >/dev/null
+python3 "$root/tests/semantics/vectors.py" "$probes/portable" dotnet64-v2 "$seed" >/dev/null
+for module in vector-integer vector-float; do
+    clang-22 -O0 "$probes/native/$module.ll" -lm -o "$probes/$module"
+    "$probes/$module" >"$probes/$module.txt"
+    for variant in "$module:128:aot:-" "$module-256:256:-:-" "$module-software:128:-:DOTNET_EnableHWIntrinsic=0"; do
+        IFS=: read -r name width aot environment <<<"$variant"
+        cp "$probes/$module.txt" "$bundle/expected/$name.txt"
+        printf '0\n' >"$bundle/expected/$name.status"
+        "$llvmnet" --runtime=portable --vector-lowering=typed --vector-width="$width" "$probes/portable/$module.ll" -o "$bundle/images/$name.dll"
+        if [[ "$aot" == aot ]]; then
+            "$llvmnet" --runtime=portable --vector-lowering=typed "$probes/portable/$module.ll" --aot-project "$bundle/aot/$name"
+        fi
+        printf '%s\t%s\t-\t%s\t-\n' "$name" "$aot" "$environment" >>"$bundle/manifest.tsv"
+        count=$((count + 1))
+    done
+done
+rm -rf "$probes"
 # The symbolic-link farm points into this checkout and the extension build directory is scratch: neither ships, and
 # Windows cannot extract links whose targets are missing.
 rm -rf "$farm" "$bundle/native/ext-build"

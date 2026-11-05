@@ -4,6 +4,8 @@ WebAssembly's fixed 128-bit SIMD operations map onto .NET's architecture-neutral
 
 The opt-in `--simd128` option (also `--isa=wasm-simd128`) compiles code written against WebAssembly's `wasm_simd128.h` intrinsics, in both runtime modes and without changing their 64-bit data ABI. It supports the subset of intrinsics that ffmpeg's WebAssembly HEVC kernels use. As Clang's own header does, llvmnet's writes most intrinsics as Clang vector extensions, which the typed vector lowering ([ADR-16](../plan/decisions.md#adr-16-simd-levels) Level 1) translates to `Vector128<T>` operations like any other vector code; the operations Clang's header takes from `llvm.wasm.*` intrinsics (swizzle, bitselect, bitmask, all and any true, the saturating narrows, `q15mulr_sat`, `pmin` and the saturating truncations) call managed helpers.
 
+This page covers the WebAssembly header; [simd.md](simd.md) describes every form of vector code and how each runs.
+
 The ffmpeg profile `FFMPEG_SIMD128=1` enables the HEVC IDCT at 8 and 10 bits and SAO at 8 bits. It decodes faster than the scalar profile under the JIT and as NativeAOT, where its default is `x86-64-v2` (at ILC's baseline, on four threads, it is only about as fast); `x86-64-v3` NativeAOT is faster still (PF-08, SV-07). [dev/video-benchmark.md](../dev/video-benchmark.md) describes how to measure this.
 
 ## Build ffmpeg
@@ -70,7 +72,7 @@ The ffmpeg kernel tests also exercise signed short extended multiplication, satu
 - The header is vector-extension code plus `__llvmnet_simd128_*` helper calls for the `llvm.wasm.*` operations. The typed vector lowering translates the vector code; a helper takes and returns `Vector128<byte>`, and a call reinterprets the header's vectors as that, which costs nothing. The other helpers of `Simd128.cs` stay exported for code that calls them directly.
 - Source compatibility is separate from the machine ABI. Clang's own `wasm_simd128.h` requires a WebAssembly target; llvmnet's header works under both 64-bit ABIs. wasm32 pointers, layouts, varargs and library contracts are incompatible with them, and WebAssembly modules cannot be loaded.
 - SIMD helpers are managed imports in both modes. ffmpeg's DSP entry points take scalar pointer arguments, so their vector values stay in managed code. Passing vector values to or from native code in system mode is not supported.
-- Open work: kernels beyond HEVC IDCT and 8-bit SAO (10-bit SAO, motion compensation and deblocking are scalar), ARM64 execution, and baseline NativeAOT code quality, which Level 2's helpers with explicit `IsSupported` dispatch address.
+- Open work: kernels beyond HEVC IDCT and 8-bit SAO (10-bit SAO, motion compensation and deblocking are scalar) and ARM64 execution. NativeAOT compiles a SIMD128 program for `x86-64-v2` on x64 by default (PF-08), because at the baseline the header's generic shuffles have no `pshufb`.
 
 ## References
 

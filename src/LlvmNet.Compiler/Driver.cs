@@ -19,10 +19,15 @@ internal sealed class CompilerOptions
     internal string VectorLowering { get; set; } = "auto";
     /// <summary>Whether vector IR is lowered to Vector128 (ADR-16 Level 1).</summary>
     internal bool TypedVectors => VectorLowering != "scalar";
+    /// <summary>The hidden --vector-idioms choice: on (the default) runs the sums of absolute differences and of 16-bit
+    /// products as psadbw and pmaddwd (VectorEmitter.Idioms), off as their literal dataflow, for comparisons.</summary>
+    internal bool VectorIdioms { get; set; } = true;
     /// <summary>The bits of a typed vector fragment, 128 or 256 (--vector-width, SV-06).</summary>
     internal int VectorWidth { get; set; } = 128;
     internal bool TrapMissingArguments { get; set; }
     internal bool DiagnoseLimits { get; set; }
+    /// <summary>--report-simd: the vector code's functions, recognized reductions and SIMD helpers by class (SimdReport).</summary>
+    internal bool ReportSimd { get; set; }
     internal bool CheckIndirectCalls { get; set; }
     /// <summary>Prints llvmnet's warnings while translating; -w, as for the frontend, silences them.</summary>
     internal Diagnostics? Warnings { get; set; }
@@ -192,6 +197,10 @@ internal sealed class Invocation
                     if (value is not ("auto" or "typed" or "scalar")) throw new ArgumentException("--vector-lowering requires auto, typed or scalar.");
                     Options.VectorLowering = value;
                     break;
+                case "--vector-idioms=":
+                    if (value is not ("on" or "off")) throw new ArgumentException("--vector-idioms requires on or off.");
+                    Options.VectorIdioms = value == "on";
+                    break;
                 case "--cil-reference": Options.CilReferences.Add(Path.GetFullPath(value)); break;
                 case "--system-library": Options.SystemLibraries.Add(value); break;
                 case "--extension": ExtensionNames.Add(value); break;
@@ -215,6 +224,7 @@ internal sealed class Invocation
                 case "--keep-ir": KeepIr = Path.GetFullPath(value); break;
                 case "--trap-missing-arguments": Options.TrapMissingArguments = true; break;
                 case "--diagnose-limits": Options.DiagnoseLimits = true; break;
+                case "--report-simd": Options.ReportSimd = true; break;
                 case "--check-indirect-calls": Options.CheckIndirectCalls = true; break;
                 case "-v": Options.Verbose = true; Queries.Add("-v"); break;
                 case "--driver-mode":
@@ -621,9 +631,10 @@ internal static class Driver
             string payload = nativeAot || launcher ? Path.Combine(payloadDirectory, "program.dll") : output;
             // An image of x86-64-v3 objects holds its 256-bit vectors whole, as the level's command line does (SV-06, SV-09).
             if (!invocation.VectorWidthGiven && Llvm.IsaLevels(module.Handle).Split(',').Contains("x86-64-v3")) options.VectorWidth = 256;
+            var compiler = new CilCompiler(options);
             try
             {
-                new CilCompiler(options).Compile(module.Handle, payload);
+                compiler.Compile(module.Handle, payload);
             }
             catch (CompilationError error)
             {
@@ -636,7 +647,7 @@ internal static class Driver
             string levels = Llvm.IsaLevels(module.Handle);
             if (invocation.AotProject is not null)
             {
-                Toolchain.AotProject(payload, invocation.AotProject, invocation.AotPreference, AotInstructionSet(invocation, levels), invocation.AotDebug, options.SystemLibraries, options.KernelPackages);
+                Toolchain.AotProject(payload, invocation.AotProject, invocation.AotPreference, AotInstructionSet(invocation, levels, compiler.HasVectorCode, verbose), invocation.AotDebug, options.SystemLibraries, options.KernelPackages);
                 return 0;
             }
             // A JIT image loads each identifier's kernel library from runtimes/<rid>/native/ beside it.
@@ -649,7 +660,7 @@ internal static class Driver
                         Directory.CreateDirectory(native);
                         File.Copy(shared, Path.Combine(native, Path.GetFileName(shared)), true);
                     }
-            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, invocation.RuntimeId, invocation.AotPreference, AotInstructionSet(invocation, levels), verbose, invocation.AotDebug, options.SystemLibraries, options.KernelPackages);
+            if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, invocation.RuntimeId, invocation.AotPreference, AotInstructionSet(invocation, levels, compiler.HasVectorCode, verbose), verbose, invocation.AotDebug, options.SystemLibraries, options.KernelPackages);
             if (launcher) Toolchain.Launcher(output, payload);
             return 0;
         }
@@ -690,15 +701,21 @@ internal static class Driver
     /// ILC's instruction set: the one given, or for an x64 program with objects compiled at --isa=x86-64-v2 or x86-64-v3
     /// (the image's llvmnet.isa levels) the highest of them, which such a program requires as it does natively; for one
     /// with SIMD128 objects x86-64-v2, whose SSSE3 gives Vector128.Shuffle its pshufb (the owner's PF-08 decision of
+    /// 2026-11-05), and for one with vector code x86-64-v2, whose SSE4.1 the vectorizers' widenings, multiplications and
+    /// blends need (at the baseline dav1d decoded 1.26 times slower vectorized than scalar; the owner's SV-05 decision of
     /// 2026-11-05); otherwise the baseline, where SSE4.2 and AVX2 are only opportunistic sets that the helpers test at run
     /// time and the generic vector operations do not use.
     /// </summary>
-    private static string AotInstructionSet(Invocation invocation, string levels)
+    private static string AotInstructionSet(Invocation invocation, string levels, bool vectorCode, bool verbose)
     {
         if (invocation.AotInstructionSet is not null) return invocation.AotInstructionSet;
         if (!(invocation.RuntimeId ?? System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier).EndsWith("-x64", StringComparison.Ordinal)) return "baseline";
         string[] recorded = levels.Split(',');
-        return recorded.Contains("x86-64-v3") ? "x86-64-v3" : recorded.Contains("x86-64-v2") || recorded.Contains("wasm-simd128") ? "x86-64-v2" : "baseline";
+        if (recorded.Contains("x86-64-v3")) return "x86-64-v3";
+        if (recorded.Contains("x86-64-v2") || recorded.Contains("wasm-simd128")) return "x86-64-v2";
+        if (!vectorCode) return "baseline";
+        if (verbose) Console.Error.WriteLine("llvmnet: note: NativeAOT targets x86-64-v2 (SSE4.2), because the program has vector code; --aot-instruction-set baseline gives an executable for every x64 processor");
+        return "x86-64-v2";
     }
 
     /// <summary>

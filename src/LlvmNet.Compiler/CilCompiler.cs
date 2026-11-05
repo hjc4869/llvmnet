@@ -19,6 +19,9 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal readonly Dictionary<nint, (MethodInfo Identity, MethodInfo Target)> AddressTaken = [];
     private KernelStubs? kernelStubs;
     internal TypeSystem Types { get; private set; } = null!;
+    /// <summary>Whether the image has vector code that computes on lanes (VectorEmitter.Legalize), for which NativeAOT
+    /// targets x86-64-v2 on x64: at ILC's baseline, generic Vector128 operations are compiled for SSE2 (SV-05).</summary>
+    internal bool HasVectorCode { get; private set; }
     internal TypeBuilder Program { get; private set; } = null!;
     // The CLR limits how many fields one type may have, so static fields beyond this many per type go to further
     // internal holder classes.
@@ -271,11 +274,22 @@ internal sealed class CilCompiler(CompilerOptions options)
         fieldHolders.Add(Program);
         using var types = new TypeSystem(module, cilModule, options.TypedVectors, options.VectorWidth);
         Types = types;
+        List<(string Function, string? Reason)> scalarized = [];
+        List<(string Function, uint Differences, uint Products)> reductions = [];
         if (options.TypedVectors)
-            foreach ((string function, string? reason) in VectorEmitter.Legalize(types, module, options.VectorLowering == "auto"))
+        {
+            scalarized = VectorEmitter.Legalize(types, module, options.VectorLowering == "auto", out bool computes);
+            HasVectorCode = computes;
+            foreach ((string function, string? reason) in scalarized)
                 if (options.Verbose)
                     Console.Error.WriteLine(reason is null ? $"llvmnet: scalarized {function}, whose vector code moves more lanes than it computes on"
                         : $"llvmnet: scalarized the vector code of {function} ({reason})");
+            if (options.VectorIdioms)
+                reductions = VectorEmitter.Idioms(types, module);
+            foreach ((string function, uint differences, uint products) in reductions)
+                if (options.Verbose)
+                    Console.Error.WriteLine($"llvmnet: {function}: {VectorEmitter.Describe(differences, products)}");
+        }
         constructors = Program.DefineMethod("__llvmnet_run_constructors", MethodAttributes.Public | MethodAttributes.Static, typeof(void), Type.EmptyTypes);
         // In portable mode musl's start object calls main and exit and runs constructors after __init_libc.
         libcMain = Llvm.LLVMGetNamedFunction(module, "__llvmnet_libc_main");
@@ -392,6 +406,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         byte[] executable = image.ToArray();
         FinalizeIndirectCalls(executable, indirectFixups);
         MakeDeterministic(executable);
+        if (options.ReportSimd)
+            SimdReport.Write(executable, scalarized, reductions, types.FragmentBits, Console.Error);
         if (options.DiagnoseLimits)
             LimitsReport.Write(executable, Methods.Where(pair => pair.Value is MethodBuilder).ToDictionary(pair => pair.Value.Name, pair =>
                 (Llvm.Blocks(pair.Key).Count(), Llvm.Blocks(pair.Key).Sum(block => Llvm.Instructions(block).Count()))), Console.Error);

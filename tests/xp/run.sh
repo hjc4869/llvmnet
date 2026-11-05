@@ -72,8 +72,10 @@ selected() { [[ -z "$only" ]] || [[ ",$only," == *",$1,"* ]]; }
 # libraries, found where LLVMNET_EXT_GLES_DIR names (ANGLE on Windows and macOS) or, on Linux, on the loader's path;
 # "extension:vulkan" needs a Vulkan loader or driver library, where LLVMNET_EXT_VULKAN_DIR names (SwiftShader on macOS)
 # or the system's (libvulkan.so.1, vulkan-1.dll) with at least one driver registered for it, since a loader alone fails
-# vkCreateInstance with VK_ERROR_INCOMPATIBLE_DRIVER. Prints the reason and fails when the host lacks it, so the fixture
-# is skipped.
+# vkCreateInstance with VK_ERROR_INCOMPATIBLE_DRIVER; "kernels:<rid>,..." is an image with a native kernel package for
+# those identifiers, which an x64 host without its identifier cannot run: the program's x86 detection selects kernels
+# the package has no library for there, while elsewhere it selects the C paths. Prints the reason and fails when the
+# host lacks it, so the fixture is skipped.
 unavailable() {
     local libraries=""
     if [[ "$system" == linux ]]; then libraries="$(ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null)"; fi
@@ -85,6 +87,13 @@ unavailable() {
         native:*)
             native_library "${1#native:}" >/dev/null && return 1
             printf 'no compiler for the native test library %s (clang on macOS, Visual Studio'"'"'s cl on Windows)' "${1#native:}"
+            return 0 ;;
+        kernels:*)
+            local identifier
+            case "$(uname -m)" in x86_64|amd64) ;; *) return 1 ;; esac
+            case "$system" in windows) identifier=win-x64 ;; macos) identifier=osx-x64 ;; *) identifier="$system-x64" ;; esac
+            [[ ",${1#kernels:}," == *",$identifier,"* ]] && return 1
+            printf 'the kernel package has no %s library, and the program'"'"'s x86 detection selects its kernels on this host' "$identifier"
             return 0 ;;
         extension:vulkan)
             if [[ -n "${LLVMNET_EXT_VULKAN_DIR:-}" ]]; then return 1; fi
@@ -157,8 +166,11 @@ check() {
     rm -rf "$directory"
     mkdir -p "$directory/work"
     local run_arguments=() run_environment=()
+    # {bundle} in the arguments is the bundle's directory, where the data files of a fixture are, as a path relative to
+    # the fixture's work directory (<bundle>/results/<host>/<fixture>-<mode>/work): Git Bash turns an absolute /c/...
+    # argument into C:/..., which ffmpeg reads as a URL with the protocol "C".
     # shellcheck disable=SC2206
-    if [[ "$arguments" != - ]]; then run_arguments=($arguments); fi
+    if [[ "$arguments" != - ]]; then run_arguments=(${arguments//\{bundle\}/../../../..}); fi
     if [[ "$environment" != - ]]; then IFS=';' read -r -a run_environment <<<"$environment"; fi
     local status=0 expected_status
     expected_status="$(tr -d '\r' <"$bundle/expected/$name.status")"
@@ -188,26 +200,32 @@ publish() {
 }
 # The manifest is read on descriptor 3, so that a fixture or a native build that reads standard input (cmd on
 # Windows does) cannot consume the fixtures after it.
-while IFS=$'\t' read -r name aot_flag arguments environment requires <&3; do
+# A fixture runs the image (and NativeAOT project) of its own name, or the one the manifest's sixth column names, which
+# several fixtures share (one decoder, several clips).
+image_of() { local image; image="$(tr -d '\r' <<<"${2:-}")"; if [[ -z "$image" || "$image" == - ]]; then printf '%s' "$1"; else printf '%s' "$image"; fi; }
+while IFS=$'\t' read -r name aot_flag arguments environment requires image <&3; do
     [[ -z "$name" || "$name" == \#* ]] && continue
     name="$(tr -d '\r' <<<"$name")"
     selected "$name" || continue
     requires="$(tr -d '\r' <<<"${requires:-}")"
+    image="$(image_of "$name" "${image:-}")"
     if reason="$(unavailable "$requires")"; then
         if [[ $jit -eq 1 ]]; then record "$name" jit SKIP "$reason"; fi
         if [[ $aot -eq 1 && "$aot_flag" == aot ]]; then record "$name" aot SKIP "$reason"; fi
         continue
     fi
     if [[ $jit -eq 1 ]]; then
-        check "$name" jit "$arguments" "$(fixture_environment "$environment" "$requires")" "$dotnet" "$bundle/images/$name.dll" || true
+        check "$name" jit "$arguments" "$(fixture_environment "$environment" "$requires")" "$dotnet" "$bundle/images/$image.dll" || true
     fi
 done 3<"$bundle/manifest.tsv"
 if [[ $aot -eq 1 ]]; then
     names=()
-    while IFS=$'\t' read -r name aot_flag arguments environment requires <&3; do
+    while IFS=$'\t' read -r name aot_flag arguments environment requires image <&3; do
         [[ -z "$name" || "$name" == \#* ]] && continue
         name="$(tr -d '\r' <<<"$name")"
-        if [[ "$aot_flag" == aot ]] && selected "$name" && ! unavailable "$(tr -d '\r' <<<"${requires:-}")" >/dev/null; then names+=("$name"); fi
+        image="$(image_of "$name" "${image:-}")"
+        if [[ "$aot_flag" == aot ]] && selected "$name" && ! unavailable "$(tr -d '\r' <<<"${requires:-}")" >/dev/null &&
+            [[ " ${names[*]+${names[*]}} " != *" $image "* ]]; then names+=("$image"); fi
     done 3<"$bundle/manifest.tsv"
     printf 'Publishing %d NativeAOT projects for %s (%d at once)\n' "${#names[@]}" "$rid" "$jobs"
     pids=()
@@ -217,15 +235,16 @@ if [[ $aot -eq 1 ]]; then
         if [[ ${#pids[@]} -ge $jobs ]]; then wait "${pids[0]}" || true; pids=(${pids[@]:1}); fi
     done
     wait
-    while IFS=$'\t' read -r name aot_flag arguments environment requires <&3; do
+    while IFS=$'\t' read -r name aot_flag arguments environment requires image <&3; do
         [[ -z "$name" || "$name" == \#* ]] && continue
         name="$(tr -d '\r' <<<"$name")"
+        image="$(image_of "$name" "${image:-}")"
         [[ "$aot_flag" == aot ]] && selected "$name" || continue
         unavailable "$(tr -d '\r' <<<"${requires:-}")" >/dev/null && continue
-        executable="$results/$name-publish/out/program$exe"
+        executable="$results/$image-publish/out/program$exe"
         if [[ ! -x "$executable" ]]; then
-            record "$name" aot FAIL "publish failed ($results/$name-publish/publish.log)"
-            tail -20 "$results/$name-publish/publish.log"
+            record "$name" aot FAIL "publish failed ($results/$image-publish/publish.log)"
+            tail -20 "$results/$image-publish/publish.log"
             continue
         fi
         check "$name" aot "$arguments" "$(fixture_environment "$environment" "$(tr -d '\r' <<<"${requires:-}")")" "$executable" || true

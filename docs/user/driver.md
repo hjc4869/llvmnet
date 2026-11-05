@@ -86,9 +86,9 @@ Every option falls into one of four classes, per runtime mode:
 | --- | --- |
 | `--runtime=<mode>` | portable (the default; ABI dotnet64-v2, runs on every supported .NET host) or system (the native Linux x86-64 ABI, system-linux-x64-v1) |
 | `--portable-sysroot=<dir>` | Use another portable sysroot instead of the toolchain's sysroot/dotnet64-v2 |
-| `--isa=<level>` | The instruction set intrinsics and headers may assume, without changing the data layout (ADR-16): baseline (the default); x86-64-v2, the SSE to SSE4.2 macros and intrinsics, which run as the host's instructions or exact compositions on every host (docs/user/x86-intrinsics.md); x86-64-v3, also AVX, AVX2, FMA, F16C, BMI1, BMI2 and LZCNT; or wasm-simd128, the wasm_simd128.h header (docs/user/simd128.md) |
+| `--isa=<level>` | The instruction set intrinsics and headers may assume, without changing the data layout (ADR-16): baseline (the default); x86-64-v2, the SSE to SSE4.2 macros and intrinsics, which run as the host's instructions or exact compositions on every host (docs/user/x86-intrinsics.md); x86-64-v3, also AVX, AVX2, FMA, F16C, BMI1, BMI2 and LZCNT; or wasm-simd128, the wasm_simd128.h header (docs/user/simd128.md). docs/user/simd.md compares the levels |
 | `--simd128` | --isa=wasm-simd128: compile wasm_simd128.h intrinsics to Vector128 code (docs/user/simd128.md) |
-| `--vector-width=<bits>` | 128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a 256-bit vector as one instruction where the host has AVX2 and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128 |
+| `--vector-width=<bits>` | 128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a 256-bit vector as one instruction where the host has AVX2 and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128; --isa=x86-64-v3 implies 256 |
 | `-msse4.2` | Portable mode: an alias of --isa=x86-64-v2, with no ABI effect, that also reaches Clang as given (as do -msse, -msse2, -msse3, -mssse3, -msse4, -msse4.1, -mpopcnt, -mpclmul, -mcrc32 and -march=x86-64-v2; -mno-sse3 and the other -mno- forms above SSE2 pass through without changing the level; -mavx, -mavx2, -mfma, -mf16c, -mbmi, -mbmi2, -mlzcnt, -mmovbe and -march=x86-64-v3 are aliases of --isa=x86-64-v3, and the highest level given applies). System mode: as in Clang |
 
 ### Managed and native libraries
@@ -108,7 +108,7 @@ Every option falls into one of four classes, per runtime mode:
 | `--runtime-id=<rid>` | NativeAOT target runtime identifier (default: this host; linux-arm64 cross-publishes from Linux x64; system mode needs linux-x64) |
 | `--aot-project=<dir>` | Write the NativeAOT project into <dir> for publishing on another host (dotnet publish -r <rid>) instead of publishing here |
 | `--aot-optimize=<preference>` | Balanced (default), Speed or Size |
-| `--aot-instruction-set=<set>` | baseline (default: SSE2 on x64), x86-64-v2 (SSE4.2 and POPCNT: x64 CPUs since about 2009; the default for a program with objects compiled at --isa=x86-64-v2), x86-64-v3 (AVX2, BMI2, FMA: x64 CPUs since about 2015) or native (this host's CPU; the executable may not run elsewhere) |
+| `--aot-instruction-set=<set>` | baseline (SSE2 on x64, with SSE4.2 tested at run time; the default for scalar code), x86-64-v2 (SSE4.2 and POPCNT: x64 CPUs since about 2009; the default for a program with vector code, as most programs built at -O2 and above have, or with objects compiled at --isa=x86-64-v2 or wasm-simd128), x86-64-v3 (AVX2, BMI2, FMA: x64 CPUs since about 2015; the default for objects compiled at --isa=x86-64-v3) or native (this host's CPU; the executable may not run elsewhere) |
 | `--aot-debug` | Keep native debug symbols and the map file |
 
 ### Diagnostics and debugging
@@ -118,6 +118,7 @@ Every option falls into one of four classes, per runtime mode:
 | `--keep-ir=<file>` | Copy the linked bitcode, before lowering, to <file> (kept as <output>.failed.bc on a compile error) |
 | `--trap-missing-arguments` | Compile a void call with fewer arguments than its definition to a trap instead of failing |
 | `--diagnose-limits` | Report each function's IL size and locals, and the ones the JIT compiles without optimization |
+| `--report-simd` | Report what the program's vector code runs as: the functions of Vector128 or Vector256 code and the scalarized ones, the reductions run as psadbw and pmaddwd, and each SIMD helper the code calls with the x64 and ARM64 instruction sets it uses where the host has them (docs/user/simd.md) |
 | `--check-indirect-calls` | Check every indirect call's CIL signature against its target at run time |
 | `-v` | Print the commands run and the notes for options without effect; alone, the frontend's version |
 

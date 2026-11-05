@@ -8,6 +8,7 @@
 
 - **micro**: the programs in `tests/perf/`, each one cost llvmnet translates in its own way: `malloc`, `fwrite` (stdio buffering), `printf`, `atomics`, `mutex` (pthread mutexes and condition variables under contention), `calli` (indirect calls), `varargs`, `float80` (`long double`, computed in software), `memcpy`, `alloca` (variable-length arrays), `callback` (taking function addresses).
 - **startup**: `hello.c`, whose time is process startup; reported, but left out of the geometric means.
+- **simd**: the SIMD survey's kernels (`tests/perf/simd-kernels.c`: `saxpy`, `i32mix`, `sad8`, `dot16`, `max8`, `fdot8`, with `-ffp-contract=off`) at each ISA level: `simd-<kernel>` at the baseline, `-v2` and `-v3` with `--isa=x86-64-v2` and `x86-64-v3`, which the native builds get as `-march` (SV-20). Only the native and the vectorized engines build them, so the group runs with `--vectorized`; it is left out of the set's geometric means, and the summary gives each level's mean ratio to vectorized native instead.
 - **suite**: free programs from `llvm-test-suite` (`scripts/fetch-sources.sh` pins it): SingleSource benchmarks, Olden, Ptrdist, MiBench, tramp3d-v4, Bullet, mafft and nbench.
 - **ffmpeg**: the decode harness of the ffmpeg integration build (`tests/ffmpeg/decode.c`) on two clips the harness generates with the system ffmpeg from its own test pattern (1080p HEVC 10-bit and H.264, 240 frames), with one and four decoder threads. Native is the system-mode bitcode compiled by `clang-22`, as `scripts/build-ffmpeg.sh` builds it.
 
@@ -30,6 +31,7 @@ scripts/benchmark.py --group micro --repeats 3      # one group
 scripts/benchmark.py --only 'olden-*,fannkuch'      # selected benchmarks
 scripts/benchmark.py --engines native,jit           # skip the NativeAOT builds
 scripts/benchmark.py --vectorized                   # also the vectorized engines (SV-05)
+scripts/benchmark.py --aot-instruction-set x86-64-v2  # the NativeAOT engines at another instruction set
 scripts/benchmark.py --validate-only                # build and check outputs, measure nothing
 scripts/benchmark.py --update-baseline              # write this run's medians to tests/perf/baseline.tsv
 scripts/benchmark.py --compare artifacts/bench/<run>/results.tsv   # apply the thresholds to an earlier run
