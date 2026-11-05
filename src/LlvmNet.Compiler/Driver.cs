@@ -19,6 +19,9 @@ internal sealed class CompilerOptions
     internal string VectorLowering { get; set; } = "auto";
     /// <summary>Whether vector IR is lowered to Vector128 (ADR-16 Level 1).</summary>
     internal bool TypedVectors => VectorLowering != "scalar";
+    /// <summary>The hidden --vector-idioms choice: on (the default) runs the sums of absolute differences and of 16-bit
+    /// products as psadbw and pmaddwd (VectorEmitter.Idioms), off as their literal dataflow, for comparisons.</summary>
+    internal bool VectorIdioms { get; set; } = true;
     /// <summary>The bits of a typed vector fragment, 128 or 256 (--vector-width, SV-06).</summary>
     internal int VectorWidth { get; set; } = 128;
     internal bool TrapMissingArguments { get; set; }
@@ -191,6 +194,10 @@ internal sealed class Invocation
                 case "--vector-lowering=":
                     if (value is not ("auto" or "typed" or "scalar")) throw new ArgumentException("--vector-lowering requires auto, typed or scalar.");
                     Options.VectorLowering = value;
+                    break;
+                case "--vector-idioms=":
+                    if (value is not ("on" or "off")) throw new ArgumentException("--vector-idioms requires on or off.");
+                    Options.VectorIdioms = value == "on";
                     break;
                 case "--cil-reference": Options.CilReferences.Add(Path.GetFullPath(value)); break;
                 case "--system-library": Options.SystemLibraries.Add(value); break;

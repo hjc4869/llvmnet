@@ -146,6 +146,7 @@ internal static class DriverOptions
         new("--isa=", OptionKind.Joined, Modes, "The instruction set intrinsics and headers may assume, without changing the data layout (ADR-16): baseline (the default); x86-64-v2, the SSE to SSE4.2 macros and intrinsics, which run as the host's instructions or exact compositions on every host (docs/user/x86-intrinsics.md); x86-64-v3, also AVX, AVX2, FMA, F16C, BMI1, BMI2 and LZCNT; or wasm-simd128, the wasm_simd128.h header (docs/user/simd128.md)", H, value: "<level>"),
         new("--simd128", OptionKind.Flag, Modes, "--isa=wasm-simd128: compile wasm_simd128.h intrinsics to Vector128 code (docs/user/simd128.md)", H),
         new("--vector-lowering=", OptionKind.Joined, Hidden, "", H, value: "<auto|typed|scalar>"),
+        new("--vector-idioms=", OptionKind.Joined, Hidden, "", H, value: "<on|off>"),
         new("--vector-width=", OptionKind.Joined, Modes, "128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a 256-bit vector as one instruction where the host has AVX2 and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128", H, value: "<bits>"),
         // Managed and native libraries
         new("--cil-reference", OptionKind.JoinedOrSeparate, Managed, "Resolve calls to the public CExport methods of a managed library built with -shared, in the same mode", H, value: "<assembly>"),

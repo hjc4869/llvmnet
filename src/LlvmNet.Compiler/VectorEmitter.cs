@@ -64,6 +64,31 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         return report;
     }
 
+    /// <summary>
+    /// Recognizes in the functions that stay vector code the two widening reductions LLVM's x86 backend matches (SV-21): a
+    /// sum of absolute differences of bytes becomes psadbw and a sum of products of 16-bit integers pmaddwd, through the
+    /// target intrinsic helpers, which run the instruction where the host has it (Sse2.SumAbsoluteDifferences and
+    /// MultiplyAddAdjacent, AVX2's, AdvSimd's pairwise additions) and an exact composition elsewhere. Their literal
+    /// dataflow, widening each lane to 32 bits first, ran 1.4 to 1.6 times native with the neutral API (SIMD survey).
+    /// With --vector-width=256 chunks of 32 bytes take AVX2's forms. Returns the functions that got any, with the counts.
+    /// </summary>
+    internal static List<(string Function, uint Differences, uint Products)> Idioms(TypeSystem types, nint module)
+    {
+        List<(string, uint, uint)> report = [];
+        foreach (nint function in Llvm.Functions(module))
+        {
+            if (Llvm.LLVMIsDeclaration(function) != 0) continue;
+            uint differences = Llvm.WideningReductions(function, (uint)types.FragmentBits, out uint products);
+            if (differences + products != 0) report.Add((Llvm.Name(function), differences, products));
+        }
+        return report;
+    }
+
+    /// <summary>What <see cref="Idioms"/> did to one function, as -v and --report-simd print it.</summary>
+    internal static string Describe(uint differences, uint products) => string.Join(", ",
+        new[] { (Count: differences, What: "absolute differences as psadbw"), (Count: products, What: "products as pmaddwd") }
+            .Where(part => part.Count != 0).Select(part => $"{part.Count} {(part.Count == 1 ? "sum" : "sums")} of {part.What}"));
+
     /// <summary>The scalar operations a vector instruction saves: one fewer than the lanes it computes on (arithmetic,
     /// comparisons, conversions, vector selects, vector intrinsics); zero for moves, shuffles and everything else.</summary>
     private static long Saved(TypeSystem types, nint instruction, int opcode)
@@ -1234,6 +1259,8 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     private void Gather(VectorShape result, nint[] operands, (int Operand, int Lane)?[] map)
     {
         VectorShape[] inputs = operands.Select(operand => result.Mask ? types.Shape(Shape(operand).Lanes, result.Lane, mask: true) : Shape(operand)).ToArray();
+        // Lanes of a zero vector, as the padding of a shorter vector, are cleared with one and of the other lanes.
+        bool[] zero = operands.Select(operand => Llvm.LLVMIsNull(operand) != 0).ToArray();
         int per = result.PerFragment;
         void Source(int operand, int fragment)
         {
@@ -1244,10 +1271,16 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         {
             // (operand, fragment) -> the lane each result lane takes from it, -1 elsewhere.
             var sources = new Dictionary<(int Operand, int Fragment), int[]>();
+            bool[] cleared = new bool[per];
             for (int lane = 0; lane < per; lane++)
             {
                 int global = index * per + lane;
                 if (global >= result.Lanes || map[global] is not (int operand, int element)) continue;
+                if (zero[operand])
+                {
+                    cleared[lane] = true;
+                    continue;
+                }
                 var key = (operand, element / per);
                 if (!sources.TryGetValue(key, out int[]? pattern)) sources.Add(key, pattern = Enumerable.Repeat(-1, per).ToArray());
                 pattern[lane] = element % per;
@@ -1257,6 +1290,16 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 Zero(result.Lane);
                 return;
             }
+            Combine(sources);
+            if (!cleared.Contains(true)) return;
+            for (int lane = 0; lane < per; lane++) Scalar(IntegerLane(result.Lane), cleared[lane] ? 0 : -1);
+            il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(IntegerLane(result.Lane), per).ToArray()));
+            As(IntegerLane(result.Lane), result.Lane);
+            Call("BitwiseAnd", result.Lane, 2);
+        });
+
+        void Combine(Dictionary<(int Operand, int Fragment), int[]> sources)
+        {
             if (sources.Count == 2 && Halves(sources) is var (lower, upper))
             {
                 if (Wide)
@@ -1296,7 +1339,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                     Permute(operand, fragment, pattern);
                 firstSource = false;
             }
-        });
+        }
 
         void SourceHalf((int Operand, int Fragment, bool Upper) half)
         {
