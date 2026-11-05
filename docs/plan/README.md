@@ -17,11 +17,12 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
-## Progress (2026-11-05, SV-21 and SV-10)
+## Progress (2026-11-05, SV-21, SV-10 and SV-19)
 
 Measurements are in [evidence/2026-11-05-widening-reductions.md](../evidence/2026-11-05-widening-reductions.md).
 
 - **SV-21 (done).** Vectorized sums of absolute differences of bytes and sums of products of 16-bit values run as `psadbw` and `pmaddwd`, as LLVM's x86 backend compiles them natively, wherever only their total is read; on ARM64 and without SSE2 they run as AdvSimd's pairwise additions or exact compositions, no slower than before. The survey's SAD and dot-product kernels run 2.1 and 2.5 times faster as NativeAOT; ffmpeg's mpeg4 encoder, whose motion estimation is C SADs, 22% faster as NativeAOT, and dav1d's 8-tap filters gain 2 to 2.5% of a decode, all with native output. The benchmark set has no such sums and its images are unchanged.
+- **SV-19 (done).** [docs/user/simd.md](../user/simd.md) is the user's guide to vector code: what happens to each form, which options choose what, what runs as an instruction on which host and engine, and what the measured gains are; the related pages point to it and no longer call AVX untranslated.
 - **SV-10 (done).** `--report-simd` prints what a program's vector code runs as: the functions of vector code and the ones scalarized, the reductions run as `psadbw` and `pmaddwd`, and each SIMD helper called with the x64 and ARM64 instruction sets it uses, or "composed" where it builds the result from other operations.
 
 ## Progress (2026-11-04, SV-09)
@@ -322,7 +323,7 @@ Update weekly. "Open P0" counts unchecked P0 items that the milestone's exit cri
 | M8 | 0.7 | exit items done (PF-01, PF-02, benchmark table published); the first GitHub run of the nightly benchmark job needs FD-19. P1: PF-03, 04, 05, 08, 10, 11, 13, 14, 16 done, PF-06, PF-07 and PF-15 in progress | 0 | 2026-11-02 |
 | M9 | 1.0-rc | in progress: WG-02, 03, 04, 05, 09 done, WG-01 at 99.1% portable and 98.8% system (target 99%), WG-06 not run (FD-21); RL-02, 05, 08, 09 done; two nightlies on a release candidate need GitHub (FD-19) | 2 (WG-01, WG-06) | 2026-11-01 |
 | M10 | before 1.0 | exit items done (NX-02 to NX-06): images without extensions byte-identical, ABI freeze unchanged, `gles` native pixels on Linux x64, Windows x64 and macOS ARM64; the CI jobs need FD-19. P2: NX-07 to NX-13 done; NX-14 deferred by the owner | 0 | 2026-11-03 |
-| M11 | before 1.0 | in progress: SV-01 to SV-04, SV-06 to SV-08, SV-12, SV-13, SV-15 and SV-21 done, SV-05 decided; exit items open: SV-05's library reproducers, SV-19, SV-20; SV-09 (P1) and SV-14 (P2) in progress | 0 | 2026-11-05 |
+| M11 | before 1.0 | in progress: SV-01 to SV-04, SV-06 to SV-08, SV-10, SV-12, SV-13, SV-15, SV-19 and SV-21 done, SV-05 decided; exit items open: SV-05's library reproducers, SV-20; SV-09 (P1) and SV-14 (P2) in progress | 0 | 2026-11-05 |
 | M12 | before 1.0 | accepted 2026-11-05 (owner) with ADR-17's option 3; RyuJIT review done, measured on kernels, ffmpeg and 22 benchmarks | 0 | 2026-11-04 |
 
 ### M0: Foundations
