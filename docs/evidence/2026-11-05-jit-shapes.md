@@ -332,7 +332,7 @@ The baseline's `minopts` column now records tramp3d's 1, so the nightly fails if
 
 ## JP-09: MinOpts methods in the benchmark report
 
-`scripts/benchmark.py` runs each JIT engine's validation with `DOTNET_JitDisasmSummary=1` and `DOTNET_JitStdOutFile`, lists the translated methods (of the image's `Program` classes) the summary shows compiled with MinOpts in `minopts.tsv`, and counts them per benchmark in `results.tsv` and the summary. The baseline has a `minopts` column, and a JIT row with more such methods than the baseline's fails the run. [tests/benchmarks.sh](../../tests/benchmarks.sh) checks the comparison on synthetic results: as many or fewer pass, one more fails.
+`scripts/benchmark.py` runs each JIT engine once more after its validation with `DOTNET_JitDisasmSummary=1`, lists the translated methods (of the image's `Program` classes) the summary shows compiled with MinOpts in `minopts.tsv`, and counts them per benchmark in `results.tsv` and the summary. The baseline has a `minopts` column, and a JIT row with more such methods than the baseline's fails the run. [tests/benchmarks.sh](../../tests/benchmarks.sh) checks the comparison on synthetic results: as many or fewer pass, one more fails. The summary first went to a file (`DOTNET_JitStdOutFile`) during the validation run, which made jpeg crash in 8 of 50 runs (segmentation faults, once `free(): invalid pointer`): the runtime's background tier-1 compilations write the file too, and with JP-02's setting they run from the start. With the summary on standard output, in a run of its own, jpeg ran 60 times without a failure.
 
 ## The baseline
 

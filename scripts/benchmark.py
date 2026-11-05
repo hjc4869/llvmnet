@@ -14,9 +14,9 @@ the speed of this host relative to that one, the geometric mean of native/baseli
 divides every llvmnet time by it. A benchmark regresses when its normalized time exceeds the baseline by more than the
 per-benchmark tolerance, and an engine regresses when the geometric mean of those quotients exceeds 1 by more than the
 geomean tolerance. A regression must reproduce in a second measurement before it fails the run.
-The validation run of a JIT engine also lists the translated methods the JIT compiled with MinOpts (its
-DOTNET_JitDisasmSummary; minopts.tsv), which RyuJIT does past its per-method limits: a benchmark with more of them than
-its baseline records fails the run too (JP-09).
+A JIT engine runs once more after its validation with the JIT's summary (DOTNET_JitDisasmSummary), which lists the
+translated methods it compiled with MinOpts (minopts.tsv), as RyuJIT does past its per-method limits: a benchmark with
+more of them than its baseline records fails the run too (JP-09).
 
     scripts/benchmark.py                          build, validate, measure, compare; exit 1 on a regression
     scripts/benchmark.py --validate-only          build and check outputs only
@@ -331,22 +331,26 @@ def validate(benchmark, engines, output, checks, timeout):
     for engine in engines + (("musl",) if "musl" in benchmark.programs else ()):
         out_path = directory / f"{engine}.out"
         err_path = directory / f"{engine}.err"
-        environment = None
-        summary = directory / f"{engine}.jit-summary.txt"
-        if engine.startswith("jit"):
-            # The JIT's summary of what it compiled, for the translated methods it compiles with MinOpts (JP-09).
-            summary.unlink(missing_ok=True)
-            environment = dict(jit_environment, DOTNET_JitDisasmSummary="1", DOTNET_JitStdOutFile=str(summary))
         with open(out_path, "wb") as stdout, open(err_path, "wb") as stderr:
             try:
                 status = run_once(benchmark.programs[engine] + arguments, directory, stdin, stdout, stderr, timeout,
-                                  environment)[0]
+                                  jit_environment if engine.startswith("jit") else None)[0]
             except TimeoutError as error:
                 errors.append(f"{benchmark.name} {engine}: {error}")
                 continue
         results[engine] = status
         if engine.startswith("jit"):
-            benchmark.minopts[engine] = minopts_methods(summary)
+            # One more run with the JIT's summary of what it compiled, for the translated methods it compiles with
+            # MinOpts (JP-09). The summary goes to standard output, among the program's: with DOTNET_JitStdOutFile the
+            # runtime's background compilations write the file too, and jpeg crashed in 8 of 50 runs.
+            summary = directory / f"{engine}.jit-summary.txt"
+            with open(summary, "wb") as stdout:
+                try:
+                    run_once(benchmark.programs[engine] + arguments, directory, stdin, stdout, subprocess.DEVNULL, timeout,
+                             dict(jit_environment, DOTNET_JitDisasmSummary="1"))
+                    benchmark.minopts[engine] = minopts_methods(summary)
+                except TimeoutError as error:
+                    errors.append(f"{benchmark.name} {engine}: {error}")
     if "native" not in results:
         return errors or [f"{benchmark.name}: no native result"]
     benchmark.status = results["native"]
