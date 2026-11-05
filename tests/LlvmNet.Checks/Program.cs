@@ -66,6 +66,29 @@ try
         }
         return 0;
     }
+    if (args is ["address-fields", string fieldPath])
+    {
+        // The fields of global and constant addresses per class, and how many of them are initonly (JP-04).
+        using FileStream stream = File.OpenRead(fieldPath);
+        using var image = new PEReader(stream);
+        MetadataReader metadata = image.GetMetadataReader();
+        foreach (TypeDefinitionHandle typeHandle in metadata.TypeDefinitions)
+        {
+            TypeDefinition type = metadata.GetTypeDefinition(typeHandle);
+            int fields = 0, initOnly = 0;
+            foreach (FieldDefinitionHandle fieldHandle in type.GetFields())
+            {
+                FieldDefinition field = metadata.GetFieldDefinition(fieldHandle);
+                string name = metadata.GetString(field.Name);
+                if (!name.StartsWith("__global", StringComparison.Ordinal) && !name.StartsWith("__constant", StringComparison.Ordinal)) continue;
+                fields++;
+                if (field.Attributes.HasFlag(FieldAttributes.InitOnly)) initOnly++;
+            }
+            if (fields > 0)
+                Console.WriteLine($"{metadata.GetString(type.Name)}: {fields} address fields, {initOnly} initonly");
+        }
+        return 0;
+    }
     if (args is ["il-opcodes", string opcodePath, string methodName])
     {
         // The CIL opcodes of each method named methodName, one line per method, for checks of what a lowering emits.

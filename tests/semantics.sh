@@ -2,13 +2,13 @@
 # tags: core aot
 # requires: python3
 # timeout: 2400
-# LLVM IR semantics: generated probes of integer, float, double and x86_fp80 operations, casts, comparisons and
-# intrinsics on edge values, widths 1 to 128 including odd widths, compared bit for bit with the natively
+# LLVM IR semantics: generated probes of integer, float, double and x86_fp80 operations, casts, comparisons,
+# intrinsics and switches on edge values, widths 1 to 128 including odd widths, compared bit for bit with the natively
 # compiled module in both modes, plus portable NativeAOT.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 python3 "$root/tests/semantics/generate.py" "$test_output/native" >/dev/null
-for module in integer float extended; do
+for module in integer switch float extended; do
     clang-22 -O0 "$test_output/native/$module.ll" -lm -o "$test_output/native/$module"
     "$test_output/native/$module" >"$test_output/native/$module.txt"
 done
@@ -26,7 +26,7 @@ for runtime in system portable; do
     [[ "$runtime" == system ]] && abi=system-linux-x64-v1
     directory="$test_output/$runtime"
     python3 "$root/tests/semantics/generate.py" "$directory" "$abi" >/dev/null
-    for module in integer float extended; do
+    for module in integer switch float extended; do
         "$llvmnet" --runtime="$runtime" "$directory/$module.ll" -o "$directory/semantics-$module.dll"
         dotnet "$directory/semantics-$module.dll" >"$directory/$module.txt"
         compare "$runtime JIT" "$module" "$directory/$module.txt"
@@ -35,6 +35,15 @@ for runtime in system portable; do
             "$directory/semantics-$module-aot" >"$directory/$module-aot.txt"
             compare "portable NativeAOT" "$module" "$directory/$module-aot.txt"
         fi
+    done
+    # Dense switches become a CIL switch (JP-03); sparse ones and those of four cases a binary search of compares.
+    for probe in switch_dense_i8 switch_negative_i32 switch_top_i64 switch_signbound_i33 switch_mixed_i16; do
+        dotnet "$checks" il-opcodes "$directory/semantics-switch.dll" "$probe" | grep -qw switch ||
+            { printf 'FAIL: %s %s has no CIL switch\n' "$runtime" "$probe" >&2; exit 1; }
+    done
+    for probe in switch_sparse_i32 switch_few4_i64 switch_ranges_i8; do
+        ! dotnet "$checks" il-opcodes "$directory/semantics-switch.dll" "$probe" | grep -qw switch ||
+            { printf 'FAIL: %s %s has a CIL switch\n' "$runtime" "$probe" >&2; exit 1; }
     done
 done
 cases=$(wc -l <"$test_output/native/cases.tsv")

@@ -376,7 +376,7 @@ internal sealed class CilCompiler(CompilerOptions options)
                 Host.LibraryFor(Llvm.Name(global));
             else if (Llvm.LLVMGetInitializer(global) == 0 && !Cxx.HasGlobal(Llvm.Name(global)) && kernelStubs?.DataPackageOf(Llvm.Name(global)) is null)
                 throw new NotSupportedException($"Unresolved external global: {Llvm.Name(global)}");
-            Globals[global] = FieldHolder().DefineField($"__global{Globals.Count}", typeof(nint), FieldAttributes.Assembly | FieldAttributes.Static);
+            Globals[global] = AddressField($"__global{Globals.Count}", threadLocal);
             if (threadLocal)
             {
                 Globals[global].SetCustomAttribute(new CustomAttributeBuilder(typeof(ThreadStaticAttribute).GetConstructor(Type.EmptyTypes)!, []));
@@ -490,11 +490,25 @@ internal sealed class CilCompiler(CompilerOptions options)
         return fieldHolders[^1];
     }
 
+    /// <summary>
+    /// The field of a global's or a constant's address. Program's type initializer writes it once, before any translated
+    /// code runs, so on Program it is initonly: RyuJIT then reads it as a constant in code optimized once Program is
+    /// initialized (impImportStaticReadOnlyField), as PF-17's reloads need (JP-04). A holder class past Program has no
+    /// type initializer, and the runtime counts such a class as initialized from the start (IsInitedIfStaticDataAllocated),
+    /// so code compiled before Program's initializer has written those fields would read them as zero: they stay
+    /// writable, as do thread-local globals, whose getters write each thread's address.
+    /// </summary>
+    private FieldBuilder AddressField(string name, bool threadLocal)
+    {
+        TypeBuilder holder = FieldHolder();
+        return holder.DefineField(name, typeof(nint), FieldAttributes.Assembly | FieldAttributes.Static | (holder == Program && !threadLocal ? FieldAttributes.InitOnly : 0));
+    }
+
     internal FieldBuilder Constant(nint value)
     {
         if (!constants.TryGetValue(value, out FieldBuilder? field))
         {
-            field = FieldHolder().DefineField($"__constant{constants.Count}", typeof(nint), FieldAttributes.Assembly | FieldAttributes.Static);
+            field = AddressField($"__constant{constants.Count}", threadLocal: false);
             constants[value] = field;
         }
         return field;

@@ -171,6 +171,60 @@ def integer_module(m):
                         m.call(f, [w, w], [a, b], 8, f"{name} i{w} {a:#x} {b:#x}")
 
 
+def switch_module(m):
+    """Switches (JP-03): dense, negative, wrapping, sign-boundary, sparse and ranged case values, shared targets,
+    an unreachable default, and tables of the fewest cases, called with every case value, its neighbours and edge
+    values. Each target returns its own number; one reaches the join block directly, so the switch's own edges store
+    a phi that depends on the condition. The probes use their own random generator, so the other modules' values stay
+    as they were."""
+    rng = random.Random(20261105)
+    for w in [7, 8, 16, 32, 33, 64, 128]:
+        mask = (1 << w) - 1
+        sign = 1 << (w - 1)
+        sets = {
+            "dense": [(v, v % 5) for v in range(12) if v not in (3, 8)],
+            "negative": [(v & mask, v % 4) for v in range(-6, 7) if v != -2],
+            "top": [((mask - v) & mask, v % 3) for v in range(10)],
+            "signbound": [((sign + v) & mask, v % 4) for v in range(-4, 4)],
+            "sparse": [(1 << k, k % 6) for k in range(0, w, max(1, w // 9))] + [(rng.getrandbits(w), 6) for _ in range(4)],
+            "ranges": [(v, 1) for v in range(10, 20)] + [(v, 2) for v in range(20, 30)] + [(100, 3)] +
+                      [(v, 4) for v in range(1000 & mask, (1000 & mask) + 4)] + [((mask - v) & mask, 5) for v in range(3)],
+            "mixed": [(v, v % 3) for v in range(16)] + [(sign >> 1, 3), (mask, 4), (sign, 5)] + [(v & mask, 6) for v in range(200, 231)],
+            "bits": [(v, 1) for v in (1, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31)] + [(40, 2)],
+            "few3": [(v, v) for v in range(3)],
+            "few4": [(v, v) for v in range(4)],
+            "few5": [(v + 2, v) for v in range(5)],
+        }
+        for name, cases in sets.items():
+            seen, unique = set(), []
+            for value, target in cases:
+                if value & mask not in seen:
+                    seen.add(value & mask)
+                    unique.append((value & mask, target))
+            switch_probe(m, f"switch_{name}_i{w}", w, unique, False, sorted(seen) + [0, 2, mask, sign, 0x5a & mask, rng.getrandbits(w)])
+        switch_probe(m, f"switch_unreachable_i{w}", w, [(v, v % 3) for v in range(8)], True, list(range(8)))
+
+
+def switch_probe(m, name, w, cases, unreachable, inputs):
+    mask = (1 << w) - 1
+    targets = sorted({target for _, target in cases})
+    entries = "  ".join(f"i{w} {literal(value, w)}, label %t{target}" for value, target in cases)
+    extend = "zext" if w < 32 else "trunc" if w > 32 else None
+    body = [f"%x = {extend} i{w} %a to i32" if extend else "%x = add i32 %a, 0",
+            f"switch i{w} %a, label %default [ {entries} ]"]
+    for target in targets[1:]:
+        body += [f"t{target}:", "br label %join"]
+    body += ["default:", "unreachable" if unreachable else "br label %join", "join:"]
+    incoming = [f"[ %x, %entry ]"] * sum(target == targets[0] for _, target in cases) + [f"[ {target + 1}, %t{target} ]" for target in targets[1:]]
+    body.append("%out = phi i32 " + ", ".join(incoming + ([] if unreachable else ["[ -1, %default ]"])))
+    # The first target is the join block itself, reached from the switch's block.
+    body[1] = body[1].replace(f"label %t{targets[0]}", "label %join")
+    f = m.probe(name, [w], 32, body)
+    for value in dict.fromkeys(v & mask for value in inputs for v in (value - 1, value, value + 1)):
+        if not unreachable or any(value == case for case, _ in cases):
+            m.call(f, [w], [value], 32, f"{name} {value:#x}")
+
+
 FLOATS = {
     32: ("float", "<f", "<I", 0x7fc00000),
     64: ("double", "<d", "<Q", 0x7ff8000000000000),
@@ -391,7 +445,7 @@ if __name__ == "__main__":
     abi = sys.argv[2] if len(sys.argv) > 2 else ""
     os.makedirs(directory, exist_ok=True)
     with open(os.path.join(directory, "cases.tsv"), "w") as cases:
-        for name, build in [("integer", integer_module), ("float", float_module), ("extended", extended_module)]:
+        for name, build in [("integer", integer_module), ("switch", switch_module), ("float", float_module), ("extended", extended_module)]:
             module = Module(abi)
             build(module)
             module.write(os.path.join(directory, f"{name}.ll"))

@@ -267,21 +267,21 @@ internal sealed class FunctionEmitter : ValueEmitter
                 }
                 return;
             case 3:
+                if (TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0))) <= 64)
+                {
+                    Switch(block, value);
+                    return;
+                }
                 for (uint index = 1; index < Llvm.LLVMGetNumSuccessors(value); index++)
                 {
                     Label next = Il.DefineLabel();
                     nint condition = Llvm.LLVMGetOperand(value, 0);
                     Load(condition);
                     Load(Llvm.LLVMGetSwitchCaseValue(value, index));
-                    if (TypeSystem.Width(Llvm.LLVMTypeOf(condition)) > 64)
-                    {
-                        Il.Emit(OpCodes.Ldc_I4, 32);
-                        Il.Emit(OpCodes.Ldc_I4, TypeSystem.Width(Llvm.LLVMTypeOf(condition)));
-                        Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.Compare))!);
-                        Il.Emit(OpCodes.Brfalse, next);
-                    }
-                    else
-                        Il.Emit(OpCodes.Bne_Un, next);
+                    Il.Emit(OpCodes.Ldc_I4, 32);
+                    Il.Emit(OpCodes.Ldc_I4, TypeSystem.Width(Llvm.LLVMTypeOf(condition)));
+                    Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.Compare))!);
+                    Il.Emit(OpCodes.Brfalse, next);
                     Edge(block, Llvm.LLVMGetSuccessor(value, index));
                     Il.MarkLabel(next);
                 }
@@ -615,6 +615,175 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
         else
             ReadMemory(element);
+    }
+
+    /// <summary>
+    /// The fewest clusters a CIL switch is built from, and how sparse it may be (its range at most this many times its
+    /// case count). LLVM's x86 minimum is 4, but RyuJIT's table of four made the 4-case switches in musl's sin, cos and
+    /// atan2 slower than two compares each (almabench 1.8% under the JIT).
+    /// </summary>
+    internal const int SwitchTableClusters = 5, SwitchTableDensity = 4;
+
+    /// <summary>
+    /// A switch on at most 64 bits, lowered as LLVM's SelectionDAG lowers one (JP-03, SwitchLoweringUtils.cpp). Cases with
+    /// consecutive values and one target form ranges. Runs of at least <see cref="SwitchTableClusters"/> clusters dense
+    /// enough for a table become a CIL switch on the condition minus the run's lowest value, which RyuJIT compiles to a
+    /// jump table or a bit test; it rebuilds a switch from a compare chain only for equality tests with one shared target
+    /// (switchrecognition.cpp). The clusters are then found by a binary search, with at most three compared in a row.
+    /// Values compare as the condition's CIL value: zero-extended below 32 bits and between 33 and 63, signed at 32 and
+    /// 64. Each target's phi copies are emitted once, at a stub every case of that target branches to.
+    /// </summary>
+    private void Switch(nint block, nint value)
+    {
+        nint condition = Llvm.LLVMGetOperand(value, 0);
+        int width = TypeSystem.Width(Llvm.LLVMTypeOf(condition));
+        bool wide = width > 32;
+        var stubs = new Dictionary<nint, Label>();
+        Label Stub(nint target) => stubs.TryGetValue(target, out Label label) ? label : stubs[target] = Il.DefineLabel();
+        nint defaultTarget = Llvm.LLVMGetSuccessor(value, 0);
+        Label defaultStub = Stub(defaultTarget);
+        // A default that is unreachable needs no test of the last cluster that could match.
+        bool unreachableDefault = Llvm.LLVMGetInstructionOpcode(Llvm.LLVMGetFirstInstruction(defaultTarget)) == 7;
+        var cases = new List<(long Key, nint Target)>();
+        for (uint index = 1; index < Llvm.LLVMGetNumSuccessors(value); index++)
+        {
+            long key = Llvm.LLVMConstIntGetSExtValue(Llvm.LLVMGetSwitchCaseValue(value, index));
+            cases.Add((width is 32 or 64 ? key : key & ((1L << width) - 1), Llvm.LLVMGetSuccessor(value, index)));
+        }
+        cases.Sort((left, right) => left.Key.CompareTo(right.Key));
+        var ranges = new List<(long Low, long High, nint Target)>();
+        foreach ((long key, nint target) in cases)
+        {
+            if (ranges.Count > 0 && ranges[^1].Target == target && ranges[^1].High + 1 == key)
+                ranges[^1] = (ranges[^1].Low, key, target);
+            else
+                ranges.Add((key, key, target));
+        }
+        // The fewest partitions of the ranges into tables and single ranges, found backwards as LLVM's findJumpTables
+        // does; between equal partitionings, the one with more tables.
+        int count = ranges.Count;
+        var totals = new long[count + 1];
+        for (int index = 0; index < count; index++)
+            totals[index + 1] = totals[index] + (ranges[index].High - ranges[index].Low + 1);
+        var partitions = new int[count + 1];
+        var tables = new int[count + 1];
+        var last = new int[count];
+        for (int first = count - 1; first >= 0; first--)
+        {
+            partitions[first] = partitions[first + 1] + 1;
+            tables[first] = tables[first + 1];
+            last[first] = first;
+            for (int end = first + SwitchTableClusters - 1; end < count; end++)
+            {
+                ulong span = unchecked((ulong)ranges[end].High - (ulong)ranges[first].Low);
+                if (span >= (ulong)(SwitchTableDensity * (totals[end + 1] - totals[first])))
+                    continue;
+                if (partitions[end + 1] + 1 < partitions[first] || partitions[end + 1] + 1 == partitions[first] && tables[end + 1] + 1 > tables[first])
+                {
+                    partitions[first] = partitions[end + 1] + 1;
+                    tables[first] = tables[end + 1] + 1;
+                    last[first] = end;
+                }
+            }
+        }
+        var clusters = new List<(long Low, long High, nint Target, Label[]? Table, long Weight)>();
+        for (int first = 0; first < count; first = last[first] + 1)
+        {
+            if (last[first] == first)
+            {
+                clusters.Add((ranges[first].Low, ranges[first].High, ranges[first].Target, null, totals[first + 1] - totals[first]));
+                continue;
+            }
+            long low = ranges[first].Low;
+            var table = new Label[checked((int)(ranges[last[first]].High - low + 1))];
+            Array.Fill(table, defaultStub);
+            for (int index = first; index <= last[first]; index++)
+                for (long entry = ranges[index].Low - low; entry <= ranges[index].High - low; entry++)
+                    table[entry] = Stub(ranges[index].Target);
+            clusters.Add((low, ranges[last[first]].High, 0, table, totals[last[first] + 1] - totals[first]));
+        }
+
+        void Constant(long number)
+        {
+            if (wide) Il.Emit(OpCodes.Ldc_I8, number);
+            else Il.Emit(OpCodes.Ldc_I4, unchecked((int)number));
+        }
+        void Offset(long low)
+        {
+            Load(condition);
+            if (low == 0) return;
+            Constant(low);
+            Il.Emit(OpCodes.Sub);
+        }
+        void Search(int first, int end)
+        {
+            if (end - first < 3)
+            {
+                for (int index = first; index <= end; index++)
+                {
+                    (long low, long high, nint target, Label[]? table, _) = clusters[index];
+                    if (table is null && index == end && unreachableDefault)
+                    {
+                        Il.Emit(OpCodes.Br, Stub(target));
+                        return;
+                    }
+                    if (table is not null)
+                    {
+                        Label outside = Il.DefineLabel();
+                        if (wide)
+                        {
+                            // A CIL switch takes a 32-bit index.
+                            Offset(low);
+                            Constant(table.Length - 1);
+                            Il.Emit(OpCodes.Bgt_Un, outside);
+                        }
+                        Offset(low);
+                        if (wide) Il.Emit(OpCodes.Conv_I4);
+                        Il.Emit(OpCodes.Switch, table);
+                        Il.MarkLabel(outside);
+                    }
+                    else if (low == high)
+                    {
+                        Load(condition);
+                        Constant(low);
+                        Il.Emit(OpCodes.Beq, Stub(target));
+                    }
+                    else
+                    {
+                        Offset(low);
+                        Constant(high - low);
+                        Il.Emit(OpCodes.Ble_Un, Stub(target));
+                    }
+                }
+                Il.Emit(OpCodes.Br, defaultStub);
+                return;
+            }
+            // Split where the cases on either side are closest to half of them, as LLVM balances the clusters'
+            // probabilities, which are proportional to their cases without profile data.
+            long total = 0, below = 0;
+            for (int index = first; index <= end; index++)
+                total += clusters[index].Weight;
+            int middle = first + 1;
+            for (below = clusters[first].Weight; middle < end && 2 * (below + clusters[middle].Weight) <= total; middle++)
+                below += clusters[middle].Weight;
+            Label lower = Il.DefineLabel();
+            Load(condition);
+            Constant(clusters[middle].Low);
+            Il.Emit(OpCodes.Blt, lower);
+            Search(middle, end);
+            Il.MarkLabel(lower);
+            Search(first, middle - 1);
+        }
+
+        if (clusters.Count == 0)
+            Il.Emit(OpCodes.Br, defaultStub);
+        else
+            Search(0, clusters.Count - 1);
+        foreach ((nint target, Label label) in stubs)
+        {
+            Il.MarkLabel(label);
+            Edge(block, target);
+        }
     }
 
     private void Edge(nint source, nint target)
