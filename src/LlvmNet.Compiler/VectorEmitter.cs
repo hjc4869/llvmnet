@@ -34,12 +34,14 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// ABI's two-float &lt;2 x float&gt; and SROA's small arrays, used as containers with an occasional two-lane
     /// operation InstCombine formed (Bullet ran 4% slower with those typed). Without <paramref name="cost"/> (the hidden
     /// --vector-lowering=typed) only what the lowering does not translate is scalarized. Returns each scalarized
-    /// function's name with the reason, null for one scalarized by this cost.
+    /// function's name with the reason, null for one scalarized by this cost; <paramref name="computes"/> tells whether a
+    /// function that stays vector code computes on lanes, which makes NativeAOT target x86-64-v2 (Driver).
     /// </summary>
-    internal static unsafe List<(string Function, string? Reason)> Legalize(TypeSystem types, nint module, bool cost)
+    internal static unsafe List<(string Function, string? Reason)> Legalize(TypeSystem types, nint module, bool cost, out bool computes)
     {
         List<nint> functions = [];
         List<(string, string?)> report = [];
+        computes = false;
         foreach (nint function in Llvm.Functions(module))
         {
             if (Llvm.LLVMIsDeclaration(function) != 0) continue;
@@ -53,7 +55,11 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 if (opcode is 50 or 51 && types.Vector(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, 0))) is not null) traffic++;
                 else saved += Saved(types, instruction, opcode);
             }
-            if (reason is null && (!cost || traffic <= saved)) continue;
+            if (reason is null && (!cost || traffic <= saved))
+            {
+                computes |= saved > 0;
+                continue;
+            }
             functions.Add(function);
             report.Add((Llvm.Name(function), reason));
         }

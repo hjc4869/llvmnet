@@ -30,7 +30,7 @@ LLVM vector IR of 8- to 64-bit integer, pointer, `float` and `double` lanes, and
 
 | `--isa` | Macros and intrinsics | Vectorizer cost model | NativeAOT instruction set on x64 |
 | --- | --- | --- | --- |
-| `baseline` (default) | none: libraries take their C paths | SSE2 | baseline (SSE2, SSE4.2 tested at run time) |
+| `baseline` (default) | none: libraries take their C paths | SSE2 | `x86-64-v2` for a program with vector code, else the baseline (SSE2, SSE4.2 tested at run time) |
 | `x86-64-v2` | `__SSE__` to `__SSE4_2__`, `__POPCNT__`, `__x86_64__` | SSE4.2 | `x86-64-v2` |
 | `x86-64-v3` | also `__AVX__`, `__AVX2__`, `__FMA__`, `__F16C__`, `__BMI__`, `__BMI2__`, `__LZCNT__` | AVX2, 256-bit vectors | `x86-64-v3` |
 | `wasm-simd128` | `__LLVMNET_SIMD128__` and llvmnet's `wasm_simd128.h` | SSE2 | `x86-64-v2` |
@@ -48,7 +48,7 @@ The level changes no data layout: objects of every level link together, and the 
 | ARM64 (macOS, Linux, Windows), JIT and NativeAOT | NEON instructions | halves | AdvSimd's instruction where one has the same meaning, else composed |
 | `DOTNET_EnableHWIntrinsic=0` | software | software | composed |
 
-At NativeAOT's default instruction set on x64, vector code built at `-O2` can run slower than the same program built scalar, because the SSE4.1 operations the vectorizers use are composed from SSE2 there: dav1d decodes 1.26 times slower than its scalar build, and 1.35 times faster with `--aot-instruction-set x86-64-v2`, which requires an x64 processor from about 2009 on ([evidence](../evidence/2026-11-03-vector-lowering.md#the-surveys-libraries-2026-11-05)). Making that the default for vectorized programs is proposed for the owner.
+A NativeAOT executable on x64 targets `x86-64-v2` (SSE4.2 and POPCNT, x64 processors since about 2009) when the program has vector code, a function the lowering keeps as vector code that computes on lanes, which is most programs built at `-O2` and above: at the baseline, ILC composes the SSE4.1 operations the vectorizers use from SSE2, and dav1d decoded 1.26 times slower than its own scalar build there, against 1.44 times faster at `x86-64-v2` ([evidence](../evidence/2026-11-03-vector-lowering.md#the-surveys-libraries-2026-11-05); the owner's decision of 2026-11-05). `-v` says when that applies, and `--aot-instruction-set baseline` gives an executable that starts on every x64 processor.
 
 The results are the same everywhere, bit for bit, apart from the NaN payloads and approximations [x86-intrinsics.md](x86-intrinsics.md#exactness) lists. A few measured cases, each against the same library's scalar build with llvmnet:
 

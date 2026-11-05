@@ -108,7 +108,7 @@ Every option falls into one of four classes, per runtime mode:
 | `--runtime-id=<rid>` | NativeAOT target runtime identifier (default: this host; linux-arm64 cross-publishes from Linux x64; system mode needs linux-x64) |
 | `--aot-project=<dir>` | Write the NativeAOT project into <dir> for publishing on another host (dotnet publish -r <rid>) instead of publishing here |
 | `--aot-optimize=<preference>` | Balanced (default), Speed or Size |
-| `--aot-instruction-set=<set>` | baseline (default: SSE2 on x64), x86-64-v2 (SSE4.2 and POPCNT: x64 CPUs since about 2009; the default for a program with objects compiled at --isa=x86-64-v2 or wasm-simd128), x86-64-v3 (AVX2, BMI2, FMA: x64 CPUs since about 2015; the default for objects compiled at --isa=x86-64-v3) or native (this host's CPU; the executable may not run elsewhere) |
+| `--aot-instruction-set=<set>` | baseline (SSE2 on x64, with SSE4.2 tested at run time; the default for scalar code), x86-64-v2 (SSE4.2 and POPCNT: x64 CPUs since about 2009; the default for a program with vector code, as most programs built at -O2 and above have, or with objects compiled at --isa=x86-64-v2 or wasm-simd128), x86-64-v3 (AVX2, BMI2, FMA: x64 CPUs since about 2015; the default for objects compiled at --isa=x86-64-v3) or native (this host's CPU; the executable may not run elsewhere) |
 | `--aot-debug` | Keep native debug symbols and the map file |
 
 ### Diagnostics and debugging

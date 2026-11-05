@@ -19,6 +19,9 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal readonly Dictionary<nint, (MethodInfo Identity, MethodInfo Target)> AddressTaken = [];
     private KernelStubs? kernelStubs;
     internal TypeSystem Types { get; private set; } = null!;
+    /// <summary>Whether the image has vector code that computes on lanes (VectorEmitter.Legalize), for which NativeAOT
+    /// targets x86-64-v2 on x64: at ILC's baseline, generic Vector128 operations are compiled for SSE2 (SV-05).</summary>
+    internal bool HasVectorCode { get; private set; }
     internal TypeBuilder Program { get; private set; } = null!;
     // The CLR limits how many fields one type may have, so static fields beyond this many per type go to further
     // internal holder classes.
@@ -275,7 +278,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         List<(string Function, uint Differences, uint Products)> reductions = [];
         if (options.TypedVectors)
         {
-            scalarized = VectorEmitter.Legalize(types, module, options.VectorLowering == "auto");
+            scalarized = VectorEmitter.Legalize(types, module, options.VectorLowering == "auto", out bool computes);
+            HasVectorCode = computes;
             foreach ((string function, string? reason) in scalarized)
                 if (options.Verbose)
                     Console.Error.WriteLine(reason is null ? $"llvmnet: scalarized {function}, whose vector code moves more lanes than it computes on"

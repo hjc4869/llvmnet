@@ -177,7 +177,7 @@ grep -aq 'llvmnet.isa' mixed.dll
 grep -aq 'x86-64-v2' mixed.dll
 "$llvmnet" -O1 "$root/tests/c/x86-hints.c" -o baseline.dll
 absent 'llvmnet.isa' baseline.dll
-# NativeAOT takes ILC's x86-64-v2 for a program with x86-64-v2 objects (on x64 identifiers), the baseline otherwise.
+# NativeAOT takes ILC's x86-64-v2 for a program with x86-64-v2 objects (on x64 identifiers), the baseline for scalar code.
 "$llvmnet" crc.o main.o --aot-project mixed-aot >/dev/null
 grep -q '>x86-64-v2</IlcInstructionSet>' mixed-aot/NativeHost.csproj
 "$llvmnet" -O1 "$root/tests/c/x86-hints.c" --aot-project baseline-aot >/dev/null
@@ -187,6 +187,16 @@ printf 'int nothing(void) { return 0; }\n' >v3.c
 "$llvmnet" --isa=x86-64-v3 -O1 -c v3.c -o v3.o
 "$llvmnet" crc.o main.o v3.o --aot-project v3-aot >/dev/null
 grep -q '>x86-64-v3</IlcInstructionSet>' v3-aot/NativeHost.csproj
+# ... and x86-64-v2 for a program with vector code, which the vectorizers' widenings and multiplications need (the
+# owner's SV-05 decision); built scalar, or with the baseline asked for, the same program keeps the baseline.
+printf '#include <stdio.h>\nstatic float a[1024];\nint main(int c, char **v) { for (int i = 0; i < 1024; i++) a[i] = i * (float)c * 2.0f + 1.0f; printf("%%g\\n", a[1023]); return 0; }\n' >scale.c
+"$llvmnet" -O2 -v scale.c --aot-project vector-aot >/dev/null 2>vector-aot.log
+grep -q '>x86-64-v2</IlcInstructionSet>' vector-aot/NativeHost.csproj
+grep -q 'NativeAOT targets x86-64-v2 (SSE4.2), because the program has vector code' vector-aot.log
+"$llvmnet" -O2 -fno-vectorize -fno-slp-vectorize scale.c --aot-project scalar-aot >/dev/null
+absent 'x86-64-v2' scalar-aot/NativeHost.csproj
+"$llvmnet" -O2 --aot-instruction-set baseline scale.c --aot-project forced-aot >/dev/null
+absent 'x86-64-v2' forced-aot/NativeHost.csproj
 printf 'PASS: --isa=x86-64-v2 and its -m aliases define the x86 macros, are recorded in the image and link with baseline objects\n'
 
 # A library's SSE2 switch: system mode and --isa=x86-64-v2 take the SSE2 path, which now translates; the portable
