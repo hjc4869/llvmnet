@@ -27,6 +27,9 @@ internal sealed class FunctionEmitter : ValueEmitter
     private bool tailCalled;
     private readonly List<(Label Site, nint Call)> tailSites = [];
     private readonly Dictionary<Type, LocalBuilder> scratch = [];
+    // Values computed where their one use loads them (ChooseUseSiteValues), and the one being computed there.
+    private readonly HashSet<nint> atUse = [];
+    private nint computing;
 
     internal FunctionEmitter(CilCompiler compiler, nint function, MethodBuilder method) : base(compiler, method.GetILGenerator())
     {
@@ -95,6 +98,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Pop);
             locals[Llvm.LLVMGetParam(function, index)] = copy;
         }
+        if (jumpSites.Count == 0 && valueCount <= 32768) ChooseUseSiteValues();
         if (jumpSites.Count == 0 && valueCount is > 512 and <= 32768) ShareFunctionLocals();
         else AllocateFunctionLocals(valueCount > 32768 && jumpSites.Count == 0);
         if (scopedStack || hasAllocations && jumpSites.Count != 0 || arenaFrame)
@@ -215,6 +219,14 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     internal override void Load(nint value)
     {
+        if (atUse.Contains(value))
+        {
+            nint outer = computing;
+            computing = value;
+            Instruction(Llvm.LLVMGetInstructionParent(value), value);
+            computing = outer;
+            return;
+        }
         if (locals.TryGetValue(value, out LocalBuilder? local))
             Il.Emit(OpCodes.Ldloc, local);
         else if (storedScalars.TryGetValue(value, out var storage))
@@ -231,6 +243,8 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     private void Instruction(nint block, nint value)
     {
+        if (value != computing && atUse.Contains(value))
+            return;
         int opcode = Llvm.LLVMGetInstructionOpcode(value);
         switch (opcode)
         {
@@ -1157,6 +1171,97 @@ internal sealed class FunctionEmitter : ValueEmitter
     }
 
     /// <summary>
+    /// Chooses the values computed where their one use loads them, instead of stored in a local and loaded back (JP-05),
+    /// as LLVM's WebAssembly backend keeps such a value on the stack (WebAssemblyRegStackify). Each saves a stloc and an
+    /// ldloc: two of the 8,000 local references and two of the 20,000 instructions past which RyuJIT gives up optimizing
+    /// a method, and a local of the 1,024 it tracks; RyuJIT also sees the computation as one tree. A value qualifies when
+    /// its one use is a later instruction of its block whose lowering loads each operand once (a binary operation, a
+    /// cast, a GEP, a load's address, a store or a return), and its own lowering only computes on the evaluation stack:
+    /// scalar arithmetic other than division and remainder (whose traps would move), casts, GEPs, and plain loads with
+    /// nothing between them and where they end up computed that may write memory or have another effect (stores, calls,
+    /// atomics, allocas). A value computed in its use's place is computed where that one is, so the rules apply to the
+    /// whole chain, which stops at UseSiteDepth values: an unrolled reduction of thousands of additions would otherwise
+    /// be one recursive computation for the emitter (and one tree for RyuJIT).
+    /// </summary>
+    private const int UseSiteDepth = 16;
+
+    private void ChooseUseSiteValues()
+    {
+        foreach (nint block in Llvm.Blocks(function))
+        {
+            nint[] instructions = [.. Llvm.Instructions(block)];
+            var position = new Dictionary<nint, int>();
+            var computedAt = new Dictionary<nint, int>();
+            var depth = new Dictionary<nint, int>();
+            // effects[i]: how many of the first i instructions may write memory or have another effect.
+            int[] effects = new int[instructions.Length + 1];
+            for (int index = 0; index < instructions.Length; index++)
+            {
+                position.Add(instructions[index], index);
+                effects[index + 1] = effects[index] + (Pure(instructions[index]) ? 0 : 1);
+            }
+            for (int index = instructions.Length - 1; index >= 0; index--)
+            {
+                nint value = instructions[index];
+                computedAt[value] = index;
+                depth[value] = 0;
+                nint use = Llvm.LLVMGetFirstUse(value);
+                if (use == 0 || Llvm.LLVMGetNextUse(use) != 0 || !UseSiteValue(value)) continue;
+                nint user = Llvm.LLVMGetUser(use);
+                if (!position.ContainsKey(user) || !UseSiteUser(user) || depth[user] == UseSiteDepth) continue;
+                int at = computedAt[user];
+                if (Llvm.LLVMGetInstructionOpcode(value) == 27 && effects[at] != effects[index + 1]) continue;
+                atUse.Add(value);
+                computedAt[value] = at;
+                depth[value] = depth[user] + 1;
+            }
+        }
+
+        static bool Scalar(nint type) => TypeSystem.Kind(type) is 2 or 3 or 12 || TypeSystem.Kind(type) == 8 && TypeSystem.Width(type) <= 64;
+        bool Operands(nint instruction)
+        {
+            for (uint index = 0; index < Llvm.LLVMGetNumOperands(instruction); index++)
+                if (!Scalar(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, index)))) return false;
+            return true;
+        }
+        bool PlainMemory(nint instruction, nint type) => Llvm.LLVMGetOrdering(instruction) == 0 && Scalar(type) &&
+            (TypeSystem.Kind(type) != 8 || (TypeSystem.Width(type) + 7) / 8 is 1 or 2 or 4 or 8);
+        bool UseSiteValue(nint value)
+        {
+            int opcode = Llvm.LLVMGetInstructionOpcode(value);
+            if (!Scalar(Llvm.LLVMTypeOf(value))) return false;
+            return opcode switch
+            {
+                8 or 9 or 10 or 11 or 12 or 13 or 16 or >= 20 and <= 25 => Operands(value),
+                29 => Operands(value),
+                >= 30 and <= 40 or 60 or 69 => Operands(value),
+                41 => Operands(value) && Types.Map(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0))) == Types.Map(Llvm.LLVMTypeOf(value)),
+                27 => Llvm.LLVMGetVolatile(value) == 0 && PlainMemory(value, Llvm.LLVMTypeOf(value)),
+                _ => false
+            };
+        }
+        bool UseSiteUser(nint user)
+        {
+            int opcode = Llvm.LLVMGetInstructionOpcode(user);
+            return opcode switch
+            {
+                >= 8 and <= 25 or 29 or >= 30 and <= 41 or 60 or 69 => Scalar(Llvm.LLVMTypeOf(user)) && Operands(user),
+                27 => PlainMemory(user, Llvm.LLVMTypeOf(user)),
+                28 => PlainMemory(user, Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(user, 0))),
+                1 => Llvm.LLVMGetNumOperands(user) == 1 && Scalar(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(user, 0))) && !Types.ReturnsBytes(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(user, 0))),
+                _ => false
+            };
+        }
+        // Instructions that neither write memory nor have another effect a load must not move past.
+        static bool Pure(nint instruction) => Llvm.LLVMGetInstructionOpcode(instruction) switch
+        {
+            >= 8 and <= 25 or 29 or >= 30 and <= 44 or 46 or >= 50 and <= 54 or 60 or 66 or 68 or 69 => true,
+            27 => Llvm.LLVMGetOrdering(instruction) == 0 && Llvm.LLVMGetVolatile(instruction) == 0,
+            _ => false
+        };
+    }
+
+    /// <summary>
     /// Gives each instruction value a local, shared by values of one CIL type whose live ranges do not meet. RyuJIT
     /// keeps at most 1024 locals of a method in registers (JitMaxLocalsToTrack) and stops inlining from about 920
     /// (90% of that), so a local for each value made functions of more than a thousand instructions several times
@@ -1165,7 +1270,8 @@ internal sealed class FunctionEmitter : ValueEmitter
     /// that store it. Ranges that share a position conflict, so an instruction's result never shares a local with its
     /// operands, as an instruction may store part of its result before it has read all of them. The emitter reads the
     /// operands of a comparison, a shuffle or an insertelement where those are used (Order, LoadMask, SplatScalar, a
-    /// chain of insertelements built at its end), so they count as used there too. Only functions of more than 512
+    /// chain of insertelements built at its end), so they count as used there too, as do the operands of a value
+    /// computed where it is used (ChooseUseSiteValues), which gets no local. Only functions of more than 512
     /// values share: RyuJIT allocates registers per local, so values sharing one share an allocation, which added
     /// moves to small hot loops (heapsort and lpbench 10 to 15% slower). A function with setjmp keeps a local for
     /// each value, as the jump dispatch re-enters the body at its call sites.
@@ -1187,7 +1293,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             start[block] = position;
             foreach (nint instruction in Llvm.Instructions(blocks[block]))
             {
-                if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0)
+                if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0 && !atUse.Contains(instruction))
                 {
                     valueIndex.Add(instruction, values.Count);
                     values.Add(instruction);
@@ -1209,6 +1315,12 @@ internal sealed class FunctionEmitter : ValueEmitter
         var seen = new HashSet<nint>();
         void Use(nint operand, int block, int at)
         {
+            if (atUse.Contains(operand))
+            {
+                for (int index = 0; index < Llvm.LLVMGetNumOperands(operand); index++)
+                    Use(Llvm.LLVMGetOperand(operand, (uint)index), block, at);
+                return;
+            }
             if (!valueIndex.TryGetValue(operand, out int value)) return;
             Extend(value, at);
             if (block != home[value]) uses.Add((value, block));
@@ -1236,7 +1348,7 @@ internal sealed class FunctionEmitter : ValueEmitter
                         Use(Llvm.LLVMGetIncomingValue(instruction, index), from, end[from]);
                     }
                 }
-                else
+                else if (!atUse.Contains(instruction))
                 {
                     seen.Clear();
                     for (int index = 0; index < Llvm.LLVMGetNumOperands(instruction); index++)
@@ -1322,7 +1434,7 @@ internal sealed class FunctionEmitter : ValueEmitter
                     foreach (LocalBuilder local in released) Release(local);
                 nint instruction = instructions[index];
                 nint type = Llvm.LLVMTypeOf(instruction);
-                if (TypeSystem.Kind(type) == 0) continue;
+                if (TypeSystem.Kind(type) == 0 || atUse.Contains(instruction)) continue;
                 Type managed = Types.Map(type);
                 int lastUse = -1;
                 if (reuse && managed.IsPrimitive && Llvm.LLVMGetInstructionOpcode(instruction) != 44)
@@ -1440,6 +1552,8 @@ internal sealed class FunctionEmitter : ValueEmitter
 
     private void StoreResult(nint value)
     {
+        if (value == computing)
+            return;
         if (locals.TryGetValue(value, out LocalBuilder? local))
             Il.Emit(OpCodes.Stloc, local);
         else if (storedScalars.TryGetValue(value, out var storage))

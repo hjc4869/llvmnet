@@ -4,6 +4,7 @@
 # minopts: the translated methods the JIT compiled with MinOpts; a JIT engine fails when a benchmark has more.
 # Host: AMD RYZEN AI MAX+ 395 w/ Radeon 8060S, 32 cores; .NET runtime 10.0.14; Debian clang version 22.1.8 (1+b2)
 # Commit: the JP-02 commit's tree (113adb3 with JP-02 to JP-05 and JP-09); written 2026-11-05 11:06 UTC
+# tramp3d jit minopts: 1 since JP-05's use-site values (two advect instantiations came under the thresholds)
 benchmark	engine	median_s	min_s	minopts
 alloca	native	0.1987	0.1923
 alloca	jit	0.2453	0.2430	0
@@ -171,7 +172,7 @@ susan	native	0.0124	0.0111
 susan	jit	0.0715	0.0695	0
 susan	aot	0.0155	0.0138
 tramp3d	native	0.0726	0.0716
-tramp3d	jit	0.4862	0.4769	3
+tramp3d	jit	0.4862	0.4769	1
 tramp3d	aot	0.1078	0.1033
 varargs	native	0.3370	0.3335
 varargs	jit	1.0027	0.9779	0

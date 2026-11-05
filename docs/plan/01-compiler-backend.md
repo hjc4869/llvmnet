@@ -54,7 +54,7 @@ The backend is the part of llvmnet that must be kept. This workstream makes it p
 ### CLR limits and scalability
 
 - [x] **BE-25** (M, P0) Measure the limits real code hits: 65,535 locals, the IL size and basic-block counts beyond which the JIT (also used by NativeAOT) falls back to MinOpts (about 60 KB of IL, 2,000 basic blocks or 2,000 locals), maximum evaluation-stack depth, `localloc` inside loops. Add `--diagnose-limits` printing IL bytes, locals and block counts per function so SPEC gcc/perlbench/wrf hotspots become visible. — **Done** (`a814bdc`): `--diagnose-limits`; measurements in `docs/evidence/2026-10-30-m0-m2.md`.
-- [ ] **BE-26** (L, P1) Function splitting for over-limit methods: outline cold regions into helper methods sharing a frame struct so hot code stays optimized. Validate on 502.gcc_r, 500.perlbench_r and 521.wrf_r.
+- [ ] **BE-26** (L, P1) Function splitting for over-limit methods: outline cold regions into helper methods sharing a frame struct so hot code stays optimized. Validate on 502.gcc_r, 500.perlbench_r and 521.wrf_r. The methods JP-05 leaves past RyuJIT's MinOpts thresholds are listed in [evidence/2026-11-05-jit-shapes.md](../evidence/2026-11-05-jit-shapes.md#ffmpegs-decoder-1): 17 in ffmpeg's decoder (14 past 60,000 IL bytes, `ff_vp9_decode_block` to H.264's CABAC decoder), tramp3d's `main` and mafft's `constants` (2026-11-06).
 - [ ] **BE-27** (M, P1) Compile-time performance: measure link time and peak memory for ffmpeg (about 7,200 methods) and SPEC gcc, then parallelize per-function IL emission where `PersistedAssemblyBuilder` allows and cache the lowered bitcode by hash.
 
 ### Debugging and observability

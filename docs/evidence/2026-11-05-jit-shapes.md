@@ -250,6 +250,86 @@ The decode harness (`artifacts/ffmpeg-browser-portable/decode.bc`), translated b
 
 In the H.264 decode, the JIT's summary (`DOTNET_JitDisasmSummary=1`) shows three of the 25 reached: `ff_h264_decode_mb_cabac` and `ff_h264_filter_mb_fast`, past the IL threshold and each compiled twice (`Tier-0 switched to FullOpts, then to MinOpts` or `Tier0`, then `Tier-0 switched MinOpts` for tier 1, which is discarded), and `ff_h264_filter_mb`, past the instruction and reference thresholds and compiled once with full optimization; the review saw seven over-limit methods before BE-33.
 
+## JP-05: values computed where they are used
+
+### What changed
+
+Every LLVM value used to get a local: the instruction computed it, `stloc` stored it, and each use loaded it with `ldloc`. `FunctionEmitter.ChooseUseSiteValues` now picks the values computed where their one use loads them instead, as LLVM's WebAssembly backend keeps such a value on the stack (`WebAssemblyRegStackify`); each saves a `stloc`, an `ldloc` and a local. A value qualifies when:
+
+- its one use is a later instruction of its block whose lowering loads each operand exactly once: a binary operation, a cast, a GEP, a load's address, a store or a `ret` (not comparisons, selects, calls or switches, whose lowerings load operands more than once or keep them in scratch locals);
+- its own lowering computes only on the evaluation stack: scalar arithmetic except division and remainder, whose traps would move, casts, GEPs and plain (non-volatile, non-atomic) loads;
+- for a load, nothing between it and where it ends up computed may write memory or have another effect (stores, calls, atomics, fences, allocas);
+- the chain of such values above it is shorter than 16: an unrolled reduction of 3,438 additions in the AVX intrinsics test overflowed the compiler's stack before this limit.
+
+Functions with `setjmp` sites and functions of more than 32,768 values keep their locals. The local-sharing pass counts a computed value's operands as used where it is computed, and gives it no local.
+
+### Correctness
+
+The semantics probes (47,795 calls; most probes are an operation whose one use is the `ret`), the core and toolchain gate (114 tests), csmith and YARPGen seeds 7001 to 7200 (326 programs matched native in both modes, the others skipped by the fuzzer's limits or rejected for `i144` and `i152`), c-testsuite and libc-test pass. ffmpeg's decodes keep native's frame hashes.
+
+### ffmpeg's decoder
+
+The decode harness translated with the change off (a temporary switch) and on:
+
+| | Off | On |
+| --- | ---: | ---: |
+| IL bytes | 19,041,371 | 16,211,864 |
+| IL instructions (`ilstats`) | 7,661,861 | 6,243,829 |
+| local references | 3,081,343 | 1,988,993 |
+| locals | 649,484 | 323,633 |
+| translated methods past a MinOpts threshold | 25 | 17 |
+| of them past the IL, block or local threshold | 16 | 14 |
+
+Eight methods come under every threshold: `ff_h264_filter_mb`, `mpeg_decode_slice`, `vp3_decode_frame`, `vp8_decode_frame_header`, `ff_mpeg4_parse_picture_header`, `hl_decode_mb_444_complex` and two `decode_frame` instances. The 17 that remain, BE-26's list (IL bytes, instructions, blocks, locals, references):
+
+| Method | IL bytes | Instructions | Blocks | Locals | References | Past |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `ff_vp9_decode_block` | 116551 | 42334 | 2849 | 203 | 15484 | il,instructions,blocks,references |
+| `inter_pred_scaled_16bpp` | 98070 | 40875 | 1252 | 85 | 14936 | il,instructions,references |
+| `inter_pred_scaled_8bpp` | 97007 | 40435 | 1252 | 85 | 14796 | il,instructions,references |
+| `vp8_decode_mb_row_no_filter` | 91085 | 37715 | 1771 | 288 | 13075 | il,instructions,references |
+| `ff_h264_decode_mb_cabac` | 91056 | 35209 | 1301 | 96 | 10082 | il,instructions,references |
+| `ff_h264_filter_mb_fast` | 90980 | 32098 | 1019 | 246 | 8072 | il,instructions,references |
+| `ac3_decode_frame` | 90467 | 37277 | 1716 | 312 | 9685 | il,instructions,references |
+| `decode_frame_header` | 74790 | 31021 | 1691 | 65 | 12706 | il,instructions,references |
+| `decode_frame.4253` | 74138 | 26683 | 1985 | 234 | 9249 | il,instructions,references |
+| `ff_h264_decode_mb_cavlc` | 67472 | 26321 | 1247 | 85 | 8386 | il,instructions,references |
+| `decode_b` | 66870 | 23771 | 1407 | 113 | 6972 | il,instructions |
+| `inter_pred_16bpp` | 66841 | 28210 | 748 | 73 | 10193 | il,instructions,references |
+| `inter_pred_8bpp` | 65769 | 27696 | 748 | 73 | 10029 | il,instructions,references |
+| `vc1_decode_b_blocks` | 64035 | 27051 | 1357 | 190 | 9710 | il,instructions,references |
+| `mp_decode_frame` | 54811 | 22197 | 1178 | 111 | 8826 | instructions,references |
+| `vc1_decode_p_blocks` | 53870 | 22680 | 1255 | 166 | 8175 | instructions,references |
+| `ff_vfscanf` | 43286 | 16427 | 1465 | 146 | 8136 | references |
+
+### Timing
+
+ffmpeg's decodes, one thread, medians of 7 alternating runs on all threads; native's hashes in every build:
+
+| Image | H.264 | HEVC 10-bit |
+| --- | ---: | ---: |
+| JIT, off | 2.467 | 3.127 |
+| JIT, on | 2.367 | 3.152 |
+| NativeAOT, off | 1.934 | 2.832 |
+| NativeAOT, on | 1.897 | 2.764 |
+
+H.264 is 4% faster under the JIT and 2% as NativeAOT, HEVC level under the JIT and 2.4% faster as NativeAOT.
+
+The benchmark set (`ab-set.py`, the change off and on, 5 rounds, `taskset -c 0-7`): geometric means 0.998 under the JIT and 0.992 as NativeAOT, every output matching native. The extremes, again with 9 rounds: olden-tsp 8.5% faster under the JIT (0.565 to 0.517 s), tramp3d 7% (0.473 to 0.439); mafft 4.7% slower under the JIT (14.61 to 15.30 s) and 3.5% as NativeAOT. With loads left in their locals mafft takes 15.12 s, so neither kind of value alone explains it; it is within the nightly's thresholds and is the cost of the change on this set. olden-voronoi's 7% in the first run was noise (0.224 and 0.221 s with 9 rounds).
+
+### The census
+
+Translated methods past a MinOpts threshold (`ilstats`, which counts as RyuJIT does), with the change off and on:
+
+| Program | Off | On |
+| --- | ---: | ---: |
+| ffmpeg's decoder | 25 (16 past IL, blocks or locals) | 17 (14) |
+| tramp3d | 3: `main`, `Adv5::X::advect`, `Adv5::Y::advect` | 1: `main` (69,873 IL bytes) |
+| mafft | 1: `constants` | 1: `constants` (124,657 IL bytes) |
+| the set's other 52 programs (the ffmpeg entries are the decoder above) | 0 | 0 |
+
+The baseline's `minopts` column now records tramp3d's 1, so the nightly fails if the count rises again.
+
 ## JP-09: MinOpts methods in the benchmark report
 
 `scripts/benchmark.py` runs each JIT engine's validation with `DOTNET_JitDisasmSummary=1` and `DOTNET_JitStdOutFile`, lists the translated methods (of the image's `Program` classes) the summary shows compiled with MinOpts in `minopts.tsv`, and counts them per benchmark in `results.tsv` and the summary. The baseline has a `minopts` column, and a JIT row with more such methods than the baseline's fails the run. [tests/benchmarks.sh](../../tests/benchmarks.sh) checks the comparison on synthetic results: as many or fewer pass, one more fails.
