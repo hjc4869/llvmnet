@@ -106,8 +106,10 @@ public static unsafe partial class X86
         if (Avx.IsSupported)
             return Rounding(mode) switch
             {
-                0 => Avx.RoundToNearestInteger(value), 1 => Avx.RoundToNegativeInfinity(value),
-                2 => Avx.RoundToPositiveInfinity(value), _ => Avx.RoundToZero(value)
+                0 => Avx.RoundToNearestInteger(value),
+                1 => Avx.RoundToNegativeInfinity(value),
+                2 => Avx.RoundToPositiveInfinity(value),
+                _ => Avx.RoundToZero(value)
             };
         return Join(Roundps(value.GetLower(), mode), Roundps(value.GetUpper(), mode));
     }
@@ -118,8 +120,10 @@ public static unsafe partial class X86
         if (Avx.IsSupported)
             return Rounding(mode) switch
             {
-                0 => Avx.RoundToNearestInteger(value), 1 => Avx.RoundToNegativeInfinity(value),
-                2 => Avx.RoundToPositiveInfinity(value), _ => Avx.RoundToZero(value)
+                0 => Avx.RoundToNearestInteger(value),
+                1 => Avx.RoundToNegativeInfinity(value),
+                2 => Avx.RoundToPositiveInfinity(value),
+                _ => Avx.RoundToZero(value)
             };
         return Join(Roundpd(value.GetLower(), mode), Roundpd(value.GetUpper(), mode));
     }

@@ -182,10 +182,18 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// </summary>
     private static readonly Dictionary<string, string> Operators = new()
     {
-        ["Add"] = "op_Addition", ["Subtract"] = "op_Subtraction", ["Multiply"] = "op_Multiply", ["Divide"] = "op_Division",
-        ["BitwiseAnd"] = "op_BitwiseAnd", ["BitwiseOr"] = "op_BitwiseOr", ["Xor"] = "op_ExclusiveOr",
-        ["OnesComplement"] = "op_OnesComplement", ["Negate"] = "op_UnaryNegation", ["ShiftLeft"] = "op_LeftShift",
-        ["ShiftRightArithmetic"] = "op_RightShift", ["ShiftRightLogical"] = "op_UnsignedRightShift",
+        ["Add"] = "op_Addition",
+        ["Subtract"] = "op_Subtraction",
+        ["Multiply"] = "op_Multiply",
+        ["Divide"] = "op_Division",
+        ["BitwiseAnd"] = "op_BitwiseAnd",
+        ["BitwiseOr"] = "op_BitwiseOr",
+        ["Xor"] = "op_ExclusiveOr",
+        ["OnesComplement"] = "op_OnesComplement",
+        ["Negate"] = "op_UnaryNegation",
+        ["ShiftLeft"] = "op_LeftShift",
+        ["ShiftRightArithmetic"] = "op_RightShift",
+        ["ShiftRightLogical"] = "op_UnsignedRightShift",
     };
 
     private static MethodInfo Lookup(Type type, string name, Type? lane, Type[] parameters) =>

@@ -537,12 +537,17 @@ public static unsafe partial class X86
         if (Sse41.IsSupported)
             return Rounding(mode) switch
             {
-                0 => Sse41.RoundToNearestInteger(value), 1 => Sse41.RoundToNegativeInfinity(value),
-                2 => Sse41.RoundToPositiveInfinity(value), _ => Sse41.RoundToZero(value)
+                0 => Sse41.RoundToNearestInteger(value),
+                1 => Sse41.RoundToNegativeInfinity(value),
+                2 => Sse41.RoundToPositiveInfinity(value),
+                _ => Sse41.RoundToZero(value)
             };
         Vector128<float> rounded = Rounding(mode) switch
         {
-            0 => Vector128.Round(value), 1 => Vector128.Floor(value), 2 => Vector128.Ceiling(value), _ => Vector128.Truncate(value)
+            0 => Vector128.Round(value),
+            1 => Vector128.Floor(value),
+            2 => Vector128.Ceiling(value),
+            _ => Vector128.Truncate(value)
         };
         return Vector128.ConditionalSelect(Vector128.Equals(value, value), rounded, value + value);
     }
@@ -553,12 +558,17 @@ public static unsafe partial class X86
         if (Sse41.IsSupported)
             return Rounding(mode) switch
             {
-                0 => Sse41.RoundToNearestInteger(value), 1 => Sse41.RoundToNegativeInfinity(value),
-                2 => Sse41.RoundToPositiveInfinity(value), _ => Sse41.RoundToZero(value)
+                0 => Sse41.RoundToNearestInteger(value),
+                1 => Sse41.RoundToNegativeInfinity(value),
+                2 => Sse41.RoundToPositiveInfinity(value),
+                _ => Sse41.RoundToZero(value)
             };
         Vector128<double> rounded = Rounding(mode) switch
         {
-            0 => Vector128.Round(value), 1 => Vector128.Floor(value), 2 => Vector128.Ceiling(value), _ => Vector128.Truncate(value)
+            0 => Vector128.Round(value),
+            1 => Vector128.Floor(value),
+            2 => Vector128.Ceiling(value),
+            _ => Vector128.Truncate(value)
         };
         return Vector128.ConditionalSelect(Vector128.Equals(value, value), rounded, value + value);
     }
@@ -569,13 +579,18 @@ public static unsafe partial class X86
         if (Sse41.IsSupported)
             return Rounding(mode) switch
             {
-                0 => Sse41.RoundToNearestIntegerScalar(upper, value), 1 => Sse41.RoundToNegativeInfinityScalar(upper, value),
-                2 => Sse41.RoundToPositiveInfinityScalar(upper, value), _ => Sse41.RoundToZeroScalar(upper, value)
+                0 => Sse41.RoundToNearestIntegerScalar(upper, value),
+                1 => Sse41.RoundToNegativeInfinityScalar(upper, value),
+                2 => Sse41.RoundToPositiveInfinityScalar(upper, value),
+                _ => Sse41.RoundToZeroScalar(upper, value)
             };
         float scalar = value.ToScalar();
         return upper.WithElement(0, float.IsNaN(scalar) ? scalar + scalar : Rounding(mode) switch
         {
-            0 => MathF.Round(scalar), 1 => MathF.Floor(scalar), 2 => MathF.Ceiling(scalar), _ => MathF.Truncate(scalar)
+            0 => MathF.Round(scalar),
+            1 => MathF.Floor(scalar),
+            2 => MathF.Ceiling(scalar),
+            _ => MathF.Truncate(scalar)
         });
     }
 
@@ -585,13 +600,18 @@ public static unsafe partial class X86
         if (Sse41.IsSupported)
             return Rounding(mode) switch
             {
-                0 => Sse41.RoundToNearestIntegerScalar(upper, value), 1 => Sse41.RoundToNegativeInfinityScalar(upper, value),
-                2 => Sse41.RoundToPositiveInfinityScalar(upper, value), _ => Sse41.RoundToZeroScalar(upper, value)
+                0 => Sse41.RoundToNearestIntegerScalar(upper, value),
+                1 => Sse41.RoundToNegativeInfinityScalar(upper, value),
+                2 => Sse41.RoundToPositiveInfinityScalar(upper, value),
+                _ => Sse41.RoundToZeroScalar(upper, value)
             };
         double scalar = value.ToScalar();
         return upper.WithElement(0, double.IsNaN(scalar) ? scalar + scalar : Rounding(mode) switch
         {
-            0 => Math.Round(scalar), 1 => Math.Floor(scalar), 2 => Math.Ceiling(scalar), _ => Math.Truncate(scalar)
+            0 => Math.Round(scalar),
+            1 => Math.Floor(scalar),
+            2 => Math.Ceiling(scalar),
+            _ => Math.Truncate(scalar)
         });
     }
 
@@ -832,7 +852,10 @@ public static unsafe partial class X86
         int count = Elements(control);
         int Element(Vector128<byte> value, int index) => (control & 3) switch
         {
-            0 => value.GetElement(index), 1 => value.AsUInt16().GetElement(index), 2 => value.AsSByte().GetElement(index), _ => value.AsInt16().GetElement(index)
+            0 => value.GetElement(index),
+            1 => value.AsUInt16().GetElement(index),
+            2 => value.AsSByte().GetElement(index),
+            _ => value.AsInt16().GetElement(index)
         };
         uint result = 0;
         for (int j = 0; j < count; j++)
