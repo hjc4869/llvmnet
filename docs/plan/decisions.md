@@ -255,6 +255,10 @@ Each decision is recorded in the style of an architecture decision record: conte
 
 **Status.** Proposed 2026-11-04; accepted 2026-11-05 by the owner: option 3 as JP-06, opt-in, with partial images (option 5) measured as its refinement and per-identifier folders (option 4) only after a spike. Implemented 2026-11-06 as `--readytorun <rid>` ([evidence](../evidence/2026-11-05-jit-shapes.md#jp-06-readytorun-for-one-runtime-identifier)): a composite image of the program and LlvmNet.Runtime, each in its own version bubble, because a shared bubble bound the image to the framework build it was compiled against; it takes 0.913 of the JIT's time over the set.
 
+## Proposed for the owner (2026-11-06, JP-07)
+
+- **The framework translated images target.** An image's `runtimeconfig.json` names `net10.0` with `rollForward: Minor`, so it runs on every .NET 10 runtime and a host with only a later major refuses it until `DOTNET_ROLL_FORWARD=LatestMajor` is set (TC-12). .NET 11 is a standard-term release due on 2026-11-10; its support ends in November 2028, as .NET 10's long-term support does (2028-11-14). Measured on 11.0 RC2 under the JIT ([evidence](../evidence/2026-11-05-jit-shapes.md#jp-07-net-11-under-the-jit-2026-11-06)): the set's images run unchanged at 1.008 of 10.0.14's time with the same output, start 12 ms faster, and keep JP-02's gain (0.846); olden-em3d is slower with JP-02's setting there. NativeAOT with ILCompiler 11 is measured after the release. Options: (a) keep `net10.0` and `rollForward: Minor`; (b) keep `net10.0` with `rollForward: Major`, so an image runs on .NET 10 where it is installed and on the next major otherwise, which no gate tests today; (c) target `net11.0`, which would refuse every .NET 10 host for no measured gain. Proposed: (a) for 1.0, revisited with JP-07's NativeAOT half; (b) only together with a nightly run of the set on the newest major.
+
 ## Decided by the owner (2026-10-31)
 
 Questions that came up while closing M7, proposed 2026-10-31 and decided by the owner on 2026-11-05 as recommended.

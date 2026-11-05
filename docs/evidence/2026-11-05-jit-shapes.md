@@ -421,6 +421,76 @@ ReadyToRun takes 0.913 of the JIT's time, 1.49 times native against 1.63. It gai
 
 `tests/readytorun.sh`: a generated program with a function past the IL threshold matches native as a `.dll`, as a launcher and in system mode; with tiering off the IL image's JIT compiles that function with MinOpts and the ReadyToRun image's does not compile it at all; the option's misuses fail with one line. The benchmark set's ReadyToRun engine matches native on its 55 programs and ffmpeg's hashes.
 
+## JP-07: .NET 11 under the JIT (2026-11-06)
+
+The JIT images of the whole set (`scripts/benchmark.py --validate-only --engines native,jit` at `2a02dc5`, `artifacts/bench/jp07-images`, every output matching native) ran on this host's .NET 10.0.14 and on .NET 11.0.0-rc.2.26504.105, the same images selected onto 11 with `DOTNET_ROLL_FORWARD=LatestMajor` and `DOTNET_ROLL_FORWARD_TO_PRERELEASE=1` (`COREHOST_TRACE` confirms the framework chosen), alternating in each round (`sweep.py`, 5 rounds, all threads); every output equals 10.0.14's. NativeAOT with ILCompiler 11 waits for 11.0's release, due on 2026-11-10. Seconds:
+
+| Benchmark | 10.0.14 | 11.0 RC2 | RC2 / 10.0.14 |
+| --- | ---: | ---: | ---: |
+| malloc | 0.893 | 0.927 | 1.038 |
+| fwrite | 0.651 | 0.658 | 1.010 |
+| printf | 1.857 | 1.954 | 1.052 |
+| atomics | 0.310 | 0.313 | 1.010 |
+| mutex | 1.262 | 1.307 | 1.035 |
+| calli | 2.116 | 2.157 | 1.020 |
+| varargs | 1.003 | 0.979 | 0.977 |
+| float80 | 0.191 | 0.175 | 0.920 |
+| memcpy | 0.556 | 0.536 | 0.964 |
+| alloca | 0.263 | 0.280 | 1.063 |
+| callback | 0.407 | 0.412 | 1.012 |
+| startup | 0.044 | 0.031 | 0.717 |
+| dhrystone | 0.136 | 0.118 | 0.866 |
+| linpack | 0.988 | 0.993 | 1.006 |
+| richards | 0.429 | 0.434 | 1.011 |
+| oourafft | 1.145 | 1.171 | 1.022 |
+| ffbench | 0.538 | 0.545 | 1.013 |
+| whetstone | 0.511 | 0.508 | 0.993 |
+| salsa20 | 2.232 | 2.212 | 0.991 |
+| perlin | 0.986 | 0.999 | 1.013 |
+| reed-solomon | 1.838 | 1.831 | 0.997 |
+| almabench | 2.331 | 2.332 | 1.000 |
+| fftbench | 1.000 | 0.962 | 0.962 |
+| huffbench | 5.677 | 5.790 | 1.020 |
+| lpbench | 1.223 | 1.232 | 1.007 |
+| fannkuch | 1.464 | 1.451 | 0.991 |
+| recursive | 0.523 | 0.528 | 1.009 |
+| heapsort | 1.620 | 1.631 | 1.007 |
+| hash | 1.863 | 1.865 | 1.001 |
+| lists | 2.919 | 2.911 | 0.997 |
+| random | 1.077 | 1.087 | 1.009 |
+| queens | 1.095 | 1.095 | 1.000 |
+| hash2-cxx | 1.032 | 1.012 | 0.980 |
+| stepanov-v1p2 | 2.526 | 2.527 | 1.001 |
+| stepanov-abstraction | 1.502 | 1.524 | 1.015 |
+| functionobjects | 2.237 | 2.223 | 0.994 |
+| olden-bh | 1.126 | 1.116 | 0.992 |
+| olden-health | 0.147 | 0.149 | 1.014 |
+| olden-treeadd | 0.096 | 0.099 | 1.037 |
+| olden-tsp | 0.598 | 0.572 | 0.956 |
+| olden-em3d | 1.024 | 1.579 | 1.543 |
+| olden-voronoi | 0.227 | 0.236 | 1.039 |
+| ptrdist-ks | 0.313 | 0.311 | 0.996 |
+| ptrdist-yacr2 | 0.290 | 0.296 | 1.020 |
+| ptrdist-ft | 0.410 | 0.415 | 1.012 |
+| ptrdist-anagram | 0.428 | 0.431 | 1.007 |
+| tramp3d | 0.457 | 0.459 | 1.004 |
+| bullet | 1.899 | 1.894 | 0.997 |
+| jpeg | 0.076 | 0.069 | 0.903 |
+| lame | 0.166 | 0.178 | 1.072 |
+| sha | 0.062 | 0.064 | 1.034 |
+| susan | 0.073 | 0.074 | 1.005 |
+| mafft | 15.581 | 15.461 | 0.992 |
+| nbench | 0.643 | 0.657 | 1.021 |
+| ffmpeg-hevc-1t | 2.985 | 2.870 | 0.961 |
+| ffmpeg-hevc-4t | 1.298 | 1.274 | 0.982 |
+| ffmpeg-h264-1t | 2.214 | 2.195 | 0.991 |
+| ffmpeg-h264-4t | 0.932 | 0.933 | 1.001 |
+| geometric mean (startup excluded) | | | 1.008 |
+
+11.0 RC2 runs the set at 1.008 of 10.0.14's time. It starts faster (the startup probe 31 against 44 ms) and runs dhrystone 13% faster; with 9 rounds dhrystone is 0.127 against 0.147, printf 6% slower (1.935 against 1.823) and lame, alloca and jpeg level. The outlier is olden-em3d, 1.52 times 10.0.14's median with 9 rounds but bimodal (fastest run 1.037, 10.0.14's median 1.030). It is JP-02's setting: on 11 with `DOTNET_TC_CallCountingDelayMs=100` it takes 1.034 s, and with tiering off 1.026 (7 rounds each).
+
+JP-02's setting on 11 RC2, the delay at 0 against the runtime's 100 ms (`sweep.py`, 5 rounds): 0.846 over the set, more than on 10 (0.881). Every ffmpeg decode gains (H.264 on four threads 0.970 against 1.288 s), float80, olden-voronoi, ptrdist-yacr2 and recursive take about half the time; olden-em3d loses 46% and lpbench 11%, and the startup probe takes 37 ms against 31. So the setting stays right on 11, with em3d to follow up there.
+
 ## JP-09: MinOpts methods in the benchmark report
 
 `scripts/benchmark.py` runs each JIT engine once more after its validation with `DOTNET_JitDisasmSummary=1`, lists the translated methods (of the image's `Program` classes) the summary shows compiled with MinOpts in `minopts.tsv`, and counts them per benchmark in `results.tsv` and the summary. The baseline has a `minopts` column, and a JIT row with more such methods than the baseline's fails the run. [tests/benchmarks.sh](../../tests/benchmarks.sh) checks the comparison on synthetic results: as many or fewer pass, one more fails. The summary first went to a file (`DOTNET_JitStdOutFile`) during the validation run, which made jpeg crash in 8 of 50 runs (segmentation faults, once `free(): invalid pointer`): the runtime's background tier-1 compilations write the file too, and with JP-02's setting they run from the start. With the summary on standard output, in a run of its own, jpeg ran 60 times without a failure.
