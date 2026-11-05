@@ -18,7 +18,7 @@ build="$prefix/build-builtins"
 rm -rf "${build:?}"
 mkdir -p "$build" "$prefix/lib"
 if [[ "$system" -eq 1 ]]; then
-    LLVMNET_SKIP_BUILD=1 "$root/bin/llvmnet" --runtime=system -c -O2 -std=c11 -Wno-everything -I"$builtins" \
+    LLVMNET_SKIP_BUILD=1 "$root/bin/llvmnet" --runtime=system -c -O2 -fno-vectorize -fno-slp-vectorize -std=c11 -Wno-everything -I"$builtins" \
         "$builtins/cpu_model/x86.c" -o "$build/cpu_model.o"
     rm -f "$prefix/lib/libclang_rt.builtins.a"
     llvm-ar-22 rcs "$prefix/lib/libclang_rt.builtins.a" "$build/cpu_model.o"
@@ -30,7 +30,7 @@ objects=()
 for name in mulsc3 muldc3 mulxc3 divsc3 divdc3 divxc3 powixf2 cpu_model/x86; do
     # compiler-rt selects its x87 long double code by __x86_64__, which portable code does not see; the data layout
     # is x86-64's, and these functions expose no header ABI, so the macro is defined for them alone.
-    LLVMNET_SKIP_BUILD=1 "$root/bin/llvmnet" --runtime=portable --portable-sysroot "$prefix" -c -O2 -std=c11 -Wno-everything \
+    LLVMNET_SKIP_BUILD=1 "$root/bin/llvmnet" --runtime=portable --portable-sysroot "$prefix" -c -O2 -fno-vectorize -fno-slp-vectorize -std=c11 -Wno-everything \
         -D__x86_64__ -I"$builtins" "$builtins/$name.c" -o "$build/${name##*/}.o"
     objects+=("$build/${name##*/}.o")
 done

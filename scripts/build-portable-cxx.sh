@@ -43,7 +43,7 @@ abi_sources=(abort_message cxa_aux_runtime cxa_demangle cxa_guard cxa_vector cxa
 # The libraries see the platform macros user code sees (ADR-14): libc++'s headers choose ABI details such as the
 # atomic-wait contention type by __linux__, so a library built with it would not match programs built without it.
 # Only cxa_thread_atexit.cpp, which defines __cxa_thread_atexit solely under __linux__, gets the macro.
-common=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -std=c++23 -nostdinc++ -isystem "$headers"
+common=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -fno-vectorize -fno-slp-vectorize -std=c++23 -nostdinc++ -isystem "$headers"
     -fvisibility-inlines-hidden -Wno-everything -D_LIBCPP_BUILDING_LIBRARY -D_LIBCPP_REMOVE_TRANSITIVE_INCLUDES)
 printf '%s\n' "${common[@]}" -I"$llvm/libcxx/src" -I"$llvm/libc" -DLIBCXX_BUILDING_LIBCXXABI -D_LIBCPP_DISABLE_NEW_DELETE_DEFINITIONS >"$build/cxx-flags.txt"
 printf '%s\n' "${common[@]}" -I"$llvm/libcxxabi/include" -I"$llvm/libcxxabi/src" -I"$llvm/libcxx/src" -D_LIBCXXABI_BUILDING_LIBRARY \

@@ -451,8 +451,9 @@ internal static class Driver
                 if (!fortran && input.Language is null && !SourceExtensions.Contains(extension))
                     throw new NotSupportedException($"Unsupported input kind: {input.Path} (name the language with -x)");
                 string destination = invocation.CompileOnly ? invocation.Output ?? Path.GetFileNameWithoutExtension(input.Path) + (invocation.Textual ? ".ll" : ".o") : Path.Combine(temporary, $"input{bitcode.Count}.bc");
+                // -O1 unless the command line gives a level (ADR-11). The frontend then decides the vectorizers by the level,
+                // as natively: -O2 and above run them, -O1 does not (the owner's SV-05 decision of 2026-11-05).
                 List<string> command = ["-O1"];
-                if (!frontend.Contains("-fvectorize") && !frontend.Contains("-fslp-vectorize")) command.AddRange(["-fno-vectorize", "-fno-slp-vectorize"]);
                 if (driver == "clang++") command.Add("--driver-mode=g++");
                 // LLVM IR gets the mode's target and macros only; its headers and feature macros do not apply.
                 if (options.Runtime == "portable") command.AddRange(ir ? PortableAbi.Arguments(frontend, true, false, "baseline") : PortableAbi.Arguments(frontend, fortran, cpp, options.Isa));
@@ -687,16 +688,17 @@ internal static class Driver
 
     /// <summary>
     /// ILC's instruction set: the one given, or for an x64 program with objects compiled at --isa=x86-64-v2 or x86-64-v3
-    /// (the image's llvmnet.isa levels) the highest of them, which such a program requires as it does natively; otherwise
-    /// the baseline, where SSE4.2 and AVX2 are only opportunistic sets that the helpers test at run time and the generic
-    /// vector operations do not use.
+    /// (the image's llvmnet.isa levels) the highest of them, which such a program requires as it does natively; for one
+    /// with SIMD128 objects x86-64-v2, whose SSSE3 gives Vector128.Shuffle its pshufb (the owner's PF-08 decision of
+    /// 2026-11-05); otherwise the baseline, where SSE4.2 and AVX2 are only opportunistic sets that the helpers test at run
+    /// time and the generic vector operations do not use.
     /// </summary>
     private static string AotInstructionSet(Invocation invocation, string levels)
     {
         if (invocation.AotInstructionSet is not null) return invocation.AotInstructionSet;
         if (!(invocation.RuntimeId ?? System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier).EndsWith("-x64", StringComparison.Ordinal)) return "baseline";
         string[] recorded = levels.Split(',');
-        return recorded.Contains("x86-64-v3") ? "x86-64-v3" : recorded.Contains("x86-64-v2") ? "x86-64-v2" : "baseline";
+        return recorded.Contains("x86-64-v3") ? "x86-64-v3" : recorded.Contains("x86-64-v2") || recorded.Contains("wasm-simd128") ? "x86-64-v2" : "baseline";
     }
 
     /// <summary>

@@ -2,8 +2,8 @@
 # tags: core cpp fortran
 # requires: flang
 # timeout: 2400
-# TC-03 (ADR-11): the default is -O1 without vectorization; every level from -O0 to -O3, -Os, -Oz and -O3 with
-# vectorization compiles the C, C++ and Fortran fixtures in both modes with output identical to the native build at
+# TC-03 (ADR-11): the default is -O1, which does not vectorize, and -O2 and above vectorize as in Clang (the owner's SV-05
+# decision); every level from -O0 to -O3, -Os, -Oz and -O3 with explicit vectorization compiles the C, C++ and Fortran fixtures in both modes with output identical to the native build at
 # the same level, the level reaches the frontend (-O0 keeps optnone), and the -O0 and -O3 images pass JIT validation.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
@@ -11,12 +11,17 @@ mkdir -p "$test_output"
 cd "$test_output"
 # The default and an explicit level, as the frontend sees them.
 "$llvmnet" -### "$root/tests/c/smoke.c" -o default.dll 2>default.txt
-grep -q '"-O1" "-fno-vectorize" "-fno-slp-vectorize"' default.txt
-"$llvmnet" -### -O3 -fvectorize -fslp-vectorize "$root/tests/c/smoke.c" -o vector.dll 2>vector.txt
-grep -q '"-O3"' vector.txt && ! grep -q -- '-fno-vectorize' vector.txt
+grep -q '"-O1"' default.txt && ! grep -q -- '-fno-vectorize' default.txt
 "$llvmnet" -### -O0 "$root/tests/c/smoke.c" -o zero.dll 2>zero.txt
-grep -q '"-O1" "-fno-vectorize" "-fno-slp-vectorize" .*"-O0"' zero.txt
-printf 'PASS: the default is -O1 -fno-vectorize -fno-slp-vectorize, and an explicit level follows it\n'
+grep -q '"-O1" .*"-O0"' zero.txt
+# The level decides the vectorizers as in Clang: a loop is vector code at -O2 and -O3, scalar at -O1 and with -fno-vectorize.
+printf 'void add(int *restrict a, const int *restrict b, int n) { for (int i = 0; i < n; i++) a[i] += b[i]; }\n' >loop.c
+vector_ops() { "$llvmnet" "$@" -S -c loop.c -o - | grep -c '<4 x i32>' || true; }
+test "$(vector_ops -O1)" -eq 0
+test "$(vector_ops -O2)" -gt 0
+test "$(vector_ops -O3)" -gt 0
+test "$(vector_ops -O2 -fno-vectorize -fno-slp-vectorize)" -eq 0
+printf 'PASS: the default is -O1 without vectorization, -O2 and above vectorize, and an explicit level follows the default\n'
 fixtures=(c/core.c c/intrinsics.c c/byval.c c/unaligned.c cpp/core.cpp fortran/core.f90)
 levels=("-O0" "-O1" "-O2" "-O3" "-Os" "-Oz" "-O3 -fvectorize -fslp-vectorize")
 validated=()

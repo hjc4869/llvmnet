@@ -42,7 +42,8 @@ for source in "${sources[@]}"; do
     [[ -f "$source" ]] || { printf 'FAIL: the musl source selection produced "%s", which is not a file\n' "$source" >&2; exit 1; }
 done
 printf '%s\n' "${sources[@]}" >"$build/sources.txt"
-flags=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -std=c99 -ffreestanding -nostdinc -D_XOPEN_SOURCE=700
+# The runtime libraries stay scalar, as SV-05 measured them; programs' own -O2 and above vectorize (ADR-11).
+flags=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -fno-vectorize -fno-slp-vectorize -std=c99 -ffreestanding -nostdinc -D_XOPEN_SOURCE=700
     -I"$tree/arch/llvmnet" -I"$tree/arch/generic" -I"$tree/obj/src/internal" -I"$tree/src/include"
     -I"$tree/src/internal" -I"$tree/obj/include" -I"$tree/include"
     -fexcess-precision=standard -fno-strict-aliasing -Wno-everything)

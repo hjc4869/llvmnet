@@ -1,6 +1,6 @@
 # Support and deprecation policy
 
-This page states what a release supports, for how long, and how features are retired. The terms marked *proposed* are recommendations recorded for the owner in [the decision log](../plan/decisions.md#proposed-for-the-owner-2026-11-01-m9) and apply once accepted; the rest restates decisions already taken.
+This page states what a release supports, for how long, and how features are retired. The terms were accepted by the owner on 2026-11-05 ([the decision log](../plan/decisions.md#decided-by-the-owner-2026-11-01-m9)).
 
 ## What a release supports
 
@@ -22,12 +22,10 @@ This page states what a release supports, for how long, and how features are ret
 From 1.0, the major version of the compiler and of `LlvmNet.Runtime` must match: an image refuses to start with a runtime of another major version ([dev/versioning.md](../dev/versioning.md)). Within a major version:
 
 - Objects and archives compiled for an ABI tag link with any later 1.x compiler that emits the same tag. A new tag (`dotnet64-v3`) is introduced only together with a new major version, and the linker rejects mixed tags.
-- A 1.x minor release may move to a newer LLVM major (ADR-06). *Proposed:* objects compiled by an earlier 1.x release stay valid link inputs, since LLVM reads bitcode written by older releases; a change that cannot keep this needs a new major version.
-- *Proposed:* a 1.x minor release may add a newer .NET LTS as a supported runtime but does not drop .NET 10; dropping a .NET version needs a new major version.
+- A 1.x minor release may move to a newer LLVM major (ADR-06). Objects compiled by an earlier 1.x release stay valid link inputs, since LLVM reads bitcode written by older releases; a change that cannot keep this needs a new major version.
+- A 1.x minor release may add a newer .NET LTS as a supported runtime but does not drop .NET 10; dropping a .NET version needs a new major version.
 
 ## How long a release is supported
-
-*Proposed:*
 
 - The latest 1.x minor release receives bug and security fixes as patch releases.
 - When a new minor release ships, the previous one receives security fixes for three more months.
@@ -35,8 +33,6 @@ From 1.0, the major version of the compiler and of `LlvmNet.Runtime` must match:
 - 0.x releases are previews and are not supported once a later 0.x or 1.0 release exists.
 
 ## Deprecation
-
-*Proposed:*
 
 1. A feature, option or behavior to be removed is first deprecated in a minor release: the `CHANGELOG.md` entry says so and names the replacement, and the driver prints a warning where the feature is used (for an option, in the same form as its other diagnostics).
 2. It stays available, with the warning, for at least one more minor release and at least three months.

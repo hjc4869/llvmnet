@@ -7,7 +7,7 @@ The survey built 18 widely used libraries in portable mode with their own build 
 - **Round one:** the third-party libraries of the LightPlayer-Packages repository.
 - **Round two:** the native dependencies of its LightStudio.AvaloniaStatic package: Skia and the SkiaSharp C API, ANGLE, and Skia's pinned third-party libraries.
 
-The scripts, per-library notes and reproducers are not in the repository: they live in the build host's `artifacts/oss/` (`REPORT.md`, `results/<library>.md`, `results/*-repro/`, `scripts/`). Moving the strongest suites into `tests/` is part of WG-07 ([proposed for the owner](../plan/decisions.md#proposed-for-the-owner-2026-11-02-library-survey)), and each defect below is to get its own regression test with its fix.
+The scripts, per-library notes and reproducers are not in the repository: they live in the build host's `artifacts/oss/` (`REPORT.md`, `results/<library>.md`, `results/*-repro/`, `scripts/`). Moving the strongest suites into `tests/` is part of WG-07 ([proposed for the owner](../plan/decisions.md#decided-by-the-owner-2026-11-02-library-survey)), and each defect below is to get its own regression test with its fix.
 
 ## Results
 

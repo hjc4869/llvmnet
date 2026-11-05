@@ -34,7 +34,7 @@ Keep an emitted assembly with the files written next to it: its `runtimeconfig.j
 ## Defaults
 
 - **Runtime mode**: `--runtime=portable` ([modes.md](modes.md)).
-- **Optimization**: `-O1` with automatic vectorization disabled (`-fno-vectorize -fno-slp-vectorize`), decided in [ADR-11](../plan/decisions.md#adr-11-driver-defaults). This differs from Clang, whose default is `-O0`: unoptimized IR is much larger as CIL and slower to JIT-compile, and build systems pass an explicit level anyway. Any `-O` option on the command line replaces the level; `-fvectorize` or `-fslp-vectorize` turns vectorization back on, and the vector IR runs as `Vector128` code ([ADR-16](../plan/decisions.md#adr-16-simd-levels) Level 1; whether `-O2` and above should vectorize, as in Clang, is measured in SV-05). `-O0` through `-O3`, `-Os` and `-Oz` are all accepted; `-O0` keeps every function unoptimized (`optnone`), and `-O3` is exercised by the SPEC runs and the fixture tests.
+- **Optimization**: `-O1`, decided in [ADR-11](../plan/decisions.md#adr-11-driver-defaults). This differs from Clang, whose default is `-O0`: unoptimized IR is much larger as CIL and slower to JIT-compile, and build systems pass an explicit level anyway. Any `-O` option on the command line replaces the level, and the level decides automatic vectorization as in Clang: `-O1` does not vectorize, `-O2`, `-O3` and `-Ofast` run the loop and SLP vectorizers (SV-05), `-fno-vectorize` and `-fno-slp-vectorize` turn them off and `-fvectorize` and `-fslp-vectorize` on at any level. The vector IR runs as `Vector128` code ([ADR-16](../plan/decisions.md#adr-16-simd-levels) Level 1). The sysroot's libraries are compiled without vectorization. `-O0` through `-O3`, `-Os` and `-Oz` are all accepted; `-O0` keeps every function unoptimized (`optnone`), and `-O3` is exercised by the SPEC runs and the fixture tests.
 - **Language standard**: the frontends' own defaults (Clang 22: `gnu17` for C, `gnu++17` for C++; Flang: Fortran 2018 with extensions). `-std=` overrides.
 - **Stack protector**: `-fno-stack-protector` is passed for C and C++, because CIL has no stack canaries.
 - **Debug information**: none is emitted into assemblies yet; `-g` and `-gline-tables-only` give compiler diagnostics `file:line:col` positions.
@@ -140,7 +140,7 @@ Every option that is not in one of these tables is passed to Clang or Flang in o
 
 | Option | Effect |
 | --- | --- |
-| `-O<level>` | Optimization level. The default is -O1 without automatic vectorization (ADR-11); -O0 is accepted and -O3 fully tested |
+| `-O<level>` | Optimization level. The default is -O1, which does not vectorize (ADR-11); -O2 and above vectorize as in Clang; -O0 is accepted and -O3 fully tested |
 | `-fvectorize` | Enable loop vectorization (also -fslp-vectorize); the vector IR is lowered to Vector128 operations (ADR-16) |
 | `-std=<standard>` | Language standard; the defaults are the frontends' own (gnu17 for C, gnu++17 for C++, Fortran 2018) |
 | `-g` | Debug information: compiler diagnostics get file:line:col (also -gline-tables-only); emitted assemblies carry none yet (BE-28) |

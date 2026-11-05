@@ -35,7 +35,7 @@ sources=(kmp_alloc kmp_atomic kmp_csupport kmp_debug kmp_itt kmp_environment kmp
     kmp_runtime kmp_settings kmp_str kmp_tasking kmp_threadprivate kmp_utility kmp_barrier kmp_wait_release
     kmp_affinity kmp_dispatch kmp_lock kmp_sched kmp_collapse z_Linux_util kmp_gsupport kmp_taskdeps kmp_cancel
     kmp_ftn_cdecl kmp_ftn_extra kmp_version llvmnet-support)
-flags=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -std=c++17 -fno-exceptions -fno-rtti
+flags=(--runtime=portable --portable-sysroot "$prefix" -c -O2 -fno-vectorize -fno-slp-vectorize -std=c++17 -fno-exceptions -fno-rtti
     -I"$build/generated" -I"$tree/src" -I"$tree/src/i18n" -I"$tree/src/include" -I"$tree/src/thirdparty/ittnotify"
     -D_GNU_SOURCE -DKMP_USE_ASSERT=0 -Wno-everything)
 printf '%s\n' "${flags[@]}" >"$build/flags.txt"
