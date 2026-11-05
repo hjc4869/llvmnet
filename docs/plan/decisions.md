@@ -253,7 +253,7 @@ Each decision is recorded in the style of an architecture decision record: conte
 - ReadyToRun is not always faster. Precompiled code knows nothing about class initialization, and a loop that never leaves precompiled code is not replaced by on-stack replacement: dhrystone takes 22% longer. The option stays opt-in, and the evidence lists where it loses.
 - The data ABI and the portable image are unaffected; the ABI freeze test does not change.
 
-**Status.** Proposed 2026-11-04; accepted 2026-11-05 by the owner: option 3 as JP-06, opt-in, with partial images (option 5) measured as its refinement and per-identifier folders (option 4) only after a spike.
+**Status.** Proposed 2026-11-04; accepted 2026-11-05 by the owner: option 3 as JP-06, opt-in, with partial images (option 5) measured as its refinement and per-identifier folders (option 4) only after a spike. Implemented 2026-11-06 as `--readytorun <rid>` ([evidence](../evidence/2026-11-05-jit-shapes.md#jp-06-readytorun-for-one-runtime-identifier)): a composite image of the program and LlvmNet.Runtime, each in its own version bubble, because a shared bubble bound the image to the framework build it was compiled against; it takes 0.913 of the JIT's time over the set.
 
 ## Decided by the owner (2026-10-31)
 

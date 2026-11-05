@@ -25,6 +25,7 @@ more of them than its baseline records fails the run too (JP-09).
     scripts/benchmark.py --update-baseline        write this run's medians as the new baseline
     scripts/benchmark.py --compare results.tsv    apply the thresholds to an earlier run's results.tsv
     scripts/benchmark.py --engines native,jit --env DOTNET_TieredPGO=0   the JIT with a runtime setting
+    scripts/benchmark.py --engines native,jit,jit-r2r   also the JIT with a ReadyToRun image for this host (JP-06)
     scripts/benchmark.py --vectorized             also the vectorized engines (SV-05): native-vec, jit-vec, aot-vec
     scripts/benchmark.py --vectorized --vector-flags="-O2 -fvectorize -fslp-vectorize -mllvm -force-vector-interleave=1"
                                                   the vectorized engines with other flags (both compilers)
@@ -65,7 +66,10 @@ root = Path(__file__).resolve().parent.parent
 llvmnet = root / "bin" / "llvmnet"
 benchmark_set = root / "tests" / "perf" / "benchmarks.tsv"
 default_baseline = root / "tests" / "perf" / "baseline.tsv"
-engines_all = ("native", "jit", "aot", "native-vec", "jit-vec", "aot-vec")
+engines_all = ("native", "jit", "jit-r2r", "aot", "native-vec", "jit-vec", "aot-vec")
+# The runtime identifier of this host, for the ReadyToRun engine (--readytorun, JP-06).
+host_rid = ("linux" if sys.platform.startswith("linux") else "osx" if sys.platform == "darwin" else "win") + "-" + \
+    ("arm64" if platform.machine().lower() in ("aarch64", "arm64") else "x64")
 engines_scalar = ("native", "jit", "aot")
 # Both compilers get the same optimization pipeline: llvmnet's -O2 keeps automatic vectorization off (ADR-11; the
 # vectorized column is SV-05's), so the native build turns it off too and the ratio measures the translation.
@@ -192,7 +196,7 @@ def build_program(benchmark, engines, suite, output):
         if run_logged(["bash", root / "scripts" / "musl-native-cc.sh", *common_flags, *native_flags, *sources, "-o", oracle], log_path):
             return f"native musl build failed (see {log_path})"
         benchmark.programs["musl"] = [str(oracle)]
-    if "jit" in engines or "aot" in engines:
+    if "jit" in engines or "aot" in engines or "jit-r2r" in engines:
         mode = ["--driver-mode=g++"] if benchmark.cxx else []
         program = build / f"{benchmark.name}.dll"
         bitcode = build / f"{benchmark.name}.bc"
@@ -206,6 +210,11 @@ def build_program(benchmark, engines, suite, output):
             if run_logged([llvmnet, "--runtime=portable", "--nativeaot", *aot_options, bitcode, "-o", executable], log_path):
                 return f"NativeAOT build failed (see {log_path})"
             benchmark.programs["aot"] = [str(executable)]
+        if "jit-r2r" in engines:
+            image = build / "r2r" / f"{benchmark.name}.dll"
+            if run_logged([llvmnet, "--runtime=portable", "--readytorun", host_rid, bitcode, "-o", image], log_path):
+                return f"ReadyToRun build failed (see {log_path})"
+            benchmark.programs["jit-r2r"] = ["dotnet", str(image)]
     if "jit-vec" in engines or "aot-vec" in engines:
         mode = ["--driver-mode=g++"] if benchmark.cxx else []
         program = build / "vec" / f"{benchmark.name}.dll"
@@ -247,6 +256,12 @@ def prepare_ffmpeg(benchmarks, engines, output, rebuild):
         if run_logged([llvmnet, "--runtime=portable", "--nativeaot", *aot_options, portable / "decode.bc", "-o", executable], log_path):
             return f"ffmpeg NativeAOT build failed (see {log_path})"
         programs["aot"] = [str(executable)]
+    if "jit-r2r" in engines:
+        image = output / "build" / "ffmpeg" / "r2r" / "decode.dll"
+        image.parent.mkdir(parents=True, exist_ok=True)
+        if run_logged([llvmnet, "--runtime=portable", "--readytorun", host_rid, portable / "decode.bc", "-o", image], log_path):
+            return f"ffmpeg ReadyToRun build failed (see {log_path})"
+        programs["jit-r2r"] = ["dotnet", str(image)]
     clip_directory = root / "artifacts" / "bench" / "clips"
     clip_directory.mkdir(parents=True, exist_ok=True)
     for benchmark in benchmarks:
@@ -542,7 +557,7 @@ def compare(rows, baseline, tolerance, geomean_tolerance, minopts_baseline=None)
     return factor, verdicts, means, failures
 
 
-engine_labels = {"jit": "JIT", "aot": "NativeAOT", "native-vec": "Native vectorized", "jit-vec": "JIT vectorized", "aot-vec": "NativeAOT vectorized"}
+engine_labels = {"jit": "JIT", "jit-r2r": "JIT ReadyToRun", "aot": "NativeAOT", "native-vec": "Native vectorized", "jit-vec": "JIT vectorized", "aot-vec": "NativeAOT vectorized"}
 
 
 def write_summary(path, rows, metadata, comparison, engines):
@@ -662,7 +677,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--only", help="comma-separated benchmark names (a name ending in * is a prefix)")
     parser.add_argument("--group", action="append", help="benchmark group to run (repeatable)")
-    parser.add_argument("--engines", default=",".join(engines_scalar), help="comma-separated: native, jit, aot, native-vec, jit-vec, aot-vec")
+    parser.add_argument("--engines", default=",".join(engines_scalar), help="comma-separated: native, jit, jit-r2r (ReadyToRun for this host), aot, native-vec, jit-vec, aot-vec")
     parser.add_argument("--vectorized", action="store_true", help="add the vectorized engines native-vec, jit-vec and aot-vec")
     parser.add_argument("--vector-flags", help=f"the vectorized engines' compiler flags (default: {' '.join(vector_flags)})")
     parser.add_argument("--aot-instruction-set", help="the NativeAOT engines' instruction set (llvmnet's --aot-instruction-set; default: llvmnet's)")

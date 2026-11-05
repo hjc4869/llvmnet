@@ -192,17 +192,7 @@ internal static class Toolchain
         string host = RuntimeInformation.RuntimeIdentifier;
         if (!(OperatingSystem.IsLinux() && rid.StartsWith("linux-", StringComparison.Ordinal) || rid == host))
             throw new InvalidOperationException($"NativeAOT prerequisite missing: {rid} executables cannot be published from {host}. Write the project with --aot-project <dir> and run \"dotnet publish NativeHost.csproj -c Release -r {rid}\" on a {(rid.StartsWith("win-", StringComparison.Ordinal) ? "Windows" : rid.StartsWith("osx-", StringComparison.Ordinal) ? "macOS" : rid)} host.");
-        string sdks;
-        try
-        {
-            sdks = Capture(Dotnet, ["--list-sdks"], verbose);
-        }
-        catch (Exception error) when (error is System.ComponentModel.Win32Exception or FileNotFoundException or InvalidOperationException)
-        {
-            throw new InvalidOperationException($"NativeAOT prerequisite missing: the .NET 10 SDK. '{Dotnet}' cannot be run ({error.Message}); install the SDK (https://dotnet.microsoft.com/download/dotnet/10.0) or set LLVMNET_DOTNET to it.");
-        }
-        if (!sdks.Split('\n').Any(line => line.StartsWith("10.", StringComparison.Ordinal)))
-            throw new InvalidOperationException($"NativeAOT prerequisite missing: the .NET 10 SDK. '{Dotnet} --list-sdks' reports {(sdks.Trim().Length == 0 ? "no SDK (only a runtime is installed)" : sdks.Trim().Replace('\n', ';'))}; install the .NET 10 SDK, not just the runtime.");
+        CheckSdk("NativeAOT", verbose);
         if (NuGetFeed is string feed && Directory.Exists(feed))
         {
             foreach (string package in new[] { "microsoft.dotnet.ilcompiler", $"runtime.{rid}.microsoft.dotnet.ilcompiler", $"microsoft.netcore.app.runtime.{rid}" })
@@ -276,6 +266,93 @@ internal static class Toolchain
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
             File.SetUnixFileMode(output, File.GetUnixFileMode(native));
         return 0;
+    }
+
+    /// <summary>The runtime identifiers --readytorun compiles for.</summary>
+    internal static readonly string[] ReadyToRunTargets = ["linux-x64", "linux-arm64", "win-x64", "win-arm64", "osx-x64", "osx-arm64"];
+
+    /// <summary>
+    /// --readytorun &lt;rid&gt; (JP-06, ADR-17): precompiles a JIT image for one runtime identifier. crossgen2 compiles the
+    /// image and LlvmNet.Runtime.dll into one composite image (&lt;name&gt;.r2r.dll beside them), each assembly its own
+    /// version bubble: with --inputbubble the composite recorded the framework's own build, and an image compiled against
+    /// the 10.0.13 runtime pack stopped at start on 10.0.14 (MVID mismatch), while one bubble per assembly ran no slower
+    /// (dhrystone, memcpy, float80). The JIT then starts from optimized code,
+    /// which it still tiers up, and keeps it for a method its tier-1 recompilation would give minimal optimization. A
+    /// restore of a generated project with PublishReadyToRun brings crossgen2 for this host and the target's runtime
+    /// pack, from NuGet or the offline feed (LLVMNET_NUGET_FEED, scripts/nativeaot-feed.sh), as NativeAOT's project
+    /// does. The image then loads only on that identifier's hosts.
+    /// </summary>
+    internal static int ReadyToRun(string assembly, string rid, string temporary, bool verbose)
+    {
+        if (!ReadyToRunTargets.Contains(rid))
+            throw new ArgumentException($"--readytorun requires one of {string.Join(", ", ReadyToRunTargets)}; {rid} is not one.");
+        CheckSdk("ReadyToRun", verbose);
+        if (NuGetFeed is string feed && Directory.Exists(feed))
+            foreach (string package in new[] { $"microsoft.netcore.app.crossgen2.{RuntimeInformation.RuntimeIdentifier}", $"microsoft.netcore.app.runtime.{rid}" })
+                if (!Directory.EnumerateFiles(feed, package + ".*.nupkg").Any())
+                    throw new InvalidOperationException($"ReadyToRun prerequisite missing: the offline feed {feed} has no {package} package; fill it with \"scripts/nativeaot-feed.sh {feed} {rid}\" on a host with access to NuGet.");
+        string project = Path.Combine(temporary, "readytorun");
+        Directory.CreateDirectory(project);
+        new XDocument(new XElement("Project", new XAttribute("Sdk", "Microsoft.NET.Sdk"),
+            new XElement("PropertyGroup", new XElement("TargetFramework", "net10.0"), new XElement("OutputType", "Exe"),
+                new XElement("RuntimeIdentifier", rid), new XElement("SelfContained", "false"), new XElement("PublishReadyToRun", "true"))))
+            .Save(Path.Combine(project, "ReadyToRun.csproj"));
+        foreach (string stub in new[] { "Directory.Build.props", "Directory.Build.targets" })
+            File.WriteAllText(Path.Combine(project, stub), "<Project />\n");
+        if (NuGetFeed is string source)
+            new XDocument(new XElement("configuration", new XElement("packageSources", new XElement("clear"),
+                new XElement("add", new XAttribute("key", "llvmnet"), new XAttribute("value", source))))).Save(Path.Combine(project, "nuget.config"));
+        int restored = Run(Dotnet, ["restore", Path.Combine(project, "ReadyToRun.csproj"), "--nologo", "-v", verbose ? "normal" : "quiet"], verbose);
+        if (restored != 0 || DryRun) return restored;
+        // The restore records the packs it downloaded and the packages folder it put them in.
+        using var assets = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(project, "obj", "project.assets.json")));
+        string packages = assets.RootElement.GetProperty("packageFolders").EnumerateObject().First().Name;
+        string Pack(string id)
+        {
+            foreach (var framework in assets.RootElement.GetProperty("project").GetProperty("frameworks").EnumerateObject())
+                if (framework.Value.TryGetProperty("downloadDependencies", out var downloads))
+                    foreach (var download in downloads.EnumerateArray())
+                        if (string.Equals(download.GetProperty("name").GetString(), id, StringComparison.OrdinalIgnoreCase))
+                            return Path.Combine(packages, id.ToLowerInvariant(), download.GetProperty("version").GetString()!.Trim('[', ']').Split(',')[0].Trim());
+            throw new InvalidOperationException($"ReadyToRun prerequisite missing: the restore did not provide {id}.");
+        }
+        string crossgen = Path.Combine(Pack($"Microsoft.NETCore.App.Crossgen2.{RuntimeInformation.RuntimeIdentifier}"), "tools", OperatingSystem.IsWindows() ? "crossgen2.exe" : "crossgen2");
+        string framework = Path.Combine(Pack($"Microsoft.NETCore.App.Runtime.{rid}"), "runtimes", rid, "lib", "net10.0");
+        string directory = Path.GetDirectoryName(Path.GetFullPath(assembly))!;
+        string name = Path.GetFileNameWithoutExtension(assembly);
+        string runtime = Path.Combine(directory, "LlvmNet.Runtime.dll");
+        string compiled = Path.Combine(temporary, "readytorun-out");
+        Directory.CreateDirectory(compiled);
+        List<string> arguments = [assembly, runtime, "--composite", "-r", Path.Combine(framework, "*.dll")];
+        // Extensions and --cil-reference assemblies beside the image stay IL, outside the bubble.
+        foreach (string reference in Directory.EnumerateFiles(directory, "*.dll"))
+            if (Path.GetFullPath(reference) != Path.GetFullPath(assembly) && Path.GetFullPath(reference) != Path.GetFullPath(runtime) && !reference.EndsWith(".r2r.dll", StringComparison.OrdinalIgnoreCase))
+                arguments.AddRange(["-r", reference]);
+        arguments.AddRange([$"--targetos:{rid.Split('-')[0].Replace("win", "windows")}", $"--targetarch:{rid.Split('-')[1]}", "-O", "-o", Path.Combine(compiled, name + ".r2r.dll")]);
+        if (DryRun) return Run(crossgen, arguments);
+        // crossgen2 names every file it writes; that is shown with -v, or with the error when it fails.
+        string log = Capture(crossgen, arguments, verbose, null, out int result);
+        if (result != 0 || verbose) Console.Error.Write(log);
+        if (result != 0) return result;
+        foreach (string file in Directory.EnumerateFiles(compiled))
+            File.Copy(file, Path.Combine(directory, Path.GetFileName(file)), true);
+        return 0;
+    }
+
+    /// <summary>The .NET 10 SDK, which NativeAOT and ReadyToRun builds restore their packages with.</summary>
+    private static void CheckSdk(string purpose, bool verbose)
+    {
+        string sdks;
+        try
+        {
+            sdks = Capture(Dotnet, ["--list-sdks"], verbose);
+        }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or FileNotFoundException or InvalidOperationException)
+        {
+            throw new InvalidOperationException($"{purpose} prerequisite missing: the .NET 10 SDK. '{Dotnet}' cannot be run ({error.Message}); install the SDK (https://dotnet.microsoft.com/download/dotnet/10.0) or set LLVMNET_DOTNET to it.");
+        }
+        if (!sdks.Split('\n').Any(line => line.StartsWith("10.", StringComparison.Ordinal)))
+            throw new InvalidOperationException($"{purpose} prerequisite missing: the .NET 10 SDK. '{Dotnet} --list-sdks' reports {(sdks.Trim().Length == 0 ? "no SDK (only a runtime is installed)" : sdks.Trim().Replace('\n', ';'))}; install the .NET 10 SDK, not just the runtime.");
     }
 
     /// <summary>With -###, every command is printed instead of run.</summary>

@@ -78,7 +78,7 @@ internal static class DriverOptions
     internal const string Inputs = "Inputs and libraries";
     internal const string Modes = "Runtime mode and ABI";
     internal const string Managed = "Managed and native libraries";
-    internal const string Aot = "NativeAOT";
+    internal const string Aot = "NativeAOT and ReadyToRun";
     internal const string Debugging = "Diagnostics and debugging";
     internal const string Information = "Information";
     internal const string Frontend = "Frontend options";
@@ -162,6 +162,7 @@ internal static class DriverOptions
         new("--aot-optimize", OptionKind.JoinedOrSeparate, Aot, "Balanced (default), Speed or Size", H, value: "<preference>"),
         new("--aot-instruction-set", OptionKind.JoinedOrSeparate, Aot, "baseline (SSE2 on x64, with SSE4.2 tested at run time; the default for scalar code), x86-64-v2 (SSE4.2 and POPCNT: x64 CPUs since about 2009; the default for a program with vector code, as most programs built at -O2 and above have, or with objects compiled at --isa=x86-64-v2 or wasm-simd128), x86-64-v3 (AVX2, BMI2, FMA: x64 CPUs since about 2015; the default for objects compiled at --isa=x86-64-v3) or native (this host's CPU; the executable may not run elsewhere)", H, value: "<set>"),
         new("--aot-debug", OptionKind.Flag, Aot, "Keep native debug symbols and the map file", H),
+        new("--readytorun", OptionKind.JoinedOrSeparate, Aot, "Precompile the JIT image for one runtime identifier (linux-x64, linux-arm64, win-x64, win-arm64, osx-x64 or osx-arm64) with crossgen2: the image and LlvmNet.Runtime.dll become one composite image (<name>.r2r.dll beside them) that starts from optimized code and loads only on that identifier's hosts (needs the .NET 10 SDK; docs/user/deployment.md)", H, value: "<rid>"),
         // Diagnostics and debugging
         new("--keep-ir", OptionKind.JoinedOrSeparate, Debugging, "Copy the linked bitcode, before lowering, to <file> (kept as <output>.failed.bc on a compile error)", H, value: "<file>"),
         new("--trap-missing-arguments", OptionKind.Flag, Debugging, "Compile a void call with fewer arguments than its definition to a trap instead of failing", H),

@@ -8,6 +8,7 @@ What a compiled program consists of, what the host that runs it needs, how the t
 | --- | --- | --- |
 | `-o program.dll` | `program.dll`, `program.runtimeconfig.json`, `LlvmNet.Runtime.dll` (and in system mode `libprogram.llvmnet-host.so`), all in one directory | the .NET 10 runtime (`dotnet program.dll`) |
 | `-o program` (a launcher) | `program` and the `program.llvmnet/` directory next to it | the .NET 10 runtime, `/bin/sh`; `LLVMNET_DOTNET` names another `dotnet` |
+| `--readytorun <rid> -o program.dll` (or a launcher name) | the same files and `program.r2r.dll`, the precompiled code of the image and `LlvmNet.Runtime.dll` | the .NET 10 runtime on a host of that runtime identifier |
 | `-shared -o Library.dll` | `Library.dll` with its `LlvmNet.Runtime.dll`, alongside the program or .NET application that references it | the .NET 10 runtime |
 | `--nativeaot -o program` | `program` alone (system mode: plus the `--system-library` libraries, which stay dynamic dependencies) | nothing from .NET; the C library of the target |
 
@@ -66,6 +67,14 @@ Before `dotnet publish` runs, the driver checks what it can see from the build h
 scripts/nativeaot-feed.sh /srv/llvmnet-feed linux-x64 linux-arm64                     # with network access
 LLVMNET_NUGET_FEED=/srv/llvmnet-feed llvmnet-clang program.c --nativeaot -o program   # without
 ```
+
+## ReadyToRun
+
+`--readytorun <rid>` precompiles a JIT image for one runtime identifier (`linux-x64`, `linux-arm64`, `win-x64`, `win-arm64`, `osx-x64` or `osx-arm64`; system mode: `linux-x64`). crossgen2 compiles the image and `LlvmNet.Runtime.dll` into one composite image, `program.r2r.dll` beside them, and the JIT starts from that optimized code instead of compiling every method at its first call. It still recompiles hot methods for tier 1, so the program keeps everything the JIT offers (tiering, loading extensions, reflection), and a function too large for the JIT to optimize ([limitations.md](limitations.md)) runs crossgen2's optimized code instead of minimally optimized code. The image then loads only on hosts of that identifier, which is why the portable image stays IL-only; it runs on every .NET 10 runtime of that identifier, patch releases included. A build takes seconds (ffmpeg's decoder about 2 s).
+
+Use it for a deployment whose host is known when the program's time goes into start-up and compilation (tramp3d 0.35 of the JIT's time, lame 0.66, sha 0.63, the startup probe 32 ms against 40) or into functions past the JIT's limits, which `--diagnose-limits` lists (ffmpeg's H.264 decode 0.81 of the time on one thread, 0.63 on four). Over the benchmark set it takes 0.913 of the JIT's time. Keep the IL image for a program that spends its time in one long loop of a function it calls once: precompiled code is not replaced by on-stack replacement and does not know which classes are initialized, so such loops run as crossgen2 compiled them (dhrystone 1.11 of the JIT's time, fannkuch and memcpy 1.06); timing both builds of the program is the reliable test (`scripts/benchmark.py --engines native,jit,jit-r2r` for the benchmark set).
+
+The build needs the .NET 10 SDK: a restore of a generated project brings crossgen2 for this host and the runtime pack of the target from NuGet, the user's package cache or the offline feed of [NativeAOT's offline hosts](#nativeaot) (`LLVMNET_NUGET_FEED`; `scripts/nativeaot-feed.sh` fills it with these packages too). A missing package is one line naming the feed and the fix.
 
 ## The toolchain package
 

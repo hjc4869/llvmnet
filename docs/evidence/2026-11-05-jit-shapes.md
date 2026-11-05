@@ -330,6 +330,97 @@ Translated methods past a MinOpts threshold (`ilstats`, which counts as RyuJIT d
 
 The baseline's `minopts` column now records tramp3d's 1, so the nightly fails if the count rises again.
 
+## JP-06: ReadyToRun for one runtime identifier
+
+### What changed
+
+`--readytorun <rid>` (linux-x64, linux-arm64, win-x64, win-arm64, osx-x64, osx-arm64; system mode linux-x64) precompiles a JIT image, the `.dll` or a launcher's payload (`Toolchain.ReadyToRun`). The driver restores a generated project with `PublishReadyToRun`, which brings crossgen2 for this host and the target's runtime pack (from NuGet, the package cache or `LLVMNET_NUGET_FEED`; `scripts/nativeaot-feed.sh` now adds them to the feed), reads their folders from `project.assets.json`, and runs crossgen2 on the image and `LlvmNet.Runtime.dll` with `--composite`, the runtime pack's assemblies and any other assemblies beside the image as references. The output is the two rewritten assemblies and `<name>.r2r.dll`, their code.
+
+- **No shared version bubble.** The plan asked for `LlvmNet.Runtime` in the image's version bubble, so that its helpers inline into precompiled code. With `--inputbubble`, the composite records the framework assemblies' builds: compiled against the 10.0.13 runtime pack that the restore picks, `hello.dll` stopped at start on this host's 10.0.14 (`MVID mismatch between loaded assembly 'System.Private.CoreLib' ... and an assembly with the same simple name embedded in the native image`), so every patch release of .NET would break such images. Without it each assembly keeps its own bubble, and the images run on other patch releases: the win-x64 build of a test program runs its precompiled code on fluorite's 10.0.10 (80 methods jitted against 184 for the IL image), the osx-arm64 build on mainmac's 10.0.14 (67 against 155). The bubble was not worth it anyway (medians of 7 to 9 runs, seconds):
+
+| Program | IL | Composite, no bubble | Shared bubble (`--inputbubbleref`) | Two separate images |
+| --- | ---: | ---: | ---: | ---: |
+| dhrystone | 0.154 | 0.171 | 0.172 | 0.170 |
+| memcpy | 0.560 | 0.572 | 0.581 | 0.580 |
+| float80 | 0.195 | 0.171 | 0.182 | 0.186 |
+
+  Hot methods are recompiled at tier 1, which inlines across assemblies, so the bubble only matters for code that stays precompiled.
+- **No `AggressiveOptimization`.** crossgen2 leaves methods with that flag to the JIT (`ShouldSkipCompilation`), so JP-05's marking would exclude exactly the over-limit methods; `--readytorun` images do without it.
+
+### The H.264 decode
+
+With tiered compilation off (`DOTNET_TieredCompilation=0`), the ReadyToRun decode jits 58 methods and none with MinOpts: `ff_h264_decode_mb_cabac` and `ff_h264_filter_mb_fast` run crossgen2's code (53,886 bytes for the first, which the JIT compiles to 99,223 bytes of MinOpts code). With tiering on, the summary still shows one MinOpts compilation of each: their tier-1 recompilation, after about two million calls each, falls back to MinOpts and the runtime discards it, keeping the precompiled code (a call-count threshold of 65,535 does not prevent it, as both functions run once per macroblock). JP-09's count reports those two for the ReadyToRun engine as for the JIT.
+
+### The benchmark set
+
+`scripts/benchmark.py --engines native,jit,jit-r2r` (`artifacts/bench/jp06-r2r`, the JP-05 commit's tree, JP-02's setting in both JIT engines, medians of 5; `jit-r2r` is the harness's new engine). jpeg and stepanov-v1p2 are missing: their validation runs crashed with the JIT summary written to a file (JP-09 below), and both match native in 20 runs of each engine without it. Seconds:
+
+| Benchmark | Native | JIT | JIT ReadyToRun | ReadyToRun / JIT |
+| --- | ---: | ---: | ---: | ---: |
+| malloc | 1.050 | 0.878 | 0.865 | 0.99 |
+| fwrite | 0.509 | 0.716 | 0.677 | 0.95 |
+| printf | 0.925 | 1.818 | 1.768 | 0.97 |
+| atomics | 0.253 | 0.304 | 0.308 | 1.01 |
+| mutex | 0.827 | 1.173 | 1.147 | 0.98 |
+| calli | 1.486 | 2.131 | 2.059 | 0.97 |
+| varargs | 0.352 | 1.016 | 0.993 | 0.98 |
+| float80 | 0.006 | 0.193 | 0.174 | 0.90 |
+| memcpy | 0.284 | 0.558 | 0.592 | 1.06 |
+| alloca | 0.204 | 0.267 | 0.244 | 0.91 |
+| callback | 0.337 | 0.423 | 0.448 | 1.06 |
+| startup | 0.001 | 0.040 | 0.032 | 0.82 |
+| dhrystone | 0.085 | 0.149 | 0.165 | 1.11 |
+| linpack | 0.913 | 1.015 | 0.999 | 0.98 |
+| richards | 0.348 | 0.455 | 0.439 | 0.96 |
+| oourafft | 1.042 | 1.169 | 1.123 | 0.96 |
+| ffbench | 0.536 | 0.539 | 0.528 | 0.98 |
+| whetstone | 0.445 | 0.529 | 0.514 | 0.97 |
+| salsa20 | 2.018 | 2.260 | 2.127 | 0.94 |
+| perlin | 1.001 | 0.995 | 0.984 | 0.99 |
+| reed-solomon | 1.527 | 1.851 | 1.852 | 1.00 |
+| almabench | 2.416 | 2.354 | 2.327 | 0.99 |
+| fftbench | 1.219 | 0.978 | 0.816 | 0.83 |
+| huffbench | 4.512 | 5.714 | 5.656 | 0.99 |
+| lpbench | 1.091 | 1.442 | 1.264 | 0.88 |
+| fannkuch | 1.381 | 1.465 | 1.548 | 1.06 |
+| recursive | 0.365 | 0.525 | 0.522 | 0.99 |
+| heapsort | 1.767 | 1.674 | 1.637 | 0.98 |
+| hash | 1.363 | 1.978 | 1.956 | 0.99 |
+| lists | 1.645 | 2.967 | 2.947 | 0.99 |
+| random | 0.996 | 1.071 | 1.077 | 1.01 |
+| queens | 1.090 | 1.133 | 1.091 | 0.96 |
+| hash2-cxx | 0.661 | 1.028 | 0.986 | 0.96 |
+| stepanov-abstraction | 1.474 | 1.519 | 1.482 | 0.98 |
+| functionobjects | 1.823 | 2.238 | 2.211 | 0.99 |
+| olden-bh | 0.388 | 1.080 | 1.065 | 0.99 |
+| olden-health | 0.079 | 0.146 | 0.126 | 0.86 |
+| olden-treeadd | 0.053 | 0.100 | 0.095 | 0.95 |
+| olden-tsp | 0.346 | 0.535 | 0.559 | 1.05 |
+| olden-em3d | 0.941 | 1.022 | 0.999 | 0.98 |
+| olden-voronoi | 0.083 | 0.217 | 0.203 | 0.93 |
+| ptrdist-ks | 0.205 | 0.318 | 0.290 | 0.91 |
+| ptrdist-yacr2 | 0.169 | 0.281 | 0.244 | 0.87 |
+| ptrdist-ft | 0.254 | 0.408 | 0.390 | 0.96 |
+| ptrdist-anagram | 0.267 | 0.442 | 0.416 | 0.94 |
+| tramp3d | 0.086 | 0.449 | 0.156 | 0.35 |
+| bullet | 1.352 | 1.909 | 1.801 | 0.94 |
+| lame | 0.052 | 0.170 | 0.113 | 0.66 |
+| sha | 0.009 | 0.067 | 0.042 | 0.63 |
+| susan | 0.012 | 0.076 | 0.044 | 0.58 |
+| mafft | 8.038 | 15.648 | 15.451 | 0.99 |
+| nbench | 0.509 | 0.655 | 0.643 | 0.98 |
+| ffmpeg-hevc-1t | 2.450 | 3.099 | 2.824 | 0.91 |
+| ffmpeg-hevc-4t | 0.864 | 1.356 | 1.026 | 0.76 |
+| ffmpeg-h264-1t | 1.490 | 2.392 | 1.934 | 0.81 |
+| ffmpeg-h264-4t | 0.448 | 0.996 | 0.623 | 0.63 |
+| geometric mean (startup excluded) | | 1.63 × native | 1.49 × native | 0.913 |
+
+ReadyToRun takes 0.913 of the JIT's time, 1.49 times native against 1.63. It gains most where start-up and compilation dominate (tramp3d 0.35, susan 0.58, sha 0.63, lame 0.66, the startup probe 32 against 40 ms) and in ffmpeg (H.264 0.81 on one thread and 0.63 on four, HEVC 0.91 and 0.76). It loses where a function called once runs a long loop: precompiled code has no patchpoints for on-stack replacement and reads `initonly` addresses as fields, so the loop runs as crossgen2 compiled it (dhrystone 1.11, memcpy, callback and fannkuch 1.06, olden-tsp 1.05; heapsort, which the review listed, is level here at 0.98). The rule in `docs/user/deployment.md`: use it for a deployment whose host is known, when start-up and compilation or functions past the JIT's limits (`--diagnose-limits`) take the program's time; keep the IL image for a program that lives in one long loop, and time both. JP-10's partial image, which would precompile only the over-limit methods, is what would avoid choosing.
+
+### Correctness
+
+`tests/readytorun.sh`: a generated program with a function past the IL threshold matches native as a `.dll`, as a launcher and in system mode; with tiering off the IL image's JIT compiles that function with MinOpts and the ReadyToRun image's does not compile it at all; the option's misuses fail with one line. The benchmark set's ReadyToRun engine matches native on its 55 programs and ffmpeg's hashes.
+
 ## JP-09: MinOpts methods in the benchmark report
 
 `scripts/benchmark.py` runs each JIT engine once more after its validation with `DOTNET_JitDisasmSummary=1`, lists the translated methods (of the image's `Program` classes) the summary shows compiled with MinOpts in `minopts.tsv`, and counts them per benchmark in `results.tsv` and the summary. The baseline has a `minopts` column, and a JIT row with more such methods than the baseline's fails the run. [tests/benchmarks.sh](../../tests/benchmarks.sh) checks the comparison on synthetic results: as many or fewer pass, one more fails. The summary first went to a file (`DOTNET_JitStdOutFile`) during the validation run, which made jpeg crash in 8 of 50 runs (segmentation faults, once `free(): invalid pointer`): the runtime's background tier-1 compilations write the file too, and with JP-02's setting they run from the start. With the summary on standard output, in a run of its own, jpeg ran 60 times without a failure.

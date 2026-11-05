@@ -435,8 +435,9 @@ internal sealed class CilCompiler(CompilerOptions options)
         pe.Serialize(image);
         byte[] executable = image.ToArray();
         FinalizeIndirectCalls(executable, indirectFixups);
-        HashSet<string> translated = [.. Methods.Values.OfType<MethodBuilder>().Select(method => method.Name)];
-        CompileOnce(executable, translated);
+        // crossgen2 leaves AggressiveOptimization methods to the JIT, so a ReadyToRun image keeps them unmarked.
+        if (options.ReadyToRun is null)
+            CompileOnce(executable, [.. Methods.Values.OfType<MethodBuilder>().Select(method => method.Name)]);
         MakeDeterministic(executable);
         if (options.ReportSimd)
             SimdReport.Write(executable, scalarized, reductions, types.FragmentBits, Console.Error);

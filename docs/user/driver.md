@@ -100,7 +100,7 @@ Every option falls into one of four classes, per runtime mode:
 | `--native-kernels=<dir>` | Portable mode: a native kernel package (its directory, with manifest.json) whose library defines functions the program declares, such as assembly kernels; the image calls them through P/Invoke stubs, loads the library of the running host from runtimes/<rid>/native/ beside it and NativeAOT links the target's static library (docs/user/native-kernels.md) |
 | `--extension=<name>` | Link a native extension installed in the sysroot's ext/ directory: in portable mode its assembly, registered for dlopen; in system mode its Linux libraries, as --system-library (also -l<name> for a name its manifest lists) |
 
-### NativeAOT
+### NativeAOT and ReadyToRun
 
 | Option | Effect |
 | --- | --- |
@@ -110,6 +110,7 @@ Every option falls into one of four classes, per runtime mode:
 | `--aot-optimize=<preference>` | Balanced (default), Speed or Size |
 | `--aot-instruction-set=<set>` | baseline (SSE2 on x64, with SSE4.2 tested at run time; the default for scalar code), x86-64-v2 (SSE4.2 and POPCNT: x64 CPUs since about 2009; the default for a program with vector code, as most programs built at -O2 and above have, or with objects compiled at --isa=x86-64-v2 or wasm-simd128), x86-64-v3 (AVX2, BMI2, FMA: x64 CPUs since about 2015; the default for objects compiled at --isa=x86-64-v3) or native (this host's CPU; the executable may not run elsewhere) |
 | `--aot-debug` | Keep native debug symbols and the map file |
+| `--readytorun=<rid>` | Precompile the JIT image for one runtime identifier (linux-x64, linux-arm64, win-x64, win-arm64, osx-x64 or osx-arm64) with crossgen2: the image and LlvmNet.Runtime.dll become one composite image (<name>.r2r.dll beside them) that starts from optimized code and loads only on that identifier's hosts (needs the .NET 10 SDK; docs/user/deployment.md) |
 
 ### Diagnostics and debugging
 

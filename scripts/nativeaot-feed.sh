@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fill a local NuGet folder feed with every package NativeAOT publishing needs (TC-12): the ILCompiler packages, the
-# runtime pack and the ILLink tasks for each runtime identifier. A host without network access publishes from it with
-# LLVMNET_NUGET_FEED=<feed-dir>, which makes the generated NativeAOT project restore from that feed alone.
+# runtime pack and the ILLink tasks for each runtime identifier; and what --readytorun needs (JP-06): crossgen2 for this
+# host and each identifier's runtime pack. A host without network access publishes from it with
+# LLVMNET_NUGET_FEED=<feed-dir>, which makes the generated NativeAOT and ReadyToRun projects restore from that feed alone.
 #
 # Usage: scripts/nativeaot-feed.sh <feed-dir> [rid...]       (default rid: this host's)
 # Packages come from the sources NuGet is configured with, and from this user's global packages folder when it already
@@ -30,6 +31,16 @@ cat >"$work/project/Feed.csproj" <<'PROJECT'
   </PropertyGroup>
 </Project>
 PROJECT
+cat >"$work/project/ReadyToRun.csproj" <<'PROJECT'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <SelfContained>false</SelfContained>
+    <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+</Project>
+PROJECT
 printf 'internal static class Feed { private static int Main() => 0; }\n' >"$work/project/Feed.cs"
 printf '<Project />\n' >"$work/project/Directory.Build.props"
 printf '<Project />\n' >"$work/project/Directory.Build.targets"
@@ -41,10 +52,11 @@ if [[ -z "${LLVMNET_FEED_OFFLINE:-}" ]]; then sources+=(--source https://api.nug
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 for rid in "${rids[@]}"; do
     dotnet restore "$work/project/Feed.csproj" -r "$rid" --packages "$stage" "${sources[@]}" --nologo -v quiet
+    dotnet restore "$work/project/ReadyToRun.csproj" -r "$rid" --packages "$stage" "${sources[@]}" --nologo -v quiet
 done
 count=0
 while IFS= read -r package; do
     cp "$package" "$feed/"
     count=$((count + 1))
 done < <(find "$stage" -name '*.nupkg' | sort)
-printf 'NativeAOT feed: %d packages in %s for %s\n' "$count" "$feed" "${rids[*]}"
+printf 'NativeAOT and ReadyToRun feed: %d packages in %s for %s\n' "$count" "$feed" "${rids[*]}"

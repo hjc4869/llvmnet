@@ -8,6 +8,8 @@ internal sealed class CompilerOptions
     internal string Runtime { get; set; } = "portable";
     internal bool Verbose { get; set; }
     internal bool NativeAot { get; set; }
+    /// <summary>--readytorun: the runtime identifier the JIT image is precompiled for (JP-06), or null for an IL-only image.</summary>
+    internal string? ReadyToRun { get; set; }
     /// <summary>The instruction set the frontend may assume (--isa, ADR-16): baseline, x86-64-v2, x86-64-v3 or wasm-simd128.</summary>
     internal string Isa { get; set; } = "baseline";
     internal bool Simd128 => Isa == "wasm-simd128";
@@ -210,6 +212,7 @@ internal sealed class Invocation
                 case "--install-extension": InstallExtension = Path.GetFullPath(value); break;
                 case "--uninstall-extension": UninstallExtension = value; break;
                 case "--nativeaot": Options.NativeAot = true; break;
+                case "--readytorun": Options.ReadyToRun = value; break;
                 case "--runtime-id": RuntimeId = value; break;
                 case "--aot-project": AotProject = Path.GetFullPath(value); Options.NativeAot = true; break;
                 case "--aot-optimize":
@@ -283,6 +286,12 @@ internal sealed class Invocation
             throw new ArgumentException("--nativeaot requires an executable link, not -c, -E, -S, --emit-llvm or -shared.");
         if (!nativeAot && (RuntimeId is not null || AotDebug || AotPreference != "Balanced" || AotInstructionSet is not null))
             throw new ArgumentException("NativeAOT output settings require --nativeaot.");
+        if (Options.ReadyToRun is not null && (nativeAot || CompileOnly || Preprocess || DependencyOnly || SyntaxOnly || EmitLlvm || Options.Library))
+            throw new ArgumentException("--readytorun requires an executable link to a JIT image, not --nativeaot, -c, -E, -S, --emit-llvm or -shared.");
+        if (Options.ReadyToRun is string target && !Toolchain.ReadyToRunTargets.Contains(target))
+            throw new ArgumentException($"--readytorun requires one of {string.Join(", ", Toolchain.ReadyToRunTargets)}.");
+        if (Options.Runtime == "system" && Options.ReadyToRun is not (null or "linux-x64"))
+            throw new ArgumentException("The current system ABI profile requires --readytorun linux-x64.");
         if (AotProject is not null && RuntimeId is not null)
             throw new ArgumentException("--aot-project takes no --runtime-id: the runtime identifier is chosen when the project is published (dotnet publish -r <rid>).");
         if (Options.Runtime != "system" && Options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
@@ -661,6 +670,8 @@ internal static class Driver
                         File.Copy(shared, Path.Combine(native, Path.GetFileName(shared)), true);
                     }
             if (nativeAot) return Toolchain.NativeAot(payload, output, temporary, invocation.RuntimeId, invocation.AotPreference, AotInstructionSet(invocation, levels, compiler.HasVectorCode, verbose), verbose, invocation.AotDebug, options.SystemLibraries, options.KernelPackages);
+            if (options.ReadyToRun is string rid && Toolchain.ReadyToRun(payload, rid, temporary, verbose) is int precompiled && precompiled != 0)
+                return precompiled;
             if (launcher) Toolchain.Launcher(output, payload);
             return 0;
         }
