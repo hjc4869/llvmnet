@@ -15,6 +15,8 @@ clang-22 -O1 "$fixture" -o native
 grep -qx "fork: read 'child says hi', exit 0" native.txt
 grep -qx "posix_spawn: read 'child says hi', exit 0" native.txt
 "$llvmnet" --runtime=system -O1 "$fixture" -o fork.dll
+# A program that forks keeps the runtime's tiering delay: a child forked while tier-1 compilation runs inherits its locks.
+if grep -q CallCountingDelayMs fork.runtimeconfig.json; then printf 'FAIL: fork.runtimeconfig.json sets CallCountingDelayMs\n' >&2; exit 1; fi
 sed -E 's/^(fork|vfork|_Fork|fork worker): .*/\1: ENOSYS/' native.txt >jit-expected.txt
 for run in 1 2 3; do
     timeout 60 dotnet fork.dll >jit.txt

@@ -26,6 +26,8 @@ internal sealed class CilCompiler(CompilerOptions options)
     // The CLR limits how many fields one type may have, so static fields beyond this many per type go to further
     // internal holder classes.
     private const int FieldsPerType = 32768;
+    // The C library's functions whose child process goes on running translated code (HostInterop.Adapter).
+    private static readonly string[] ForkingFunctions = ["fork", "vfork", "_Fork", "forkpty", "daemon"];
     private readonly List<TypeBuilder> fieldHolders = [];
     private int fieldsInHolder;
     // The CLR also refuses a type with more than 65,535 methods (Clang has about 146,000 functions), so internal
@@ -450,17 +452,22 @@ internal sealed class CilCompiler(CompilerOptions options)
             // devirtualization gains (6.6% over 24 benchmarks, PF-06); DOTNET_TieredPGO=1 turns it back on.
             // Call counting starts at a method's first call: the runtime's default waits until 100 ms pass without a
             // first call to any method, and translated programs keep making first calls, so their call-heavy code stayed
-            // at tier 0 (JP-02); DOTNET_TC_CallCountingDelayMs=100 restores the default.
+            // at tier 0 (JP-02); DOTNET_TC_CallCountingDelayMs=100 restores the default. System-mode programs that fork
+            // keep the default: a child forked while the runtime's background thread compiles for tier 1 inherits the
+            // locks that thread holds, and without the delay that thread is busy from the start (2 of 20 runs of
+            // tests/system-fork.sh left a child hung, none with the default).
             runtimeOptions = new
             {
                 tfm = "net10.0",
                 rollForward = "Minor",
                 framework = new { name = "Microsoft.NETCore.App", version = "10.0.0" },
-                configProperties = new Dictionary<string, object>
-                {
-                    ["System.Runtime.TieredPGO"] = false,
-                    ["System.Runtime.TieredCompilation.CallCountingDelayMs"] = 0,
-                },
+                configProperties = options.Runtime == "system" && ForkingFunctions.Any(name => Llvm.LLVMGetNamedFunction(module, name) is nint fork && fork != 0 && Llvm.LLVMGetFirstUse(fork) != 0)
+                    ? new Dictionary<string, object> { ["System.Runtime.TieredPGO"] = false }
+                    : new Dictionary<string, object>
+                    {
+                        ["System.Runtime.TieredPGO"] = false,
+                        ["System.Runtime.TieredCompilation.CallCountingDelayMs"] = 0,
+                    },
             }
         }));
         string runtimePath = typeof(Memory).Assembly.Location;
