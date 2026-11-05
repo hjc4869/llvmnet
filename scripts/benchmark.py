@@ -14,6 +14,9 @@ the speed of this host relative to that one, the geometric mean of native/baseli
 divides every llvmnet time by it. A benchmark regresses when its normalized time exceeds the baseline by more than the
 per-benchmark tolerance, and an engine regresses when the geometric mean of those quotients exceeds 1 by more than the
 geomean tolerance. A regression must reproduce in a second measurement before it fails the run.
+The validation run of a JIT engine also lists the translated methods the JIT compiled with MinOpts (its
+DOTNET_JitDisasmSummary; minopts.tsv), which RyuJIT does past its per-method limits: a benchmark with more of them than
+its baseline records fails the run too (JP-09).
 
     scripts/benchmark.py                          build, validate, measure, compare; exit 1 on a regression
     scripts/benchmark.py --validate-only          build and check outputs only
@@ -43,6 +46,7 @@ import datetime
 import glob
 import hashlib
 import json
+import re
 import math
 import os
 import platform
@@ -101,6 +105,8 @@ class Benchmark:
         self.directory = None
         self.programs = {}
         self.status = 0
+        # The translated methods the JIT compiled with MinOpts in the validation run, per JIT engine (JP-09).
+        self.minopts = {}
 
     @property
     def cxx(self):
@@ -324,14 +330,22 @@ def validate(benchmark, engines, output, checks, timeout):
     for engine in engines + (("musl",) if "musl" in benchmark.programs else ()):
         out_path = directory / f"{engine}.out"
         err_path = directory / f"{engine}.err"
+        environment = None
+        summary = directory / f"{engine}.jit-summary.txt"
+        if engine.startswith("jit"):
+            # The JIT's summary of what it compiled, for the translated methods it compiles with MinOpts (JP-09).
+            summary.unlink(missing_ok=True)
+            environment = dict(jit_environment, DOTNET_JitDisasmSummary="1", DOTNET_JitStdOutFile=str(summary))
         with open(out_path, "wb") as stdout, open(err_path, "wb") as stderr:
             try:
                 status = run_once(benchmark.programs[engine] + arguments, directory, stdin, stdout, stderr, timeout,
-                                  jit_environment if engine.startswith("jit") else None)[0]
+                                  environment)[0]
             except TimeoutError as error:
                 errors.append(f"{benchmark.name} {engine}: {error}")
                 continue
         results[engine] = status
+        if engine.startswith("jit"):
+            benchmark.minopts[engine] = minopts_methods(summary)
     if "native" not in results:
         return errors or [f"{benchmark.name}: no native result"]
     benchmark.status = results["native"]
@@ -364,6 +378,20 @@ def validate(benchmark, engines, output, checks, timeout):
         for engine in results:
             (directory / f"{engine}.out").unlink(missing_ok=True)
     return errors
+
+
+def minopts_methods(summary):
+    """The translated methods (of the image's Program classes) that a DOTNET_JitDisasmSummary file lists as compiled
+    with MinOpts: RyuJIT falls back to it past its per-method limits (13-jit-patterns.md), and the tiered JIT then
+    discards their tier-1 recompilation. None when the summary is missing."""
+    if not summary.is_file():
+        return None
+    methods = set()
+    for line in summary.read_text(errors="replace").splitlines():
+        match = re.search(r"JIT compiled (\S+?)\(.*\[([^\]]*)", line)
+        if match and "MinOpts" in match.group(2) and match.group(1).split(":")[0].endswith("Program"):
+            methods.add(match.group(1))
+    return sorted(methods)
 
 
 def hash_file(path):
@@ -412,14 +440,14 @@ def geomean(values):
 
 
 results_header = ["benchmark", "group", "engine", "runs", "median_s", "min_s", "max_s", "user_s", "system_s",
-                  "max_rss_kib", "ratio_to_native"]
+                  "max_rss_kib", "ratio_to_native", "minopts"]
 
 
 def write_results(path, rows):
     with open(path, "w") as file:
         file.write("\t".join(results_header) + "\n")
         for row in rows:
-            file.write("\t".join(str(row[key]) for key in results_header) + "\n")
+            file.write("\t".join(str(row.get(key, "")) for key in results_header) + "\n")
 
 
 def read_results(path):
@@ -441,25 +469,38 @@ def read_baseline(path):
     return baseline
 
 
+def read_baseline_minopts(path):
+    """{(benchmark, engine): translated methods the JIT compiled with MinOpts}, for the rows that record it."""
+    counts = {}
+    if not path.is_file():
+        return counts
+    for line in path.read_text().splitlines():
+        fields = line.split("\t")
+        if len(fields) > 4 and fields[4].isdigit() and not line.startswith("#"):
+            counts[(fields[0], fields[1])] = int(fields[4])
+    return counts
+
+
 def write_baseline(path, rows, metadata):
     lines = [
         "# Benchmark baseline (PF-01): median and fastest seconds per benchmark and engine on the reference host,",
         "# written by scripts/benchmark.py --update-baseline. Regressions are judged on the fastest run, normalized by",
         "# this host's speed relative to the reference host (the geometric mean of the native times); see the script.",
+        "# minopts: the translated methods the JIT compiled with MinOpts; a JIT engine fails when a benchmark has more.",
         f"# Host: {metadata['cpu']}, {metadata['cores']} cores; {metadata['dotnet']}; {metadata['clang']}",
         f"# Commit: {metadata['commit']}; written {metadata['date']}",
-        "benchmark\tengine\tmedian_s\tmin_s",
+        "benchmark\tengine\tmedian_s\tmin_s\tminopts",
     ]
     for row in sorted(rows, key=lambda row: (row["benchmark"], engines_all.index(row["engine"]))):
-        lines.append(f"{row['benchmark']}\t{row['engine']}\t{float(row['median_s']):.4f}\t{float(row['min_s']):.4f}")
+        lines.append(f"{row['benchmark']}\t{row['engine']}\t{float(row['median_s']):.4f}\t{float(row['min_s']):.4f}\t{row.get('minopts', '')}".rstrip("\t"))
     path.write_text("\n".join(lines) + "\n")
 
 
-def compare(rows, baseline, tolerance, geomean_tolerance):
+def compare(rows, baseline, tolerance, geomean_tolerance, minopts_baseline=None):
     """
     Applies the thresholds to each benchmark's fastest run, since noise only ever adds time and some JIT runs are
     bimodal (tier-1 compilation finishing before or after a hot loop); returns (host factor, per-row verdicts,
-    per-engine geomeans, failure messages).
+    per-engine geomeans, failure messages). A JIT row with more MinOpts methods than the baseline's fails too (JP-09).
     """
     native = [(float(row["min_s"]), baseline[(row["benchmark"], "native")]) for row in rows
               if row["engine"] == "native" and (row["benchmark"], "native") in baseline
@@ -485,6 +526,10 @@ def compare(rows, baseline, tolerance, geomean_tolerance):
             verdicts[key] = ("faster", quotient)
         else:
             verdicts[key] = ("ok", quotient)
+    for row in rows:
+        reference = (minopts_baseline or {}).get((row["benchmark"], row["engine"]))
+        if reference is not None and str(row.get("minopts", "")).isdigit() and int(row["minopts"]) > reference:
+            failures.append(f"{row['benchmark']} {row['engine']}: {row['minopts']} methods compiled with MinOpts, {reference} in the baseline")
     means = {engine: geomean(values) for engine, values in quotients.items()}
     for engine, mean in means.items():
         if mean > 1 + geomean_tolerance:
@@ -562,6 +607,10 @@ def write_summary(path, rows, metadata, comparison, engines):
         if parts:
             lines.append(f"- SIMD kernels at {'x86-64-' + level if level else 'the baseline ISA level'}: geometric mean of the ratios "
                          f"to vectorized native at the level, " + ", ".join(parts) + f" over {len(members)} kernels.")
+    minopts = [f"{row['benchmark']} {row['minopts']}" + (f" ({row['engine']})" if row["engine"] != "jit" else "") for row in rows
+               if str(row.get("minopts", "")).isdigit() and int(row["minopts"]) > 0]
+    if minopts:
+        lines.append(f"- Translated methods the JIT compiled with MinOpts (minopts.tsv names them): {', '.join(minopts)}.")
     lines.append(f"- Host speed relative to the baseline host (native geometric mean): {factor:.3f}.")
     lines.append(f"- Thresholds: a benchmark regresses above {1 + metadata['tolerance']:.2f}x its baseline, "
                  f"an engine's geometric mean above {1 + metadata['geomean_tolerance']:.2f}x.")
@@ -641,7 +690,8 @@ def main():
     if arguments.compare:
         # An earlier run's results: judge them again, rewrite its summary.md and, if asked, the baseline from them.
         rows = read_results(arguments.compare)
-        comparison = compare(rows, read_baseline(arguments.baseline), arguments.tolerance, arguments.geomean_tolerance)
+        comparison = compare(rows, read_baseline(arguments.baseline), arguments.tolerance, arguments.geomean_tolerance,
+                             read_baseline_minopts(arguments.baseline))
         for failure in comparison[3]:
             print(f"REGRESSION: {failure}")
         print(f"host factor {comparison[0]:.3f}; geometric means against the baseline: "
@@ -709,6 +759,11 @@ def main():
             log(f"PASS: {benchmark.name} output matches native ({', '.join(engine for engine in engines_for(benchmark, engines) if engine != 'native')})")
     invalid = {problem.split()[0] for problem in errors}
     ready = [benchmark for benchmark in ready if benchmark.name not in invalid]
+    with open(output / "minopts.tsv", "w") as file:
+        file.write("benchmark\tengine\tmethod\n")
+        for benchmark in ready:
+            for engine, methods in benchmark.minopts.items():
+                file.writelines(f"{benchmark.name}\t{engine}\t{method}\n" for method in methods or [])
     if arguments.validate_only:
         return 1 if errors else 0
 
@@ -728,11 +783,13 @@ def main():
                          "runs": summary["runs"], "median_s": f"{summary['median']:.4f}", "min_s": f"{summary['min']:.4f}",
                          "max_s": f"{summary['max']:.4f}", "user_s": f"{summary['user']:.3f}",
                          "system_s": f"{summary['system']:.3f}", "max_rss_kib": summary["rss"],
-                         "ratio_to_native": f"{summary['median'] / reference:.3f}" if reference > 0 else "nan"})
+                         "ratio_to_native": f"{summary['median'] / reference:.3f}" if reference > 0 else "nan",
+                         "minopts": len(benchmark.minopts[engine]) if benchmark.minopts.get(engine) is not None else ""})
         log(f"{benchmark.name}: " + ", ".join(f"{engine} {summary['median']:.3f} s" for engine, summary in summaries.items()))
 
     baseline = read_baseline(arguments.baseline)
-    comparison = compare(rows, baseline, arguments.tolerance, arguments.geomean_tolerance)
+    minopts_baseline = read_baseline_minopts(arguments.baseline)
+    comparison = compare(rows, baseline, arguments.tolerance, arguments.geomean_tolerance, minopts_baseline)
     if comparison[3] and not arguments.update_baseline:
         # A regression must reproduce: measure the regressed benchmarks again and judge the second measurement.
         suspects = {failure.split()[0] for failure in comparison[3]} - set(engines_all)
@@ -755,7 +812,7 @@ def main():
                 if row["benchmark"] == benchmark.name:
                     reference = medians.get("native-vec", medians["native"]) if row["engine"] in ("jit-vec", "aot-vec") else medians["native"]
                     row["ratio_to_native"] = f"{float(row['median_s']) / reference:.3f}"
-        comparison = compare(rows, baseline, arguments.tolerance, arguments.geomean_tolerance)
+        comparison = compare(rows, baseline, arguments.tolerance, arguments.geomean_tolerance, minopts_baseline)
 
     write_results(output / "results.tsv", rows)
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")

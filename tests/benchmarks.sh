@@ -61,3 +61,18 @@ check 1 "one benchmark 40% slower on a host twice as slow" 2.8 1.5 3.0 2
 check 1 "every benchmark 15% slower (geometric mean)" 2.3 1.725 3.45 1
 grep -q '^REGRESSION: jit geometric mean' "$test_output/compare.log"
 printf 'PASS: the thresholds ignore host speed and fail a 40%% slower benchmark and a 15%% slower geometric mean\n'
+# MinOpts methods (JP-09): a baseline that records them fails a JIT row with more, and passes one with as many or fewer.
+printf 'a\tjit\t2.0000\t2.0000\t1\n' >>"$test_output/baseline.tsv"
+minopts() {  # minopts <expected exit status> <description> <a's MinOpts methods>
+    results 2.0 1.5 3.0 1 | awk -v m="$3" 'BEGIN { OFS = "\t" } NR == 1 { print $0, "minopts"; next } { print $0, ($1 == "a" && $3 == "jit" ? m : "") }' \
+        >"$test_output/results.tsv"
+    local status=0
+    python3 "$root/scripts/benchmark.py" --compare "$test_output/results.tsv" --baseline "$test_output/baseline.tsv" \
+        >"$test_output/compare.log" 2>&1 || status=$?
+    [[ "$status" == "$1" ]] || { printf 'FAIL: %s: exit status %s, expected %s\n' "$2" "$status" "$1" >&2; cat "$test_output/compare.log" >&2; exit 1; }
+}
+minopts 0 "as many MinOpts methods" 1
+minopts 0 "fewer MinOpts methods" 0
+minopts 1 "one more MinOpts method" 2
+grep -q '^REGRESSION: a jit: 2 methods compiled with MinOpts, 1 in the baseline' "$test_output/compare.log"
+printf 'PASS: a benchmark with more methods compiled with MinOpts than its baseline fails\n'
