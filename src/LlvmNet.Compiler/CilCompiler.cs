@@ -448,12 +448,19 @@ internal sealed class CilCompiler(CompilerOptions options)
             // (DOTNET_ROLL_FORWARD=LatestMajor overrides this for a host that only has a later runtime).
             // Dynamic PGO is off: its instrumented tier-0 code costs translated C more than its profile-guided
             // devirtualization gains (6.6% over 24 benchmarks, PF-06); DOTNET_TieredPGO=1 turns it back on.
+            // Call counting starts at a method's first call: the runtime's default waits until 100 ms pass without a
+            // first call to any method, and translated programs keep making first calls, so their call-heavy code stayed
+            // at tier 0 (JP-02); DOTNET_TC_CallCountingDelayMs=100 restores the default.
             runtimeOptions = new
             {
                 tfm = "net10.0",
                 rollForward = "Minor",
                 framework = new { name = "Microsoft.NETCore.App", version = "10.0.0" },
-                configProperties = new Dictionary<string, object> { ["System.Runtime.TieredPGO"] = false },
+                configProperties = new Dictionary<string, object>
+                {
+                    ["System.Runtime.TieredPGO"] = false,
+                    ["System.Runtime.TieredCompilation.CallCountingDelayMs"] = 0,
+                },
             }
         }));
         string runtimePath = typeof(Memory).Assembly.Location;

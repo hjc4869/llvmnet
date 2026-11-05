@@ -1,6 +1,84 @@
-# Evidence: switches, constant global addresses and the JIT's limits (2026-11-05)
+# Evidence: tiering, switches, constant global addresses and the JIT's limits (2026-11-05)
 
-Host: AMD Ryzen AI MAX+ 395 (Zen 5, 16 cores in two CCDs of 8, 32 threads), Linux 6.12.113, .NET 10.0.14, clang 22.1.8; base commit `113adb3`. Plan: [13-jit-patterns.md](../plan/13-jit-patterns.md) (JP-03 to JP-05, JP-09), after the review in [2026-11-04-jit-patterns.md](2026-11-04-jit-patterns.md). Scripts and logs are in the gitignored `artifacts/jit-patterns/` (`jp02/`, `jp03/`): `sweep.py` times one set of images under several runtime settings, `ab-set.py` translates each benchmark's linked bitcode with several compilers and times all of them under the JIT and as NativeAOT, both alternating the order between rounds. The base compiler is a worktree of `113adb3` (`artifacts/jit-patterns/base-wt`) with the same sysroots. Runs were pinned with `taskset` so that two could share the host: one measurement per CCD, builds on the other CCD's spare threads.
+Host: AMD Ryzen AI MAX+ 395 (Zen 5, 16 cores in two CCDs of 8, 32 threads), Linux 6.12.113, .NET 10.0.14, clang 22.1.8; base commit `113adb3`. Plan: [13-jit-patterns.md](../plan/13-jit-patterns.md) (JP-02 to JP-05), after the review in [2026-11-04-jit-patterns.md](2026-11-04-jit-patterns.md). Scripts and logs are in the gitignored `artifacts/jit-patterns/` (`jp02/`, `jp03/`): `sweep.py` times one set of images under several runtime settings, `ab-set.py` translates each benchmark's linked bitcode with several compilers and times all of them under the JIT and as NativeAOT, both alternating the order between rounds. The base compiler is a worktree of `113adb3` (`artifacts/jit-patterns/base-wt`) with the same sysroots. Runs were pinned with `taskset` so that two could share the host: one measurement per CCD, builds on the other CCD's spare threads.
+
+## JP-02: the tiering delay
+
+### What changed
+
+The emitted `runtimeconfig.json` sets `System.Runtime.TieredCompilation.CallCountingDelayMs` to 0, beside `System.Runtime.TieredPGO: false`. By default the runtime starts counting calls toward tier 1 only after 100 ms in which no method is called for the first time (`TieredCompilationManager`), and translated programs keep calling functions for the first time, so their call-heavy code stayed at tier 0. With 0, call counting starts at a method's first call. `DOTNET_TC_CallCountingDelayMs`, which the runtime reads before the property, restores the default for a run: lame's image takes 0.204 s with the emitted setting and 0.369 s with `DOTNET_TC_CallCountingDelayMs=100`, against 0.344 for the image without the property (5 runs each, during a gate run). `CallCountThreshold` stays at the default 30.
+
+### The sweep
+
+`artifacts/jit-patterns/jp02/sweep.py` timed the JIT images of one build of the whole set (`scripts/benchmark.py --validate-only --engines native,jit` at `113adb3`, `artifacts/bench/jp02-images`, all outputs matching native) under each setting, passed as `DOTNET_TC_*` environment variables, alternating the candidates in rotated order, 5 rounds each, with outputs checked against the first candidate's. Once on all 32 threads with the host otherwise idle, and once on 4 cores (`taskset -c 8-11`, the CI runner's size) while other measurements ran on the other CCD; the 4-core ffmpeg rows were measured again alone, because builds had shared those cores. Medians in seconds:
+
+| Benchmark | 32 threads: default | 0 | 1 | 0, threshold 10 | 0, threshold 100 | 4 cores: default | 0 | 1 | 10 | 30 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| malloc | 1.075 | 0.942 | 0.997 | 0.952 | 0.955 | 1.092 | 0.997 | 0.992 | 1.026 | 1.035 |
+| fwrite | 0.726 | 0.739 | 0.784 | 0.731 | 0.708 | 0.766 | 0.749 | 0.741 | 0.762 | 0.742 |
+| printf | 1.989 | 1.840 | 1.897 | 1.839 | 1.835 | 2.098 | 1.963 | 1.974 | 1.969 | 2.007 |
+| atomics | 0.310 | 0.304 | 0.318 | 0.303 | 0.307 | 0.310 | 0.317 | 0.320 | 0.326 | 0.325 |
+| mutex | 1.252 | 1.212 | 1.189 | 1.221 | 1.191 | 1.162 | 1.089 | 1.195 | 1.089 | 1.128 |
+| calli | 2.183 | 2.235 | 2.104 | 2.159 | 2.083 | 2.270 | 2.235 | 2.197 | 2.217 | 2.264 |
+| varargs | 1.211 | 1.010 | 1.016 | 1.013 | 1.008 | 1.276 | 1.070 | 1.074 | 1.086 | 1.154 |
+| float80 | 0.338 | 0.194 | 0.196 | 0.198 | 0.184 | 0.347 | 0.195 | 0.197 | 0.228 | 0.266 |
+| memcpy | 0.591 | 0.553 | 0.554 | 0.556 | 0.549 | 0.625 | 0.597 | 0.584 | 0.600 | 0.617 |
+| alloca | 0.315 | 0.261 | 0.256 | 0.256 | 0.256 | 0.327 | 0.274 | 0.273 | 0.278 | 0.291 |
+| callback | 0.431 | 0.396 | 0.394 | 0.419 | 0.417 | 0.443 | 0.421 | 0.421 | 0.421 | 0.428 |
+| startup | 0.036 | 0.034 | 0.034 | 0.034 | 0.034 | 0.036 | 0.035 | 0.036 | 0.035 | 0.037 |
+| dhrystone | 0.154 | 0.155 | 0.156 | 0.151 | 0.160 | 0.168 | 0.165 | 0.166 | 0.166 | 0.166 |
+| linpack | 1.097 | 1.003 | 1.006 | 0.995 | 1.027 | 1.188 | 1.087 | 1.087 | 1.098 | 1.119 |
+| richards | 0.489 | 0.469 | 0.468 | 0.461 | 0.469 | 0.515 | 0.506 | 0.500 | 0.496 | 0.506 |
+| oourafft | 1.263 | 1.147 | 1.149 | 1.135 | 1.159 | 1.363 | 1.237 | 1.222 | 1.249 | 1.280 |
+| ffbench | 0.529 | 0.536 | 0.535 | 0.545 | 0.509 | 0.559 | 0.578 | 0.573 | 0.576 | 0.573 |
+| whetstone | 0.676 | 0.520 | 0.517 | 0.518 | 0.505 | 0.700 | 0.536 | 0.542 | 0.581 | 0.643 |
+| salsa20 | 2.237 | 2.097 | 2.117 | 2.117 | 2.095 | 2.416 | 2.291 | 2.298 | 2.319 | 2.351 |
+| perlin | 1.006 | 1.006 | 1.004 | 1.002 | 0.998 | 1.070 | 1.065 | 1.065 | 1.075 | 1.067 |
+| reed-solomon | 1.941 | 1.904 | 1.922 | 1.899 | 1.915 | 2.116 | 2.033 | 2.036 | 2.029 | 2.050 |
+| almabench | 2.447 | 2.353 | 2.341 | 2.327 | 2.323 | 2.770 | 2.661 | 2.660 | 2.667 | 2.683 |
+| fftbench | 1.020 | 0.996 | 0.998 | 0.997 | 0.989 | 1.000 | 1.056 | 1.030 | 1.062 | 0.991 |
+| huffbench | 5.613 | 5.620 | 5.614 | 5.670 | 5.641 | 6.144 | 6.171 | 6.287 | 6.326 | 6.235 |
+| lpbench | 1.119 | 1.116 | 1.089 | 1.129 | 1.105 | 1.373 | 1.365 | 1.569 | 1.489 | 1.491 |
+| fannkuch | 1.464 | 1.453 | 1.461 | 1.464 | 1.463 | 1.597 | 1.583 | 1.597 | 1.595 | 1.610 |
+| recursive | 0.761 | 0.542 | 0.536 | 0.525 | 0.532 | 0.793 | 0.563 | 0.560 | 0.590 | 0.680 |
+| heapsort | 1.375 | 1.371 | 1.391 | 1.642 | 1.395 | 1.524 | 1.498 | 1.455 | 1.569 | 1.630 |
+| hash | 1.969 | 1.807 | 1.801 | 1.788 | 1.802 | 2.287 | 2.102 | 2.110 | 2.224 | 2.213 |
+| lists | 3.005 | 2.939 | 2.934 | 2.917 | 2.905 | 3.474 | 3.503 | 3.489 | 3.586 | 3.528 |
+| random | 1.081 | 1.067 | 1.070 | 1.070 | 1.072 | 1.229 | 1.246 | 1.239 | 1.241 | 1.258 |
+| queens | 1.146 | 1.098 | 1.070 | 1.088 | 1.083 | 1.233 | 1.163 | 1.164 | 1.178 | 1.192 |
+| hash2-cxx | 1.092 | 1.008 | 1.024 | 1.016 | 1.008 | 1.172 | 1.099 | 1.107 | 1.112 | 1.138 |
+| stepanov-v1p2 | 2.552 | 2.545 | 2.549 | 2.531 | 2.535 | 2.793 | 2.774 | 2.805 | 2.781 | 2.789 |
+| stepanov-abstraction | 1.657 | 1.495 | 1.503 | 1.501 | 1.503 | 1.804 | 1.671 | 1.653 | 1.701 | 1.804 |
+| functionobjects | 2.767 | 2.219 | 2.225 | 2.224 | 2.226 | 3.549 | 2.995 | 3.021 | 2.670 | 3.274 |
+| olden-bh | 1.138 | 1.077 | 1.084 | 1.082 | 1.106 | 1.247 | 1.184 | 1.182 | 1.188 | 1.249 |
+| olden-health | 0.200 | 0.146 | 0.152 | 0.173 | 0.153 | 0.194 | 0.155 | 0.161 | 0.179 | 0.196 |
+| olden-treeadd | 0.151 | 0.102 | 0.112 | 0.104 | 0.112 | 0.160 | 0.116 | 0.120 | 0.133 | 0.148 |
+| olden-tsp | 0.669 | 0.519 | 0.538 | 0.543 | 0.511 | 0.694 | 0.603 | 0.620 | 0.645 | 0.702 |
+| olden-em3d | 1.033 | 1.038 | 1.036 | 1.039 | 1.036 | 1.128 | 1.112 | 1.107 | 1.116 | 1.111 |
+| olden-voronoi | 0.465 | 0.229 | 0.236 | 0.224 | 0.233 | 0.491 | 0.243 | 0.253 | 0.310 | 0.391 |
+| ptrdist-ks | 0.362 | 0.311 | 0.321 | 0.316 | 0.326 | 0.386 | 0.342 | 0.337 | 0.358 | 0.366 |
+| ptrdist-yacr2 | 0.396 | 0.304 | 0.323 | 0.306 | 0.327 | 0.411 | 0.323 | 0.329 | 0.362 | 0.402 |
+| ptrdist-ft | 0.518 | 0.488 | 0.536 | 0.457 | 0.422 | 0.475 | 0.427 | 0.430 | 0.456 | 0.479 |
+| ptrdist-anagram | 0.456 | 0.445 | 0.452 | 0.449 | 0.452 | 0.482 | 0.484 | 0.473 | 0.475 | 0.477 |
+| tramp3d | 0.692 | 0.500 | 0.529 | 0.503 | 0.497 | 0.746 | 0.600 | 0.625 | 0.678 | 0.718 |
+| bullet | 2.633 | 1.924 | 1.917 | 1.927 | 1.942 | 2.620 | 2.062 | 2.080 | 2.235 | 2.441 |
+| jpeg | 0.076 | 0.082 | 0.081 | 0.074 | 0.086 | 0.080 | 0.078 | 0.080 | 0.080 | 0.080 |
+| lame | 0.325 | 0.178 | 0.179 | 0.174 | 0.194 | 0.327 | 0.180 | 0.188 | 0.203 | 0.225 |
+| sha | 0.066 | 0.066 | 0.065 | 0.062 | 0.063 | 0.068 | 0.066 | 0.067 | 0.066 | 0.067 |
+| susan | 0.073 | 0.073 | 0.075 | 0.076 | 0.072 | 0.075 | 0.074 | 0.074 | 0.074 | 0.075 |
+| mafft | 14.783 | 14.655 | 14.614 | 14.961 | 15.091 | 16.004 | 15.875 | 15.894 | 15.859 | 15.989 |
+| nbench | 0.989 | 0.649 | 0.658 | 0.654 | 0.651 | 1.046 | 0.708 | 0.712 | 0.805 | 0.925 |
+| ffmpeg-hevc-1t | 2.901 | 2.711 | 2.754 | 2.714 | 2.729 | 3.278 | 3.106 | 3.149 | 3.173 | 3.232 |
+| ffmpeg-hevc-4t | 1.403 | 1.236 | 1.275 | 1.247 | 1.272 | 1.582 | 1.400 | 1.423 | 1.489 | 1.516 |
+| ffmpeg-h264-1t | 2.389 | 2.137 | 2.148 | 2.161 | 2.155 | 2.757 | 2.495 | 2.469 | 2.551 | 2.635 |
+| ffmpeg-h264-4t | 1.159 | 0.909 | 0.931 | 0.908 | 0.914 | 1.334 | 1.114 | 1.142 | 1.198 | 1.243 |
+| geometric mean against the default (startup excluded) | 1 | 0.881 | 0.892 | 0.885 | 0.883 | 1 | 0.892 | 0.900 | 0.925 | 0.961 |
+
+- **Delay 0** is the best candidate in both configurations: 12% less time on all threads and 11% on 4 cores, by geometric mean. The largest gains are the call-heavy and start-up-bound programs (olden-voronoi and lame about twice as fast, float80, nbench, recursive, tramp3d, bullet, functionobjects 20 to 45% faster) and every ffmpeg decode, by 7% (HEVC, one thread) to 22% (H.264, four threads) on all threads.
+- **A small delay** (1, 10 or 30 ms) only gives part of the gain: the delay re-arms after each first call, and these programs make one every few milliseconds.
+- **The call-count threshold** with no delay is no better: 10 makes heapsort 19% slower (its hot function promoted before its loop settles), 100 jpeg 13%.
+- **The losers** are small and within the nightly's thresholds. On all threads jpeg is 8% slower (6 ms of an 80 ms run; level on 4 cores), calli 2.4%, fwrite 1.8%; on 4 cores fftbench 5.6%, ffbench 3.3%, atomics 2.1%. The startup probe takes 34 ms against 36 ms, sha and susan are level, and dhrystone and heapsort, which the review saw 6 to 9% slower on 22 benchmarks, are level here.
+
 
 ## JP-03: switches
 
@@ -59,7 +137,7 @@ Within noise, as in the review: the decoders' hot switches are few. JP-03 also t
 
 ## The benchmark set (JP-03 and JP-04)
 
-`artifacts/jit-patterns/jp03/ab-set.py`: the linked bitcode of each benchmark from a `scripts/benchmark.py` build of `113adb3` (`artifacts/bench/jp02-images`), translated by the base compiler, by this compiler with `initonly` switched off (JP-03 alone, a temporary switch) and by this compiler, as JIT images and NativeAOT executables; all six timed alternately, medians of 5 (`taskset -c 0-7`, while the tiering sweep ran on the other CCD). Every output matched native's. The images keep the base `runtimeconfig.json`. Seconds:
+`artifacts/jit-patterns/jp03/ab-set.py`: the linked bitcode of each benchmark from a `scripts/benchmark.py` build of `113adb3` (`artifacts/bench/jp02-images`), translated by the base compiler, by this compiler with `initonly` switched off (JP-03 alone, a temporary switch) and by this compiler, as JIT images and NativeAOT executables; all six timed alternately, medians of 5 (`taskset -c 0-7`, while the tiering sweep ran on the other CCD). Every output matched native's. The images keep the base `runtimeconfig.json` (JP-02 is measured apart). Seconds:
 
 | Benchmark | JIT base | JIT JP-03 | JIT JP-03+04 | NativeAOT base | NativeAOT JP-03 | NativeAOT JP-03+04 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -173,3 +251,29 @@ In the H.264 decode, the JIT's summary (`DOTNET_JitDisasmSummary=1`) shows three
 ## JP-09: MinOpts methods in the benchmark report
 
 `scripts/benchmark.py` runs each JIT engine's validation with `DOTNET_JitDisasmSummary=1` and `DOTNET_JitStdOutFile`, lists the translated methods (of the image's `Program` classes) the summary shows compiled with MinOpts in `minopts.tsv`, and counts them per benchmark in `results.tsv` and the summary. The baseline has a `minopts` column, and a JIT row with more such methods than the baseline's fails the run. [tests/benchmarks.sh](../../tests/benchmarks.sh) checks the comparison on synthetic results: as many or fewer pass, one more fails.
+
+## The baseline
+
+`scripts/benchmark.py --update-baseline --output artifacts/bench/jp-m12` on this host, the whole set with the native, JIT and NativeAOT engines, at the tree of the JP-02 commit (`113adb3` with JP-02 to JP-05 and JP-09), wrote `tests/perf/baseline.tsv`; it replaces the baseline of `d2a2711` (2026-10-31), so it also carries the work merged since then (BE-33's local sharing, PF-14 to PF-19, the SIMD levels' scalar changes). Against that baseline, host-normalized, the JIT takes 0.835 of the time and NativeAOT 0.946, with no benchmark past the thresholds. The JIT runs at 1.70 times native and NativeAOT at 1.31 (geometric means over 57 benchmarks), from 2.11 and 1.45 in the `m8-final` run. The largest JIT gains are the programs JP-02 helps (olden-voronoi, float80, lame, olden-treeadd and olden-health, nbench, recursive); the largest JIT loss is heapsort, 4%. NativeAOT's largest losses are mutex (13%) and callback (11%), within the 25% threshold and not from this work, which changes NativeAOT code only through JP-03.
+
+The baseline's new `minopts` column records the translated methods the JIT compiled with MinOpts: tramp3d 3 (`main` and two `advect` instantiations, past the IL threshold), mafft 1 (`constants`), ffmpeg's H.264 decodes 2 (`ff_h264_decode_mb_cabac`, `ff_h264_filter_mb_fast`), none elsewhere.
+
+The run also showed that ptrdist-ft, which is checked against a musl-linked build, had not been validated since the vectorized engines were added: the musl reference was built only with them, and the failed validation did not keep the benchmark from being measured. Both are fixed (`5913686`); ptrdist-ft's outputs match the musl reference.
+
+## Reproducing
+
+```bash
+scripts/benchmark.py --validate-only --engines native,jit --output artifacts/bench/jp02-images
+# JP-02: the candidates as environment variables, rotated within each round
+python3 artifacts/jit-patterns/jp02/sweep.py artifacts/bench/jp02-images 5 sweep-host.tsv 'default=' 'd0=DOTNET_TC_CallCountingDelayMs=0' 'd0t10=DOTNET_TC_CallCountingDelayMs=0 DOTNET_TC_CallCountThreshold=10'
+SWEEP_PREFIX='taskset -c 8-11' python3 artifacts/jit-patterns/jp02/sweep.py artifacts/bench/jp02-images 5 sweep-4core.tsv 'default=' 'd0=DOTNET_TC_CallCountingDelayMs=0'
+# JP-03 and JP-04: the same bitcode translated by a worktree of the base commit and by this compiler
+python3 artifacts/jit-patterns/jp03/ab-set.py artifacts/bench/jp02-images set 5 "base=<base worktree>/bin/llvmnet" "new=$PWD/bin/llvmnet"
+python3 scripts/ab-time.py 7 'base=dotnet base/interp.dll 640000 256' 'new=dotnet new/interp.dll 640000 256'
+# JP-05: the limits report, and the JIT's own view of the same methods
+bin/llvmnet --runtime=portable --diagnose-limits artifacts/ffmpeg-browser-portable/decode.bc -o decode.dll
+DOTNET_JitDisasmSummary=1 DOTNET_JitStdOutFile=summary.txt dotnet decode.dll artifacts/bench/clips/h264-1080p.mp4 100000 video 1 frame hash
+tests/run.sh semantics constant-globals benchmarks
+```
+
+Runs were taken in `systemd-run --user --scope -p MemoryMax=...` scopes.
