@@ -26,6 +26,8 @@ internal sealed class CompilerOptions
     internal int VectorWidth { get; set; } = 128;
     internal bool TrapMissingArguments { get; set; }
     internal bool DiagnoseLimits { get; set; }
+    /// <summary>--report-simd: the vector code's functions, recognized reductions and SIMD helpers by class (SimdReport).</summary>
+    internal bool ReportSimd { get; set; }
     internal bool CheckIndirectCalls { get; set; }
     /// <summary>Prints llvmnet's warnings while translating; -w, as for the frontend, silences them.</summary>
     internal Diagnostics? Warnings { get; set; }
@@ -222,6 +224,7 @@ internal sealed class Invocation
                 case "--keep-ir": KeepIr = Path.GetFullPath(value); break;
                 case "--trap-missing-arguments": Options.TrapMissingArguments = true; break;
                 case "--diagnose-limits": Options.DiagnoseLimits = true; break;
+                case "--report-simd": Options.ReportSimd = true; break;
                 case "--check-indirect-calls": Options.CheckIndirectCalls = true; break;
                 case "-v": Options.Verbose = true; Queries.Add("-v"); break;
                 case "--driver-mode":

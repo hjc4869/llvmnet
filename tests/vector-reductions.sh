@@ -5,7 +5,8 @@
 # x86 helpers, and has look-alikes it must leave alone. Every build must print what native clang prints: both modes at
 # -O2 and -O3, without hardware intrinsics (the helpers' compositions), with 256-bit fragments with and without AVX,
 # at --isa=x86-64-v3 (AVX2's forms), as NativeAOT, and with the recognition off (--vector-idioms=off). -v names the
-# functions that got the instructions, which must be the expected ones.
+# functions that got the instructions, which must be the expected ones, and so does --report-simd (SV-10), which also
+# classes the helpers.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"
@@ -55,10 +56,18 @@ if grep -q "as psadbw\|as pmaddwd" "$test_output/literal.log"; then
     exit 1
 fi
 dotnet "$test_output/literal.dll" | diff -u "$test_output/native.txt" -
+# --report-simd (SV-10) names the reductions and classes the helpers by the instruction sets they use.
+"$llvmnet" -O2 --report-simd "$source_file" -o "$test_output/report.dll" 2>"$test_output/report.log"
+grep -q '^llvmnet: simd: reductions of pix_abs16: 1 sum of absolute differences as psadbw$' "$test_output/report.log"
+grep -Eq '^llvmnet: simd: +[0-9]+ Sse2 +AdvSimd +X86\.Psadbw \(llvm\.x86\.sse2\.psad\.bw\): ' "$test_output/report.log"
+grep -Eq '^llvmnet: simd: +[0-9]+ Sse2 +AdvSimd\.Arm64 +X86\.Pmaddwd \(llvm\.x86\.sse2\.pmadd\.wd\): ' "$test_output/report.log"
+"$llvmnet" -O3 --isa=x86-64-v3 --report-simd "$source_file" -o "$test_output/report-v3.dll" 2>"$test_output/report-v3.log"
+grep -Eq '^llvmnet: simd: [0-9]+ functions make [0-9]+ Vector256 operations' "$test_output/report-v3.log"
+grep -Eq '^llvmnet: simd: +[0-9]+ Avx2/Sse2 +AdvSimd\.Arm64 +X86\.Pmaddwd256 ' "$test_output/report-v3.log"
 for flags in "-O2" "-O3 --isa=x86-64-v3"; do
     name="aot${flags// /}"
     # shellcheck disable=SC2086
     "$llvmnet" $flags --nativeaot "$source_file" -o "$test_output/$name" >"$test_output/$name.log" 2>&1
     "$test_output/$name" | diff -u "$test_output/native.txt" -
 done
-printf 'PASS: sums of absolute differences and of 16-bit products run as psadbw and pmaddwd where only the reduction reads them, with native output in both modes, without hardware intrinsics, at 256 bits with and without AVX, at x86-64-v3 and as NativeAOT\n'
+printf 'PASS: sums of absolute differences and of 16-bit products run as psadbw and pmaddwd where only the reduction reads them, with native output in both modes, without hardware intrinsics, at 256 bits with and without AVX, at x86-64-v3 and as NativeAOT, and --report-simd names them\n'

@@ -55,6 +55,26 @@ The filters gain 2 to 2.5% of the whole decode. The vectorized build is 1.5 time
 
 No program of the benchmark set has a reduction the recognizer takes (its 53 non-ffmpeg programs compiled with the vectorized engines' flags and `-v`). Each program's linked IR translated by master's compiler and by this one gives byte-identical images, so the zero-padding change did not touch them either.
 
+## `--report-simd` (SV-10)
+
+`--report-simd` reads the written image's IL: per function the calls of `Vector128` and `Vector256` operations and of the runtime's SIMD helpers, each helper classed by the instruction sets whose `IsSupported` its own IL tests (and the 128-bit helpers a 256-bit one calls), with the scalarized functions and the reductions above. dav1d's CLI, linked again with it, begins:
+
+```text
+llvmnet: simd: 117 functions make 10960 Vector128 operations and 9 SIMD helper calls; 7 functions with vector IR run as scalar code
+llvmnet: simd: scalarized dav1d_cdef_brow_8bpc (its vector code moves more lanes than it computes on)
+...
+llvmnet: simd: reductions of put_8tap_c: 3 sums of products as pmaddwd
+llvmnet: simd: reductions of put_8tap_scaled_c: 1 sum of products as pmaddwd
+llvmnet: simd:   calls x64                    ARM64                  helper: functions
+llvmnet: simd:       9 Sse2                   AdvSimd.Arm64          X86.Pmaddwd (llvm.x86.sse2.pmadd.wd): prep_8tap_c, prep_8tap_c.1034, prep_8tap_scaled_c, put_8tap_c (+1)
+llvmnet: simd: operations  calls function
+llvmnet: simd:       1278      3 put_8tap_c
+llvmnet: simd:        717      3 prep_8tap_c
+llvmnet: simd:        714      0 put_8tap_c.1036
+```
+
+The 16-bit-pixel `put_8tap_c.1036` keeps its literal code: `uint16_t` pixels do not fit `pmaddwd`'s signed halfwords. For the SSE conformance program the table shows what runs as an instruction on which host: `X86.Pshufb` as `Ssse3` and `AdvSimd.Arm64`, `X86.Crc32b` as `Sse42` and `Crc32` (through `BitOperations.Crc32C`, whose ARM64 branch the x64 CoreLib's IL does not contain, so the report names it from a table), and the SSE4.2 string comparisons as composed on both, since .NET has no intrinsic for them. `tests/vector-reductions.sh` checks the report's reductions and helper classes at the baseline and at `x86-64-v3`.
+
 ## What it does not show
 
 - An Intel host, where `vpmulld` costs two micro-operations and ten cycles, so the JIT's dot products should gain there as NativeAOT's do here.

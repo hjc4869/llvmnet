@@ -118,6 +118,7 @@ Every option falls into one of four classes, per runtime mode:
 | `--keep-ir=<file>` | Copy the linked bitcode, before lowering, to <file> (kept as <output>.failed.bc on a compile error) |
 | `--trap-missing-arguments` | Compile a void call with fewer arguments than its definition to a trap instead of failing |
 | `--diagnose-limits` | Report each function's IL size and locals, and the ones the JIT compiles without optimization |
+| `--report-simd` | Report what the program's vector code runs as: the functions of Vector128 or Vector256 code and the scalarized ones, the reductions run as psadbw and pmaddwd, and each SIMD helper the code calls with the x64 and ARM64 instruction sets it uses where the host has them (docs/user/simd.md) |
 | `--check-indirect-calls` | Check every indirect call's CIL signature against its target at run time |
 | `-v` | Print the commands run and the notes for options without effect; alone, the frontend's version |
 

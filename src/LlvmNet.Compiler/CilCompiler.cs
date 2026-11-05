@@ -402,6 +402,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         byte[] executable = image.ToArray();
         FinalizeIndirectCalls(executable, indirectFixups);
         MakeDeterministic(executable);
+        if (options.ReportSimd)
+            SimdReport.Write(executable, scalarized, reductions, types.FragmentBits, Console.Error);
         if (options.DiagnoseLimits)
             LimitsReport.Write(executable, Methods.Where(pair => pair.Value is MethodBuilder).ToDictionary(pair => pair.Value.Name, pair =>
                 (Llvm.Blocks(pair.Key).Count(), Llvm.Blocks(pair.Key).Sum(block => Llvm.Instructions(block).Count()))), Console.Error);
