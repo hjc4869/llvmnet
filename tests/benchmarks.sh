@@ -10,6 +10,12 @@ python3 "$root/scripts/benchmark.py" --validate-only --group micro --group start
     --output "$test_output/validate" >"$test_output/validate.log" 2>&1 || { cat "$test_output/validate.log" >&2; exit 1; }
 passed="$(grep -c '^PASS: ' "$test_output/validate.log")"
 printf 'PASS: %d microbenchmarks build and match native output under the JIT\n' "$passed"
+# The simd group (SV-20) at its three ISA levels, which only the vectorized engines build.
+python3 "$root/scripts/benchmark.py" --validate-only --group simd --only 'simd-sad8*' --engines native,native-vec,jit-vec \
+    --output "$test_output/validate-simd" >"$test_output/validate-simd.log" 2>&1 || { cat "$test_output/validate-simd.log" >&2; exit 1; }
+test "$(grep -c '^PASS: simd-sad8.* output matches native (native-vec, jit-vec)$' "$test_output/validate-simd.log")" -eq 3
+if [[ -e "$test_output/validate-simd/build/simd-sad8/simd-sad8.dll" ]]; then printf 'FAIL: the simd group built a scalar llvmnet engine\n' >&2; exit 1; fi
+printf 'PASS: the SIMD kernels build and match native at the baseline, x86-64-v2 and x86-64-v3 vectorized\n'
 
 # Threshold checks on synthetic results: a baseline of three benchmarks, then runs that differ from it.
 cat >"$test_output/baseline.tsv" <<'EOF'
