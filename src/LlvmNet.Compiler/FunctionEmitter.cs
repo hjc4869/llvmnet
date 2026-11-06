@@ -25,8 +25,12 @@ internal sealed class FunctionEmitter : ValueEmitter
     private LocalBuilder? stackReturn;
     private Label stackExit;
     private bool tailCalled;
+    // The IL locals once the values have theirs (for ManagedCalli).
+    private int localCount;
     private readonly List<(Label Site, nint Call)> tailSites = [];
     private readonly Dictionary<Type, LocalBuilder> scratch = [];
+    // Static allocas in frame slots (FrameSlots): the slot and the alignment its address is rounded to.
+    private readonly Dictionary<nint, (LocalBuilder Slot, int Alignment)> frameSlots = [];
     // Values computed where their one use loads them (ChooseUseSiteValues), and the one being computed there.
     private readonly HashSet<nint> atUse = [];
     private nint computing;
@@ -72,8 +76,16 @@ internal sealed class FunctionEmitter : ValueEmitter
         // A function with a musttail call takes its stack memory from the arena, never from localloc (MustTailCall). It
         // has no byval parameters: those would be byval arguments of its musttail calls, which are rejected.
         bool arenaFrame = mustTail && (hasAllocations || variadicCalls);
+        bool byValueParameters = Enumerable.Range(0, (int)Llvm.LLVMCountParams(function)).Any(index => Llvm.ParameterAttribute(function, (uint)index, "byval") != 0);
+        // The variadic call area, static allocas and byval copies take frame slots instead of localloc, except under the
+        // JIT in a method with a loop: localloc keeps such a method out of on-stack replacement (the JIT compiles it
+        // optimized at once), whose code runs slower in a method without localsinit (lpbench, PF-04); NativeAOT has no
+        // on-stack replacement.
+        bool slots = !arenaFrame && (hasAllocations || variadicCalls || byValueParameters) && (Compiler.NativeAot || !HasLoop());
         if (!arenaFrame)
-            varargs.Allocate(function, arena: false);
+            varargs.Allocate(function, arena: false, slot: slots);
+        if (slots && hasAllocations)
+            FrameSlots();
         for (uint index = 0; index < Llvm.LLVMCountParams(function); index++)
         {
             nint byValue = Llvm.ParameterAttribute(function, index, "byval");
@@ -81,26 +93,37 @@ internal sealed class FunctionEmitter : ValueEmitter
             nint type = Llvm.LLVMGetTypeAttributeValue(byValue);
             nint explicitAlignment = Llvm.ParameterAttribute(function, index, "align");
             int alignment = Math.Max(Types.Alignment(type), explicitAlignment == 0 ? 1 : checked((int)Llvm.LLVMGetEnumAttributeValue(explicitAlignment)));
-            LocalBuilder copy = Il.DeclareLocal(typeof(nint));
-            Il.Emit(OpCodes.Ldc_I8, checked(Types.Size(type) + alignment - 1));
-            Il.Emit(OpCodes.Conv_U);
-            Il.Emit(OpCodes.Localloc);
-            usesLocalloc = true;
-            Offset(alignment - 1);
-            Il.Emit(OpCodes.Ldc_I8, -(long)alignment);
-            Il.Emit(OpCodes.Conv_I);
-            Il.Emit(OpCodes.And);
-            Il.Emit(OpCodes.Stloc, copy);
-            Il.Emit(OpCodes.Ldloc, copy);
+            if (slots && Types.Size(type) <= FrameSlotLimit)
+            {
+                // The copy in a frame slot, whose address each use takes, as for a static alloca.
+                var frame = (Il.DeclareLocal(Types.Block(checked((int)Math.Max(1, Types.Size(type)) + (alignment > 8 ? alignment - 1 : 0)))), alignment);
+                frameSlots[Llvm.LLVMGetParam(function, index)] = frame;
+                SlotAddress(frame);
+            }
+            else
+            {
+                LocalBuilder copy = Il.DeclareLocal(typeof(nint));
+                Il.Emit(OpCodes.Ldc_I8, checked(Types.Size(type) + alignment - 1));
+                Il.Emit(OpCodes.Conv_U);
+                Il.Emit(OpCodes.Localloc);
+                usesLocalloc = true;
+                Offset(alignment - 1);
+                Il.Emit(OpCodes.Ldc_I8, -(long)alignment);
+                Il.Emit(OpCodes.Conv_I);
+                Il.Emit(OpCodes.And);
+                Il.Emit(OpCodes.Stloc, copy);
+                Il.Emit(OpCodes.Ldloc, copy);
+                locals[Llvm.LLVMGetParam(function, index)] = copy;
+            }
             Il.Emit(OpCodes.Ldarg, checked((short)index));
             Il.Emit(OpCodes.Ldc_I8, Types.Size(type));
             Il.Emit(OpCodes.Call, typeof(Memory).GetMethod(nameof(Memory.Copy))!);
             Il.Emit(OpCodes.Pop);
-            locals[Llvm.LLVMGetParam(function, index)] = copy;
         }
         if (jumpSites.Count == 0 && valueCount <= 32768) ChooseUseSiteValues();
         if (jumpSites.Count == 0 && valueCount is > 512 and <= 32768) ShareFunctionLocals();
         else AllocateFunctionLocals(valueCount > 32768 && jumpSites.Count == 0);
+        localCount = locals.Values.Concat(storedScalars.Values.Select(storage => storage.Array)).Select(local => local.LocalIndex + 1).DefaultIfEmpty(0).Max();
         if (scopedStack || hasAllocations && jumpSites.Count != 0 || arenaFrame)
         {
             // The thread's alloca arena top on entry, restored on every exit (BE-17).
@@ -112,7 +135,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.BeginExceptionBlock();
         }
         if (arenaFrame)
-            varargs.Allocate(function, arena: true);
+            varargs.Allocate(function, arena: true, slot: false);
         if (jumpSites.Count != 0)
         {
             jumpFrame = Il.DeclareLocal(typeof(long));
@@ -214,7 +237,65 @@ internal sealed class FunctionEmitter : ValueEmitter
         // buffers on every call cost H.264 decoding 30% (PF-04). The JIT cannot replace such a method on the stack
         // anyway. Other methods keep the flag: without it, the JIT's on-stack replacement code for a long-running loop
         // ran 2.6 times slower (lpbench). Locals whose first value matters are initialized explicitly.
-        method.InitLocals = !(usesLocalloc || varargs.Allocated);
+        method.InitLocals = !(usesLocalloc || varargs.Allocated || frameSlots.Count != 0);
+    }
+
+    /// <summary>The address of a frame slot, rounded up to its alignment where that is above RyuJIT's 8 bytes.</summary>
+    private void SlotAddress((LocalBuilder Slot, int Alignment) frame)
+    {
+        Il.Emit(OpCodes.Ldloca, frame.Slot);
+        Il.Emit(OpCodes.Conv_U);
+        if (frame.Alignment <= 8) return;
+        Offset(frame.Alignment - 1);
+        Il.Emit(OpCodes.Ldc_I8, -(long)frame.Alignment);
+        Il.Emit(OpCodes.Conv_I);
+        Il.Emit(OpCodes.And);
+    }
+
+    /// <summary>The bytes a frame slot of a static alloca or byval copy holds at most; a larger one keeps localloc.</summary>
+    private const long FrameSlotLimit = 65536;
+
+    /// <summary>
+    /// Gives each static alloca (in the entry block, of a constant size) a frame slot: a local of a value type of its
+    /// size, whose address each use takes (ldloca), as LLVM gives static allocas a fixed place in the frame. With localloc,
+    /// RyuJIT gives the method a frame pointer, a stack probe and NativeAOT's stack cookie, and turns a constant block of
+    /// up to 32 bytes into a local that keeps the cookie (an unsafe buffer); the address also took a register for the
+    /// whole method (PF-24). A slot needs no zeroing: an alloca's contents are undefined.
+    /// </summary>
+    private void FrameSlots()
+    {
+        foreach (nint instruction in Llvm.Instructions(Llvm.Blocks(function).First()))
+        {
+            if (Llvm.LLVMGetInstructionOpcode(instruction) != 26) continue;
+            nint count = Llvm.LLVMGetOperand(instruction, 0);
+            if (Llvm.LLVMIsAConstantInt(count) == 0 || TypeSystem.Width(Llvm.LLVMTypeOf(count)) > 64) continue;
+            nint allocated = Llvm.LLVMGetAllocatedType(instruction);
+            long elements = Llvm.LLVMConstIntGetSExtValue(count), size = Types.Size(allocated);
+            if (elements < 0 || size != 0 && elements > FrameSlotLimit / size || elements * size > FrameSlotLimit) continue;
+            int alignment = Math.Max(Types.Alignment(allocated), checked((int)Llvm.LLVMGetAlignment(instruction)));
+            // RyuJIT aligns a local of 8 bytes or more to 8 on 64-bit targets; a stricter alignment rounds the address up
+            // (SlotAddress).
+            int spare = alignment > 8 ? alignment - 1 : 0;
+            frameSlots[instruction] = (Il.DeclareLocal(Types.Block(checked((int)Math.Max(1, elements * size) + spare))), alignment);
+            atUse.Add(instruction);
+        }
+    }
+
+    /// <summary>Whether a branch of the function goes back to its own block or an earlier one: a loop in the IL, whose
+    /// blocks are in the function's order.</summary>
+    private bool HasLoop()
+    {
+        var order = new Dictionary<nint, int>();
+        foreach (nint block in Llvm.Blocks(function))
+            order[block] = order.Count;
+        foreach ((nint block, int index) in order)
+        {
+            nint terminator = Llvm.Instructions(block).Last();
+            for (uint successor = 0; successor < Llvm.LLVMGetNumSuccessors(terminator); successor++)
+                if (order[Llvm.LLVMGetSuccessor(terminator, successor)] <= index)
+                    return true;
+        }
+        return false;
     }
 
     internal override void Load(nint value)
@@ -227,7 +308,9 @@ internal sealed class FunctionEmitter : ValueEmitter
             computing = outer;
             return;
         }
-        if (locals.TryGetValue(value, out LocalBuilder? local))
+        if (frameSlots.TryGetValue(value, out var frame))
+            SlotAddress(frame);
+        else if (locals.TryGetValue(value, out LocalBuilder? local))
             Il.Emit(OpCodes.Ldloc, local);
         else if (storedScalars.TryGetValue(value, out var storage))
         {
@@ -313,6 +396,11 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Binary(value, opcode);
                 break;
             case 26:
+                if (frameSlots.TryGetValue(value, out var frame))
+                {
+                    SlotAddress(frame);
+                    break;
+                }
                 nint allocated = Llvm.LLVMGetAllocatedType(value);
                 if (TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0))) > 64)
                     throw new NotSupportedException("Alloca element counts wider than the address space are not supported.");
@@ -2134,9 +2222,13 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
     }
 
+    /// <summary>The IL locals past which a stub of an indirect call is not used (CilCompiler.ManagedCalli): RyuJIT stops
+    /// inlining into a method of about 920 locals, its temporaries included, and a stub it does not inline is a call more.</summary>
+    private const int StubLocals = 512;
+
     private void ManagedCalli(Type returnType, Type[] parameters, bool tail = false)
     {
-        Compiler.ManagedCalli(Il, method, returnType, parameters, tail);
+        Compiler.ManagedCalli(Il, method, returnType, parameters, tail, stub: localCount <= StubLocals);
     }
 
     private bool SystemIntegerArgumentCompatible(nint instruction, nint target, uint index)

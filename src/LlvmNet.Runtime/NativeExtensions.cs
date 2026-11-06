@@ -48,7 +48,8 @@ public abstract class NativeExtension
     /// <summary>
     /// The managed function pointer of the stub for <paramref name="symbol"/> in <paramref name="library"/>, or 0 when the
     /// extension has no stub for it or the host library does not provide the function, so that lookups fail where they
-    /// would natively. Translated code calls the pointer with the CIL signature of the C prototype it was cast to.
+    /// would natively. Translated code calls the pointer with the CIL signature of the C prototype it was cast to, as
+    /// NativeAOT without testing for a fat function pointer, so the stub is a static method that is not generic (PF-27).
     /// </summary>
     public abstract nint Resolve(string library, string symbol);
 

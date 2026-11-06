@@ -28,6 +28,7 @@ internal sealed class TypeSystem : IDisposable
     private readonly Dictionary<nint, VectorShape?> vectors = [];
     private readonly Dictionary<nint, Type> returns = [];
     private readonly Dictionary<(Type Lane, int Fragments), (Type Cil, FieldInfo[] Fields)> containers = [];
+    private readonly Dictionary<int, Type> blocks = [];
 
     internal TypeSystem(nint llvmModule, ModuleBuilder module, bool typedVectors, int vectorBits = 128)
     {
@@ -172,6 +173,21 @@ internal sealed class TypeSystem : IDisposable
             typeof(ValueType), PackingSize.Size1, checked((int)Math.Max(Size(type), 1)));
         aggregate.DefineField("Data", typeof(byte), FieldAttributes.Public).SetOffset(0);
         return aggregate.CreateType()!;
+    }
+
+    /// <summary>A value type of <paramref name="size"/> bytes, rounded up to 16, for a block of memory in a method's frame:
+    /// a local whose address the method takes (PF-24).</summary>
+    internal Type Block(int size)
+    {
+        size = checked((size + 15) & -16);
+        if (!blocks.TryGetValue(size, out Type? block))
+        {
+            TypeBuilder builder = module.DefineType($"__Block{size}", TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.ExplicitLayout,
+                typeof(ValueType), PackingSize.Size1, size);
+            builder.DefineField("Data", typeof(byte), FieldAttributes.Public).SetOffset(0);
+            blocks[size] = block = builder.CreateType()!;
+        }
+        return block;
     }
 
     public void Dispose() => Llvm.LLVMDisposeTargetData(layout);
