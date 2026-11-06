@@ -758,19 +758,27 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             string name = opcode switch { 20 => "ShiftLeft", 21 => "ShiftRightLogical", _ => "ShiftRightArithmetic" };
             if (SplatScalar(right) is nint count)
             {
-                LocalBuilder amount = Rent(typeof(int));
-                LoadLaneScalar(count);
-                if (shape.LaneBits == 64) il.Emit(OpCodes.Conv_I4);
-                il.Emit(OpCodes.Stloc, amount);
+                // A constant count is an immediate at each shift (pslld xmm, 16): through a local, RyuJIT picks the form
+                // that takes the count in a register, from memory, before it propagates the constant (SV-27).
+                int? constant = ConstantCount(count);
+                LocalBuilder? amount = null;
+                if (constant is null)
+                {
+                    amount = Rent(typeof(int));
+                    LoadLaneScalar(count);
+                    if (shape.LaneBits == 64) il.Emit(OpCodes.Conv_I4);
+                    il.Emit(OpCodes.Stloc, amount);
+                }
                 Build(shape, index =>
                 {
                     Fragment(left, index);
                     As(shape.Lane, lane);
-                    il.Emit(OpCodes.Ldloc, amount);
+                    if (amount is null) il.Emit(OpCodes.Ldc_I4, constant!.Value);
+                    else il.Emit(OpCodes.Ldloc, amount);
                     il.Emit(OpCodes.Call, Api(name, null, V(lane), typeof(int)));
                     As(lane, shape.Lane);
                 });
-                Release(amount);
+                if (amount is not null) Release(amount);
                 return;
             }
             if (opcode == 20 && shape.LaneBits is 16 or 32 && Multipliers(right, shape.LaneBits) is long[] multipliers)
@@ -882,6 +890,11 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         }
         return multipliers;
     }
+
+    /// <summary>The count a splat's scalar (from <see cref="SplatScalar"/>) is when it is a constant, else null.</summary>
+    private static int? ConstantCount(nint scalar) =>
+        TypeSystem.Kind(Llvm.LLVMTypeOf(scalar)) == 13 ? 0 :
+        Llvm.LLVMIsAConstantInt(scalar) != 0 ? unchecked((int)Llvm.LLVMConstIntGetSExtValue(scalar)) : null;
 
     /// <summary>Pushes a lane scalar (a constant vector's element or a splatted variable) as its CIL value.</summary>
     private void LoadLaneScalar(nint scalar)
@@ -1668,32 +1681,42 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             });
             return;
         }
-        LocalBuilder amount = Rent(typeof(int));
-        LoadLaneScalar(scalar);
-        if (shape.LaneBits == 64) il.Emit(OpCodes.Conv_I4);
-        il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1);
-        il.Emit(OpCodes.And);
-        il.Emit(OpCodes.Stloc, amount);
+        int? constant = ConstantCount(scalar) & (shape.LaneBits - 1);
+        LocalBuilder? amount = null;
+        if (constant is null)
+        {
+            amount = Rent(typeof(int));
+            LoadLaneScalar(scalar);
+            if (shape.LaneBits == 64) il.Emit(OpCodes.Conv_I4);
+            il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, amount);
+        }
         MethodInfo near = Api(right ? "ShiftRightLogical" : "ShiftLeft", null, V(lane), typeof(int));
         MethodInfo far = Api(right ? "ShiftLeft" : "ShiftRightLogical", null, V(lane), typeof(int));
         Build(shape, index =>
         {
             Fragment(right ? low : high, index);
             As(shape.Lane, lane);
-            il.Emit(OpCodes.Ldloc, amount);
+            if (amount is null) il.Emit(OpCodes.Ldc_I4, constant!.Value);
+            else il.Emit(OpCodes.Ldloc, amount);
             il.Emit(OpCodes.Call, near);
             Fragment(right ? high : low, index);
             As(shape.Lane, lane);
             il.Emit(OpCodes.Ldc_I4_1);
             il.Emit(OpCodes.Call, far);
-            il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1);
-            il.Emit(OpCodes.Ldloc, amount);
-            il.Emit(OpCodes.Sub);
+            if (amount is null) il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1 - constant!.Value);
+            else
+            {
+                il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1);
+                il.Emit(OpCodes.Ldloc, amount);
+                il.Emit(OpCodes.Sub);
+            }
             il.Emit(OpCodes.Call, far);
             Call("BitwiseOr", lane, 2);
             As(lane, shape.Lane);
         });
-        Release(amount);
+        if (amount is not null) Release(amount);
     }
 
     /// <summary>Translates a generic vector intrinsic (<see cref="Intrinsics"/>); false for any other call.</summary>
