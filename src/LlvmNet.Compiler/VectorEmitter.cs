@@ -856,6 +856,11 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         return Llvm.LLVMIsAConstantInt(position) != 0 && Llvm.LLVMConstIntGetSExtValue(position) == selected ? Llvm.LLVMGetOperand(source, 1) : null;
     }
 
+    /// <summary>Whether a vector's lanes past its own in its one fragment are zero: a load of fewer bytes than a fragment.</summary>
+    private bool ZeroAbove(nint value, VectorShape shape) =>
+        shape.Fragments == 1 && Llvm.LLVMIsAInstruction(value) != 0 && Llvm.LLVMGetInstructionOpcode(value) == 27 &&
+        types.StoreSize(Llvm.LLVMTypeOf(value)) < fragmentBytes;
+
     /// <summary>The powers of two of a constant vector of shift counts below the lane width (1 for an undefined lane), or
     /// null for another count.</summary>
     private static long[]? Multipliers(nint counts, int width)
@@ -1351,6 +1356,12 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             }
             Combine(sources);
             if (!cleared.Contains(true)) return;
+            // A vector load of fewer bytes than a fragment reads them into its low lanes and zeros above (Vectors.Load), so
+            // the lanes past its own that a shuffle keeps in place are zero already: the zero padding of an 8-byte row
+            // for psadbw is no instruction, as natively after movq.
+            if (!result.Mask && sources.Count == 1 && sources.Single() is { Key: (int only, 0), Value: int[] kept } && ZeroAbove(operands[only], inputs[only]) &&
+                Enumerable.Range(0, per).All(lane => (kept[lane] < 0 || kept[lane] == lane) && (!cleared[lane] || lane >= inputs[only].Lanes)))
+                return;
             for (int lane = 0; lane < per; lane++) Scalar(IntegerLane(result.Lane), cleared[lane] ? 0 : -1);
             il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(IntegerLane(result.Lane), per).ToArray()));
             As(IntegerLane(result.Lane), result.Lane);

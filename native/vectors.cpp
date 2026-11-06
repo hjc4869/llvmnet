@@ -343,8 +343,24 @@ void Replace(llvm::ArrayRef<Idiom> group, unsigned fragmentBits, llvm::CallInst 
         result = builder.CreateBitCast(result, llvm::FixedVectorType::get(type->getElementType(), LaneCount(result->getType()) * 64 / type->getScalarSizeInBits()));
     if (reduction != nullptr) {
         builder.SetInsertPoint(reduction);
-        reduction->replaceAllUsesWith(builder.CreateAddReduce(result));
+        llvm::Value *sum;
+        if (products) {
+            sum = builder.CreateAddReduce(result);
+        } else {
+            // The sum of psadbw's 64-bit sums (at most 16 bits each) that summed bytes of the operands: the parts add as
+            // 64-bit lanes and only those lanes are read, so the zeros of each sum's upper bits and of the padding are
+            // not folded in (SV-26: an 8-byte row is one movq, as native code's movd, where the generic reduction of its
+            // 32-bit lanes took two shifts and two adds).
+            llvm::Value *total = parts.front();
+            for (size_t index = 1; index < parts.size(); ++index) total = builder.CreateAdd(total, parts[index]);
+            unsigned live = std::min(LaneCount(total->getType()), (LaneCount(left->getType()) + 7) / 8);
+            sum = builder.CreateExtractElement(total, uint64_t{0});
+            for (unsigned lane = 1; lane < live; ++lane) sum = builder.CreateAdd(sum, builder.CreateExtractElement(total, uint64_t{lane}));
+            sum = builder.CreateZExtOrTrunc(sum, reduction->getType());
+        }
+        reduction->replaceAllUsesWith(sum);
         reduction->eraseFromParent();
+        llvm::RecursivelyDeleteTriviallyDeadInstructions(result);
     } else {
         last->replaceAllUsesWith(Lanes(builder, result, 0, type->getNumElements()));
     }

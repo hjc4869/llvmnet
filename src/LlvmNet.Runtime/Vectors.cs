@@ -357,7 +357,7 @@ public static unsafe class Vectors
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector256<byte> LoadWide(nint address, int size) => size <= 16
-        ? Vector256.Create(size == 16 ? Unsafe.ReadUnaligned<Vector128<byte>>((void*)address) : Load(address, size), Vector128<byte>.Zero)
+        ? (size == 16 ? Unsafe.ReadUnaligned<Vector128<byte>>((void*)address) : Load(address, size)).ToVector256()
         : Vector256.Create(Unsafe.ReadUnaligned<Vector128<byte>>((void*)address), Load(address + 16, size - 16));
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

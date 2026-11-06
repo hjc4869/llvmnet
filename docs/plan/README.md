@@ -25,6 +25,8 @@ The owner asked for SPEC CPU2017 525.x264_r's first refrate workload against nat
 
 - **SV-25 (done).** Vector `getelementptr`s, which the loop vectorizer's alias checks make, are expanded into address arithmetic before the lowering instead of scalarizing their whole function: x264's `frame_init_lowres_core` runs vectorized at `x86-64-v3` again, 15.25 s for the workload.
 
+- **SV-26 (done).** A row's sum of absolute differences is `psadbw` and one extract, as natively, instead of folding psadbw's zero lanes and clearing the padding of a load that is zero already; narrow loads in 256-bit fragments no longer clear their upper half with `vinserti128`. x264: 15.82 s at Vector128, 14.65 s at `x86-64-v3`.
+
 ## Progress (2026-11-05 and 06, JP-02 to JP-07 and JP-09)
 
 The owner asked to start [13-jit-patterns.md](13-jit-patterns.md) in the order decided on 2026-11-05. Measurements are in [evidence/2026-11-05-jit-shapes.md](../evidence/2026-11-05-jit-shapes.md).
