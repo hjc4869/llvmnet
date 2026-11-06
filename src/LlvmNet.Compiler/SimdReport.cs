@@ -15,7 +15,8 @@ namespace LlvmNet;
 /// instructions, and the calls of the runtime's SIMD helpers (<see cref="X86"/>, <see cref="Vectors"/>,
 /// <see cref="Simd128"/>); each helper is classed by the instruction sets whose IsSupported its own IL tests, for x64 and
 /// for ARM64, and as composed where it tests none (Vector128 operations, or lane by lane). The functions the lowering
-/// scalarized and the reductions it recognized come from <see cref="VectorEmitter"/>. Emscripten's
+/// scalarized, the reductions it recognized and the strided gathers it read as wide loads come from
+/// <see cref="VectorEmitter"/>. Emscripten's
 /// WASM_SIMD_COMPAT_SLOW warnings are the model: the report names the operations that are not one instruction.
 /// </summary>
 internal static class SimdReport
@@ -32,7 +33,8 @@ internal static class SimdReport
     };
 
     internal static void Write(byte[] image, IReadOnlyCollection<(string Function, string? Reason)> scalarized,
-        IReadOnlyCollection<(string Function, uint Differences, uint Products, uint Averages)> reductions, int fragmentBits, TextWriter output)
+        IReadOnlyCollection<(string Function, uint Differences, uint Products, uint Averages)> reductions,
+        IReadOnlyCollection<(string Function, uint Gathers, uint Loads)> gathered, int fragmentBits, TextWriter output)
     {
         using var stream = new MemoryStream(image, false);
         using var reader = new PEReader(stream);
@@ -70,6 +72,8 @@ internal static class SimdReport
             output.WriteLine($"llvmnet: simd: reductions of {Llvm.Demangle(function)}: {VectorEmitter.Describe(differences, products)}");
         foreach ((string function, _, _, uint averages) in reductions.Where(entry => entry.Averages != 0).OrderBy(entry => entry.Function, StringComparer.Ordinal))
             output.WriteLine($"llvmnet: simd: averages of {Llvm.Demangle(function)}: {VectorEmitter.Describe(0, 0, averages)}");
+        foreach ((string function, uint count, uint loads) in gathered.OrderBy(entry => entry.Function, StringComparer.Ordinal))
+            output.WriteLine($"llvmnet: simd: gathers of {Llvm.Demangle(function)}: {VectorEmitter.DescribeGathers(count, loads)}");
         if (helpers.Count != 0)
         {
             output.WriteLine($"llvmnet: simd: {"calls",7} {"x64",-22} {"ARM64",-22} helper: functions");

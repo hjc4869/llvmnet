@@ -306,14 +306,18 @@ internal sealed class CilCompiler(CompilerOptions options)
         Types = types;
         List<(string Function, string? Reason)> scalarized = [];
         List<(string Function, uint Differences, uint Products, uint Averages)> reductions = [];
+        List<(string Function, uint Gathers, uint Loads)> gathered = [];
         if (options.TypedVectors)
         {
-            scalarized = VectorEmitter.Legalize(types, module, options.VectorLowering == "auto", out bool computes);
+            scalarized = VectorEmitter.Legalize(types, module, options.VectorLowering == "auto", options.VectorIdioms, out bool computes, out gathered);
             HasVectorCode = computes;
             foreach ((string function, string? reason) in scalarized)
                 if (options.Verbose)
                     Console.Error.WriteLine(reason is null ? $"llvmnet: scalarized {function}, whose vector code moves more lanes than it computes on"
                         : $"llvmnet: scalarized the vector code of {function} ({reason})");
+            foreach ((string function, uint count, uint loads) in gathered)
+                if (options.Verbose)
+                    Console.Error.WriteLine($"llvmnet: {function}: {VectorEmitter.DescribeGathers(count, loads)}");
             if (options.VectorIdioms)
                 reductions = VectorEmitter.Idioms(types, module);
             foreach ((string function, uint differences, uint products, uint averages) in reductions)
@@ -440,7 +444,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             CompileOnce(executable, [.. Methods.Values.OfType<MethodBuilder>().Select(method => method.Name)]);
         MakeDeterministic(executable);
         if (options.ReportSimd)
-            SimdReport.Write(executable, scalarized, reductions, types.FragmentBits, Console.Error);
+            SimdReport.Write(executable, scalarized, reductions, gathered, types.FragmentBits, Console.Error);
         if (options.DiagnoseLimits)
             LimitsReport.Write(executable, Methods.Where(pair => pair.Value is MethodBuilder).ToDictionary(pair => pair.Value.Name, pair =>
                 Llvm.Blocks(pair.Key).Sum(block => Llvm.Instructions(block).Count())), Console.Error);

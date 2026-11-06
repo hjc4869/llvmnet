@@ -36,13 +36,18 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// operation InstCombine formed (Bullet ran 4% slower with those typed). Without <paramref name="cost"/> (the hidden
     /// --vector-lowering=typed) only what the lowering does not translate is scalarized. Returns each scalarized
     /// function's name with the reason, null for one scalarized by this cost; <paramref name="computes"/> tells whether a
-    /// function that stays vector code computes on lanes, which makes NativeAOT target x86-64-v2 (Driver).
+    /// function that stays vector code computes on lanes, which makes NativeAOT target x86-64-v2 (Driver). With
+    /// <paramref name="gathers"/> the strided gathers of a function that stays vector code become wide loads and a
+    /// shuffle (SV-40, llvmnet_strided_gathers), whose inserts the cost does not count; <paramref name="gathered"/> names
+    /// the functions that had any, with the counts of gathers and of the wide loads they take.
     /// </summary>
-    internal static unsafe List<(string Function, string? Reason)> Legalize(TypeSystem types, nint module, bool cost, out bool computes)
+    internal static unsafe List<(string Function, string? Reason)> Legalize(TypeSystem types, nint module, bool cost, bool gathers, out bool computes,
+        out List<(string Function, uint Gathers, uint Loads)> gathered)
     {
         List<nint> functions = [];
         List<(string, string?)> report = [];
         computes = false;
+        gathered = [];
         foreach (nint function in Llvm.Functions(module))
         {
             if (Llvm.LLVMIsDeclaration(function) != 0) continue;
@@ -56,8 +61,11 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 if (opcode is 50 or 51 && types.Vector(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, 0))) is not null) traffic++;
                 else saved += Saved(types, instruction, opcode);
             }
-            if (reason is null && (!cost || traffic <= saved))
+            uint lanes = 0;
+            if (reason is null && gathers && traffic != 0) Llvm.StridedGathers(function, (uint)types.FragmentBits, 0, out lanes, out _);
+            if (reason is null && (!cost || traffic - lanes <= saved))
             {
+                if (lanes != 0) gathered.Add((Llvm.Name(function), Llvm.StridedGathers(function, (uint)types.FragmentBits, 1, out _, out uint loads), loads));
                 computes |= saved > 0;
                 continue;
             }
@@ -99,6 +107,10 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         new[] { (Count: differences, What: "sum", Of: "absolute differences as psadbw"), (Count: products, What: "sum", Of: "products as pmaddwd"),
             (Count: averages, What: "rounding average", Of: "bytes or halfwords as pavgb or pavgw") }
             .Where(part => part.Count != 0).Select(part => $"{part.Count} {part.What}{(part.Count == 1 ? "" : "s")} of {part.Of}"));
+
+    /// <summary>What <see cref="Legalize"/> made of one function's strided gathers, as -v and --report-simd print it.</summary>
+    internal static string DescribeGathers(uint gathers, uint loads) =>
+        $"{gathers} strided gather{(gathers == 1 ? "" : "s")} from {loads} wide load{(loads == 1 ? "" : "s")}";
 
     /// <summary>The scalar operations a vector instruction saves: one fewer than the lanes it computes on (arithmetic,
     /// comparisons, conversions, vector selects, vector intrinsics); zero for moves, shuffles and everything else.</summary>
@@ -1433,6 +1445,36 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 }
                 return;
             }
+            if (!Wide && Unzip(sources) is var ((lowOperand, lowFragment), (highOperand, highFragment), odd))
+            {
+                Source(lowOperand, lowFragment);
+                if ((lowOperand, lowFragment) == (highOperand, highFragment))
+                {
+                    il.Emit(OpCodes.Call, Helper(odd ? nameof(Vectors.OddLanes) : nameof(Vectors.EvenLanes), result.Lane, V(result.Lane)));
+                    return;
+                }
+                Source(highOperand, highFragment);
+                il.Emit(OpCodes.Call, Helper(odd ? nameof(Vectors.UnzipOdd) : nameof(Vectors.UnzipEven), result.Lane, V(result.Lane), V(result.Lane)));
+                return;
+            }
+            if (!Wide && result.LaneBits <= 16 && sources.Count is >= 2 and <= 4 &&
+                sources.Values.All(pattern => pattern.Where((element, lane) => element >= 0 && element != lane).Any()))
+            {
+                // Lanes of 8 and 16 bits from two to four fragments that each need a shuffle: byte shuffles that zero the
+                // lanes the other sources supply, or'ed (Vectors.ShuffleBytes), behind one test of SSSE3, which ILC makes
+                // at run time at the baseline instruction set, instead of a shuffle and a blend per source.
+                int bytes = result.LaneBits / 8;
+                foreach (((int operand, int fragment), int[] pattern) in sources)
+                {
+                    Source(operand, fragment);
+                    As(result.Lane, typeof(byte));
+                    for (int index = 0; index < 16; index++) Scalar(typeof(byte), pattern[index / bytes] is >= 0 and int element ? element * bytes + index % bytes : 0x80);
+                    il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(typeof(byte), 16).ToArray()));
+                }
+                il.Emit(OpCodes.Call, Helper(nameof(Vectors.ShuffleBytes), null, Enumerable.Repeat(V(typeof(byte)), 2 * sources.Count).ToArray()));
+                As(typeof(byte), result.Lane);
+                return;
+            }
             bool firstSource = true;
             foreach (((int operand, int fragment), int[] pattern) in sources)
             {
@@ -1475,10 +1517,51 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             if (pattern.Select((element, lane) => element < 0 || element == lane).All(identity => identity)) return;
             // Unused lanes repeat a used index, which keeps a broadcast a broadcast.
             int fill = pattern.First(element => element >= 0);
+            int[] chosen = [.. Enumerable.Range(0, per).Select(lane => pattern[lane] >= 0 ? pattern[lane] : pattern.All(element => element < 0 || element == fill) ? fill : lane)];
+            if (!Wide && result.LaneBits <= 16)
+            {
+                // Lanes of 8 and 16 bits by byte indices, through pshufb where the host has SSSE3 (Vectors.ShuffleBytes),
+                // which ILC tests at run time at the baseline instruction set, where Vector128.Shuffle of them is software.
+                int bytes = result.LaneBits / 8;
+                As(result.Lane, typeof(byte));
+                for (int index = 0; index < 16; index++) Scalar(typeof(byte), chosen[index / bytes] * bytes + index % bytes);
+                il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(typeof(byte), 16).ToArray()));
+                il.Emit(OpCodes.Call, Helper(nameof(Vectors.ShuffleBytes), null, V(typeof(byte)), V(typeof(byte))));
+                As(typeof(byte), result.Lane);
+                return;
+            }
             Type indices = IntegerLane(result.Lane);
-            for (int lane = 0; lane < per; lane++) Scalar(indices, pattern[lane] >= 0 ? pattern[lane] : pattern.All(element => element < 0 || element == fill) ? fill : lane);
+            for (int lane = 0; lane < per; lane++) Scalar(indices, chosen[lane]);
             il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(indices, per).ToArray()));
             il.Emit(OpCodes.Call, Api("Shuffle", null, V(result.Lane), V(indices)));
+        }
+
+        // A de-interleave by two (SV-40): the result's lower half from every other lane of one source fragment, its upper
+        // half from every other lane of another (or of the same), all even or all odd lanes. Returns the two sources and
+        // whether the lanes are odd.
+        ((int, int) Lower, (int, int) Upper, bool Odd)? Unzip(Dictionary<(int Operand, int Fragment), int[]> sources)
+        {
+            if (per < 4 || sources.Count > 2) return null;
+            int half = per / 2, parity = -1;
+            (int, int)? lower = null, upper = null;
+            foreach (((int, int) source, int[] pattern) in sources)
+            {
+                bool inLower = false, inUpper = false;
+                for (int lane = 0; lane < per; lane++)
+                {
+                    if (pattern[lane] < 0) continue;
+                    int offset = pattern[lane] - 2 * (lane % half);
+                    if (offset is not (0 or 1) || parity >= 0 && offset != parity) return null;
+                    parity = offset;
+                    inLower |= lane < half;
+                    inUpper |= lane >= half;
+                }
+                if (inLower && lower is not null || inUpper && upper is not null) return null;
+                if (inLower) lower = source;
+                if (inUpper) upper = source;
+            }
+            if (parity < 0) return null;
+            return (lower ?? upper!.Value, upper ?? lower!.Value, parity == 1);
         }
 
         // Two sources, one filling the result's lower half and the other its upper half, each with one of its own

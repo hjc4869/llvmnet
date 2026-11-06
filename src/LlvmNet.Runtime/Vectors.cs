@@ -282,6 +282,124 @@ public static unsafe class Vectors
     public static Vector256<T> Select<T>(Vector256<T> mask, Vector256<T> ifTrue, Vector256<T> ifFalse) where T : unmanaged =>
         Avx2.IsSupported ? Avx2.BlendVariable(ifFalse.AsByte(), ifTrue.AsByte(), mask.AsByte()).As<byte, T>() : Vector256.ConditionalSelect(mask, ifTrue, ifFalse);
 
+    // The even or odd lanes of two vectors one after the other, a de-interleave by two (VectorEmitter.Gather: the pieces
+    // of a strided gather, SV-40, and the members of an interleaved group): uzp1 or uzp2 on ARM64; on x64 a pack of the
+    // lanes masked or shifted into the low half of lanes twice as wide (packuswb, SSE4.1's packusdw or packssdw of
+    // sign-extended halves), shufps, unpcklpd or unpckhpd; elsewhere Narrow of those lanes. EvenLanes and OddLanes are
+    // the same of one vector with itself, pshufb (or pshufd) where the host has it, which takes one instruction to the
+    // pack's two.
+
+    // Shuffles of bytes by constant indices (VectorEmitter.Gather's lanes of 8 and 16 bits): pshufb where the host has
+    // SSSE3, which ILC tests at run time at the baseline instruction set, where Vector128.Shuffle of such lanes runs in
+    // software; Vector128.Shuffle elsewhere (tbl, or a broadcast as dup). An index of 0x80 gives a zero byte either way,
+    // so the shuffles of two to four sources or'ed are their lanes, behind one test.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<byte> ShuffleBytes(Vector128<byte> value, Vector128<byte> indices) =>
+        Ssse3.IsSupported ? Ssse3.Shuffle(value, indices) : Vector128.Shuffle(value, indices);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<byte> ShuffleBytes(Vector128<byte> first, Vector128<byte> firstIndices, Vector128<byte> second, Vector128<byte> secondIndices) =>
+        Ssse3.IsSupported ? Ssse3.Shuffle(first, firstIndices) | Ssse3.Shuffle(second, secondIndices)
+        : Vector128.Shuffle(first, firstIndices) | Vector128.Shuffle(second, secondIndices);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<byte> ShuffleBytes(Vector128<byte> first, Vector128<byte> firstIndices, Vector128<byte> second, Vector128<byte> secondIndices,
+        Vector128<byte> third, Vector128<byte> thirdIndices) =>
+        Ssse3.IsSupported ? Ssse3.Shuffle(first, firstIndices) | Ssse3.Shuffle(second, secondIndices) | Ssse3.Shuffle(third, thirdIndices)
+        : Vector128.Shuffle(first, firstIndices) | Vector128.Shuffle(second, secondIndices) | Vector128.Shuffle(third, thirdIndices);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<byte> ShuffleBytes(Vector128<byte> first, Vector128<byte> firstIndices, Vector128<byte> second, Vector128<byte> secondIndices,
+        Vector128<byte> third, Vector128<byte> thirdIndices, Vector128<byte> fourth, Vector128<byte> fourthIndices) =>
+        Ssse3.IsSupported ? Ssse3.Shuffle(first, firstIndices) | Ssse3.Shuffle(second, secondIndices) | Ssse3.Shuffle(third, thirdIndices) | Ssse3.Shuffle(fourth, fourthIndices)
+        : Vector128.Shuffle(first, firstIndices) | Vector128.Shuffle(second, secondIndices) | Vector128.Shuffle(third, thirdIndices) | Vector128.Shuffle(fourth, fourthIndices);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<T> UnzipEven<T>(Vector128<T> lower, Vector128<T> upper) where T : unmanaged
+    {
+        if (AdvSimd.Arm64.IsSupported)
+            return Vector128<T>.Count switch
+            {
+                16 => AdvSimd.Arm64.UnzipEven(lower.AsByte(), upper.AsByte()).As<byte, T>(),
+                8 => AdvSimd.Arm64.UnzipEven(lower.AsUInt16(), upper.AsUInt16()).As<ushort, T>(),
+                4 => AdvSimd.Arm64.UnzipEven(lower.AsUInt32(), upper.AsUInt32()).As<uint, T>(),
+                _ => AdvSimd.Arm64.UnzipEven(lower.AsUInt64(), upper.AsUInt64()).As<ulong, T>()
+            };
+        if (Sse2.IsSupported)
+            return Vector128<T>.Count switch
+            {
+                16 => Sse2.PackUnsignedSaturate((lower.AsInt16() & Vector128.Create((short)0xff)), upper.AsInt16() & Vector128.Create((short)0xff)).As<byte, T>(),
+                8 => Sse41.IsSupported ? Sse41.PackUnsignedSaturate(lower.AsInt32() & Vector128.Create(0xffff), upper.AsInt32() & Vector128.Create(0xffff)).As<ushort, T>()
+                    : Sse2.PackSignedSaturate((lower.AsInt32() << 16) >> 16, (upper.AsInt32() << 16) >> 16).As<short, T>(),
+                4 => Sse.Shuffle(lower.AsSingle(), upper.AsSingle(), 0b10_00_10_00).As<float, T>(),
+                _ => Sse2.UnpackLow(lower.AsDouble(), upper.AsDouble()).As<double, T>()
+            };
+        return Vector128<T>.Count switch
+        {
+            16 => Vector128.Narrow(lower.AsUInt16(), upper.AsUInt16()).As<byte, T>(),
+            8 => Vector128.Narrow(lower.AsUInt32(), upper.AsUInt32()).As<ushort, T>(),
+            4 => Vector128.Narrow(lower.AsUInt64(), upper.AsUInt64()).As<uint, T>(),
+            _ => Vector128.Create(lower.AsUInt64().GetElement(0), upper.AsUInt64().GetElement(0)).As<ulong, T>()
+        };
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<T> UnzipOdd<T>(Vector128<T> lower, Vector128<T> upper) where T : unmanaged
+    {
+        if (AdvSimd.Arm64.IsSupported)
+            return Vector128<T>.Count switch
+            {
+                16 => AdvSimd.Arm64.UnzipOdd(lower.AsByte(), upper.AsByte()).As<byte, T>(),
+                8 => AdvSimd.Arm64.UnzipOdd(lower.AsUInt16(), upper.AsUInt16()).As<ushort, T>(),
+                4 => AdvSimd.Arm64.UnzipOdd(lower.AsUInt32(), upper.AsUInt32()).As<uint, T>(),
+                _ => AdvSimd.Arm64.UnzipOdd(lower.AsUInt64(), upper.AsUInt64()).As<ulong, T>()
+            };
+        if (Sse2.IsSupported)
+            return Vector128<T>.Count switch
+            {
+                16 => Sse2.PackUnsignedSaturate((lower.AsUInt16() >>> 8).AsInt16(), (upper.AsUInt16() >>> 8).AsInt16()).As<byte, T>(),
+                8 => Sse2.PackSignedSaturate(lower.AsInt32() >> 16, upper.AsInt32() >> 16).As<short, T>(),
+                4 => Sse.Shuffle(lower.AsSingle(), upper.AsSingle(), 0b11_01_11_01).As<float, T>(),
+                _ => Sse2.UnpackHigh(lower.AsDouble(), upper.AsDouble()).As<double, T>()
+            };
+        return Vector128<T>.Count switch
+        {
+            16 => Vector128.Narrow(lower.AsUInt16() >>> 8, upper.AsUInt16() >>> 8).As<byte, T>(),
+            8 => Vector128.Narrow(lower.AsUInt32() >>> 16, upper.AsUInt32() >>> 16).As<ushort, T>(),
+            4 => Vector128.Narrow(lower.AsUInt64() >>> 32, upper.AsUInt64() >>> 32).As<uint, T>(),
+            _ => Vector128.Create(lower.AsUInt64().GetElement(1), upper.AsUInt64().GetElement(1)).As<ulong, T>()
+        };
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<T> EvenLanes<T>(Vector128<T> value) where T : unmanaged
+    {
+        if (AdvSimd.Arm64.IsSupported || !Sse2.IsSupported) return UnzipEven(value, value);
+        return Vector128<T>.Count switch
+        {
+            16 when Ssse3.IsSupported => Ssse3.Shuffle(value.AsByte(), Vector128.Create((byte)0, 2, 4, 6, 8, 10, 12, 14, 0, 2, 4, 6, 8, 10, 12, 14)).As<byte, T>(),
+            8 when Ssse3.IsSupported => Ssse3.Shuffle(value.AsByte(), Vector128.Create((byte)0, 1, 4, 5, 8, 9, 12, 13, 0, 1, 4, 5, 8, 9, 12, 13)).As<byte, T>(),
+            4 => Sse2.Shuffle(value.AsInt32(), 0b10_00_10_00).As<int, T>(),
+            2 => Sse2.UnpackLow(value.AsDouble(), value.AsDouble()).As<double, T>(),
+            _ => UnzipEven(value, value)
+        };
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<T> OddLanes<T>(Vector128<T> value) where T : unmanaged
+    {
+        if (AdvSimd.Arm64.IsSupported || !Sse2.IsSupported) return UnzipOdd(value, value);
+        return Vector128<T>.Count switch
+        {
+            16 when Ssse3.IsSupported => Ssse3.Shuffle(value.AsByte(), Vector128.Create((byte)1, 3, 5, 7, 9, 11, 13, 15, 1, 3, 5, 7, 9, 11, 13, 15)).As<byte, T>(),
+            8 when Ssse3.IsSupported => Ssse3.Shuffle(value.AsByte(), Vector128.Create((byte)2, 3, 6, 7, 10, 11, 14, 15, 2, 3, 6, 7, 10, 11, 14, 15)).As<byte, T>(),
+            4 => Sse2.Shuffle(value.AsInt32(), 0b11_01_11_01).As<int, T>(),
+            2 => Sse2.UnpackHigh(value.AsDouble(), value.AsDouble()).As<double, T>(),
+            _ => UnzipOdd(value, value)
+        };
+    }
+
     // Scalars that become vector lanes and that ILC must not fold as constants (VectorEmitter.LoadLane): function addresses,
     // relocatable constants to ILC, which a folded Vector128.Create keeps as their compile-time handle values.
 
