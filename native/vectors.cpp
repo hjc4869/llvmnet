@@ -203,6 +203,40 @@ extern "C" unsigned llvmnet_expand_vector_geps(LLVMModuleRef moduleRef)
     return static_cast<unsigned>(geps.size());
 }
 
+// llvm.experimental.cttz.elts(<N x i1> mask, i1 zero_is_poison): the index of the first true lane, N when there is none.
+// LLVM's loop vectorizer makes it for early-exit loops (the lane where a vectorized search left the loop, as in
+// for (...) if (a[i] == v) return i;). The typed lowering has no translation and LLVM's scalarizer leaves it, so a program
+// with such a loop failed to link (SV-31); it becomes the umin reduction of the lane indices the mask selects, N in the
+// other lanes, as SelectionDAG expands it generically, in lanes of 8 bits for fewer than 256 lanes. Returns how many it
+// rewrote.
+extern "C" unsigned llvmnet_expand_cttz_elts(LLVMModuleRef moduleRef)
+{
+    auto *module = llvm::unwrap(moduleRef);
+    std::vector<llvm::CallInst *> calls;
+    for (auto &function : *module)
+        for (auto &block : function)
+            for (auto &instruction : block)
+                if (auto *call = llvm::dyn_cast<llvm::CallInst>(&instruction); call != nullptr &&
+                    call->getIntrinsicID() == llvm::Intrinsic::experimental_cttz_elts && llvm::isa<llvm::FixedVectorType>(call->getArgOperand(0)->getType()))
+                    calls.push_back(call);
+    for (auto *call : calls) {
+        llvm::IRBuilder<> builder(call);
+        llvm::Value *mask = call->getArgOperand(0);
+        unsigned lanes = llvm::cast<llvm::FixedVectorType>(mask->getType())->getNumElements();
+        llvm::Type *element = builder.getIntNTy(lanes < 256 ? 8 : lanes < 65536 ? 16 : 32);
+        llvm::SmallVector<llvm::Constant *, 16> indices;
+        for (unsigned lane = 0; lane < lanes; ++lane) indices.push_back(llvm::ConstantInt::get(element, lane));
+        auto *vector = llvm::FixedVectorType::get(element, lanes);
+        llvm::Value *selected = builder.CreateSelect(mask, llvm::ConstantVector::get(indices), llvm::ConstantInt::get(vector, lanes));
+        llvm::Value *first = builder.CreateUnaryIntrinsic(llvm::Intrinsic::vector_reduce_umin, selected);
+        llvm::Value *result = builder.CreateZExtOrTrunc(first, call->getType());
+        result->takeName(call);
+        call->replaceAllUsesWith(result);
+        call->eraseFromParent();
+    }
+    return static_cast<unsigned>(calls.size());
+}
+
 namespace {
 
 unsigned LaneCount(llvm::Type *type)

@@ -1,0 +1,11 @@
+# Evidence: SPECrate 2017 integer, llvmnet Vector128 against native SSE2 (2026-11-06)
+
+Host: AMD Ryzen AI MAX+ 395 (Zen 5), Linux 6.12.113, .NET 10.0.14 (ILCompiler 10.0.14), clang, clang++ and flang 22.1.8; llvmnet links the same `libLLVM.so.22.1`. Branch `x264-perf`. A development measurement with the licensed kit (`artifacts/spec2017-harness`), not a reportable SPEC result: refrate, one copy, three iterations, `--noreportable`.
+
+## SV-31: early-exit loops
+
+llvmnet's first build of the suite at `-O3` with the vectorizers on failed: 502.gcc_r's link stopped at `llvm.experimental.cttz.elts.i64.v2i1` in `init_regs`. LLVM 22's loop vectorizer vectorizes early-exit loops over memory it can read whole, such as `for (i = 0; i < 300; i++) if (a[i] == v) return i;` on a global array, and leaves the vector loop through `cttz.elts`, the index of the first true lane of the exit mask. The typed lowering has no translation, LLVM's scalarizer leaves the call as it is, and so any program with such a loop failed to link at `-O2` and above, the levels that vectorize since SV-05; the SPEC runs before SV-05 used `-fno-vectorize`. `tests/vector-sweep.sh` lists the builds the compiler rejects without failing, and its fixtures had no early exit.
+
+What changed: the driver expands `cttz.elts` before the lowering (`llvmnet_expand_cttz_elts`, [native/vectors.cpp](../../native/vectors.cpp)) into the `umin` reduction of the lane indices the mask selects, the lane count in the other lanes, as SelectionDAG expands it generically; the indices are 8-bit lanes below 256 lanes, so a 16-lane byte search reduces one `Vector128<byte>`.
+
+**Correctness.** [tests/ir/vector-lowering.ll](../../tests/ir/vector-lowering.ll)'s `firsts` takes the first lane of 16- and 2-lane masks, with and without a true lane; [tests/c/vector-loops.c](../../tests/c/vector-loops.c) adds a byte search over 300 bytes and a flag search over 64 `int32_t`, found and not found, which clang-22 at `-O3` vectorizes into four `cttz.elts`; `tests/vector-sweep.sh` builds it in both modes at `-O3`, `-ffast-math` and `x86-64-v3` (26 builds, all matching native, none rejected) and as NativeAOT. The vector tests, `semantics` and `ir` pass.

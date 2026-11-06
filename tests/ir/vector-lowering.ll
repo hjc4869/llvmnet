@@ -387,6 +387,25 @@ entry:
   ret i32 %result
 }
 
+; llvm.experimental.cttz.elts (SV-31), which the loop vectorizer makes for early-exit loops: the index of the first true
+; lane, the lane count when there is none.
+define i32 @firsts(<16 x i8> %bytes, <2 x i64> %words) {
+entry:
+  %zeros = icmp eq <16 x i8> %bytes, zeroinitializer
+  %first = call i32 @llvm.experimental.cttz.elts.i32.v16i1(<16 x i1> %zeros, i1 false)
+  %c0 = icmp ne i32 %first, 3
+  %big = icmp ugt <16 x i8> %bytes, splat (i8 200)
+  %none = call i32 @llvm.experimental.cttz.elts.i32.v16i1(<16 x i1> %big, i1 false)
+  %c1 = icmp ne i32 %none, 16
+  %odd = trunc <2 x i64> %words to <2 x i1>
+  %lane = call i64 @llvm.experimental.cttz.elts.i64.v2i1(<2 x i1> %odd, i1 true)
+  %c2 = icmp ne i64 %lane, 1
+  %c01 = or i1 %c0, %c1
+  %failed = or i1 %c01, %c2
+  %result = zext i1 %failed to i32
+  ret i32 %result
+}
+
 define i32 @main() {
 entry:
   %p = call i32 @predicates()
@@ -410,7 +429,10 @@ entry:
   %c = or i32 %b, %s1
   %d = or i32 %c, %r1
   %e = or i32 %d, %f1
-  ret i32 %e
+  %t = call i32 @firsts(<16 x i8> <i8 1, i8 2, i8 3, i8 0, i8 5, i8 0, i8 7, i8 8, i8 9, i8 10, i8 11, i8 12, i8 13, i8 14, i8 15, i8 16>, <2 x i64> <i64 2, i64 7>)
+  %t1 = shl i32 %t, 16
+  %g = or i32 %e, %t1
+  ret i32 %g
 }
 
 declare i8 @llvm.vector.reduce.umax.v16i8(<16 x i8>)
@@ -435,3 +457,5 @@ declare i32 @llvm.vector.reduce.umax.v3i32(<3 x i32>)
 declare i32 @llvm.vector.reduce.add.v2i32(<2 x i32>)
 declare float @llvm.vector.reduce.fmax.v4f32(<4 x float>)
 declare float @llvm.vector.reduce.fmaximum.v4f32(<4 x float>)
+declare i32 @llvm.experimental.cttz.elts.i32.v16i1(<16 x i1>, i1)
+declare i64 @llvm.experimental.cttz.elts.i64.v2i1(<2 x i1>, i1)
