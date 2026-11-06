@@ -29,6 +29,8 @@ internal static unsafe class Llvm
     internal static extern uint FuseMultiplyAdds(nint module);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_scalarize_functions")]
     internal static extern uint ScalarizeFunctions(nint* functions, uint count);
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_rounding_averages")]
+    internal static extern uint RoundingAverages(nint function, uint fragmentBits);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_widening_reductions")]
     internal static extern uint WideningReductions(nint function, uint fragmentBits, out uint products);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_add_native_thunk")]

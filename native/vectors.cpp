@@ -466,3 +466,105 @@ extern "C" unsigned llvmnet_widening_reductions(LLVMValueRef functionRef, unsign
     }
     return differences;
 }
+
+namespace {
+
+// The terms of a sum of at most two levels of adds, as the vectorizers leave (a + b + 1) in any order.
+void Terms(llvm::Value *value, llvm::SmallVectorImpl<llvm::Value *> &terms, unsigned depth)
+{
+    auto *add = llvm::dyn_cast<llvm::BinaryOperator>(value);
+    if (depth == 0 || add == nullptr || add->getOpcode() != llvm::Instruction::Add) {
+        terms.push_back(value);
+        return;
+    }
+    Terms(add->getOperand(0), terms, depth - 1);
+    Terms(add->getOperand(1), terms, depth - 1);
+}
+
+bool SplatOne(llvm::Value *value)
+{
+    auto *constant = llvm::dyn_cast<llvm::Constant>(value);
+    llvm::Constant *splat = constant != nullptr ? constant->getSplatValue() : nullptr;
+    return splat != nullptr && splat->isOneValue();
+}
+
+// A value known to have no bits above narrow, as lanes of narrow bits: the source of a zext from that width, else a
+// zext of a narrower source or a trunc, inserted before the builder's position.
+llvm::Value *Narrowed(llvm::IRBuilder<> &builder, llvm::Value *value, llvm::Type *type)
+{
+    if (auto *extension = llvm::dyn_cast<llvm::ZExtInst>(value)) {
+        llvm::Value *source = extension->getOperand(0);
+        if (source->getType() == type) return source;
+        if (source->getType()->getScalarSizeInBits() < type->getScalarSizeInBits()) return builder.CreateZExt(source, type);
+    }
+    return builder.CreateTrunc(value, type);
+}
+
+} // namespace
+
+// The rounding average LLVM's x86 backend matches to pavgb and pavgw (SV-28, detectAVGPattern): lshr(a + b + 1, 1)
+// in lanes wider than 8 (or 16) bits whose a and b have no bits above them, which the vectorizers make of C's
+// (a + b + 1) >> 1 on bytes or halfwords (x264's pixel averages and lowres filter, every video codec's half-pel
+// interpolation). It becomes llvm.x86's pavg.b or pavg.w on 16-byte pieces (32, AVX2's forms, with 256-bit fragments),
+// whose helpers run Sse2.Average, AdvSimd's urhadd or an exact composition, and a trunc of the shift to the narrow lanes
+// is the average itself. Returns how many it rewrote.
+extern "C" unsigned llvmnet_rounding_averages(LLVMValueRef functionRef, unsigned fragmentBits)
+{
+    auto *function = llvm::unwrap<llvm::Function>(functionRef);
+    const llvm::DataLayout &layout = function->getParent()->getDataLayout();
+    std::vector<llvm::BinaryOperator *> shifts;
+    for (auto &block : *function)
+        for (auto &instruction : block)
+            if (auto *shift = llvm::dyn_cast<llvm::BinaryOperator>(&instruction); shift != nullptr && shift->getOpcode() == llvm::Instruction::LShr &&
+                llvm::isa<llvm::FixedVectorType>(shift->getType()) && shift->getType()->getScalarType()->isIntegerTy() && SplatOne(shift->getOperand(1)))
+                shifts.push_back(shift);
+    llvm::SmallVector<llvm::WeakTrackingVH, 16> dead;
+    unsigned averages = 0;
+    for (auto *shift : shifts) {
+        auto *type = llvm::cast<llvm::FixedVectorType>(shift->getType());
+        unsigned bits = type->getScalarSizeInBits(), lanes = type->getNumElements();
+        llvm::SmallVector<llvm::Value *, 4> terms;
+        Terms(shift->getOperand(0), terms, 2);
+        if (terms.size() != 3) continue;
+        auto one = std::find_if(terms.begin(), terms.end(), SplatOne);
+        if (one == terms.end()) continue;
+        terms.erase(one);
+        unsigned narrow = 0;
+        for (unsigned candidate : {8u, 16u})
+            if (bits > candidate && llvm::all_of(terms, [&](llvm::Value *term) { return llvm::computeKnownBits(term, layout).countMinLeadingZeros() >= bits - candidate; })) {
+                narrow = candidate;
+                break;
+            }
+        unsigned perPiece = (fragmentBits == 256 && lanes * narrow >= 256 ? 256 : 128) / std::max(narrow, 1u);
+        unsigned pieces = narrow == 0 ? 0 : (lanes + perPiece - 1) / perPiece;
+        if (narrow == 0 || !PowerOfTwo(pieces)) continue;
+        llvm::IRBuilder<> builder(shift);
+        auto *narrowType = llvm::FixedVectorType::get(builder.getIntNTy(narrow), lanes);
+        llvm::Value *left = Narrowed(builder, terms[0], narrowType), *right = Narrowed(builder, terms[1], narrowType);
+        llvm::Intrinsic::ID id = narrow == 8 ? perPiece == 32 ? llvm::Intrinsic::x86_avx2_pavg_b : llvm::Intrinsic::x86_sse2_pavg_b
+                                             : perPiece == 16 ? llvm::Intrinsic::x86_avx2_pavg_w : llvm::Intrinsic::x86_sse2_pavg_w;
+        llvm::Function *intrinsic = llvm::Intrinsic::getOrInsertDeclaration(function->getParent(), id);
+        llvm::SmallVector<llvm::Value *, 8> parts;
+        for (unsigned first = 0; first < lanes; first += perPiece)
+            parts.push_back(builder.CreateCall(intrinsic, {Lanes(builder, left, first, perPiece), Lanes(builder, right, first, perPiece)}));
+        llvm::Value *average = Lanes(builder, Concatenate(builder, parts), 0, lanes);
+        std::vector<llvm::TruncInst *> truncations;
+        for (llvm::User *user : shift->users())
+            if (auto *truncation = llvm::dyn_cast<llvm::TruncInst>(user); truncation != nullptr && truncation->getType() == narrowType)
+                truncations.push_back(truncation);
+        for (auto *truncation : truncations) {
+            truncation->replaceAllUsesWith(average);
+            truncation->eraseFromParent();
+        }
+        if (!shift->use_empty()) {
+            llvm::Value *wide = builder.CreateZExt(average, type);
+            shift->replaceAllUsesWith(wide);
+            dead.push_back(wide);
+        }
+        dead.push_back(shift->getOperand(0));
+        shift->eraseFromParent();
+        ++averages;
+    }
+    llvm::RecursivelyDeleteTriviallyDeadInstructionsPermissive(dead);
+    return averages;
+}

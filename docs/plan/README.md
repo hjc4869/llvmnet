@@ -31,6 +31,8 @@ The owner asked for SPEC CPU2017 525.x264_r's first refrate workload against nat
 
 - **SV-27 (done).** Vector shifts by a constant count are immediates (`pslld xmm, 16`) instead of counts loaded from memory: x264's image has 248 immediate shifts and 51 by a register at Vector128, against 31 and 268.
 
+- **SV-28 (done).** Rounding averages of bytes and 16-bit values run as `pavgb` and `pavgw` (`urhadd` on ARM64), as LLVM's x86 backend compiles them, instead of widened arithmetic: x264's lowres filter and half-pel averages, 15.51 s at Vector128.
+
 ## Progress (2026-11-05 and 06, JP-02 to JP-07 and JP-09)
 
 The owner asked to start [13-jit-patterns.md](13-jit-patterns.md) in the order decided on 2026-11-05. Measurements are in [evidence/2026-11-05-jit-shapes.md](../evidence/2026-11-05-jit-shapes.md).

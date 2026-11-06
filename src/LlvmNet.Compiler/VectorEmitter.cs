@@ -77,24 +77,28 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// target intrinsic helpers, which run the instruction where the host has it (Sse2.SumAbsoluteDifferences and
     /// MultiplyAddAdjacent, AVX2's, AdvSimd's pairwise additions) and an exact composition elsewhere. Their literal
     /// dataflow, widening each lane to 32 bits first, ran 1.4 to 1.6 times native with the neutral API (SIMD survey).
-    /// With --vector-width=256 chunks of 32 bytes take AVX2's forms. Returns the functions that got any, with the counts.
+    /// With --vector-width=256 chunks of 32 bytes take AVX2's forms. The rounding average of bytes or halfwords computed
+    /// in wider lanes, lshr(a + b + 1, 1), becomes pavgb or pavgw the same way (SV-28). Returns the functions that got
+    /// any, with the counts.
     /// </summary>
-    internal static List<(string Function, uint Differences, uint Products)> Idioms(TypeSystem types, nint module)
+    internal static List<(string Function, uint Differences, uint Products, uint Averages)> Idioms(TypeSystem types, nint module)
     {
-        List<(string, uint, uint)> report = [];
+        List<(string, uint, uint, uint)> report = [];
         foreach (nint function in Llvm.Functions(module))
         {
             if (Llvm.LLVMIsDeclaration(function) != 0) continue;
             uint differences = Llvm.WideningReductions(function, (uint)types.FragmentBits, out uint products);
-            if (differences + products != 0) report.Add((Llvm.Name(function), differences, products));
+            uint averages = Llvm.RoundingAverages(function, (uint)types.FragmentBits);
+            if (differences + products + averages != 0) report.Add((Llvm.Name(function), differences, products, averages));
         }
         return report;
     }
 
     /// <summary>What <see cref="Idioms"/> did to one function, as -v and --report-simd print it.</summary>
-    internal static string Describe(uint differences, uint products) => string.Join(", ",
-        new[] { (Count: differences, What: "absolute differences as psadbw"), (Count: products, What: "products as pmaddwd") }
-            .Where(part => part.Count != 0).Select(part => $"{part.Count} {(part.Count == 1 ? "sum" : "sums")} of {part.What}"));
+    internal static string Describe(uint differences, uint products, uint averages = 0) => string.Join(", ",
+        new[] { (Count: differences, What: "sum", Of: "absolute differences as psadbw"), (Count: products, What: "sum", Of: "products as pmaddwd"),
+            (Count: averages, What: "rounding average", Of: "bytes or halfwords as pavgb or pavgw") }
+            .Where(part => part.Count != 0).Select(part => $"{part.Count} {part.What}{(part.Count == 1 ? "" : "s")} of {part.Of}"));
 
     /// <summary>The scalar operations a vector instruction saves: one fewer than the lanes it computes on (arithmetic,
     /// comparisons, conversions, vector selects, vector intrinsics); zero for moves, shuffles and everything else.</summary>

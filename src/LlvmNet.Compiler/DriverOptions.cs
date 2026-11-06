@@ -167,7 +167,7 @@ internal static class DriverOptions
         new("--keep-ir", OptionKind.JoinedOrSeparate, Debugging, "Copy the linked bitcode, before lowering, to <file> (kept as <output>.failed.bc on a compile error)", H, value: "<file>"),
         new("--trap-missing-arguments", OptionKind.Flag, Debugging, "Compile a void call with fewer arguments than its definition to a trap instead of failing", H),
         new("--diagnose-limits", OptionKind.Flag, Debugging, "Report each function's IL size and locals, and the ones the JIT compiles without optimization", H),
-        new("--report-simd", OptionKind.Flag, Debugging, "Report what the program's vector code runs as: the functions of Vector128 or Vector256 code and the scalarized ones, the reductions run as psadbw and pmaddwd, and each SIMD helper the code calls with the x64 and ARM64 instruction sets it uses where the host has them (docs/user/simd.md)", H),
+        new("--report-simd", OptionKind.Flag, Debugging, "Report what the program's vector code runs as: the functions of Vector128 or Vector256 code and the scalarized ones, the reductions run as psadbw and pmaddwd and the averages as pavgb and pavgw, and each SIMD helper the code calls with the x64 and ARM64 instruction sets it uses where the host has them (docs/user/simd.md)", H),
         new("--check-indirect-calls", OptionKind.Flag, Debugging, "Check every indirect call's CIL signature against its target at run time", H),
         new("-v", OptionKind.Flag, Debugging, "Print the commands run and the notes for options without effect; alone, the frontend's version", H),
         // Information

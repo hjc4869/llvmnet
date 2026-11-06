@@ -305,7 +305,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         using var types = new TypeSystem(module, cilModule, options.TypedVectors, options.VectorWidth);
         Types = types;
         List<(string Function, string? Reason)> scalarized = [];
-        List<(string Function, uint Differences, uint Products)> reductions = [];
+        List<(string Function, uint Differences, uint Products, uint Averages)> reductions = [];
         if (options.TypedVectors)
         {
             scalarized = VectorEmitter.Legalize(types, module, options.VectorLowering == "auto", out bool computes);
@@ -316,9 +316,9 @@ internal sealed class CilCompiler(CompilerOptions options)
                         : $"llvmnet: scalarized the vector code of {function} ({reason})");
             if (options.VectorIdioms)
                 reductions = VectorEmitter.Idioms(types, module);
-            foreach ((string function, uint differences, uint products) in reductions)
+            foreach ((string function, uint differences, uint products, uint averages) in reductions)
                 if (options.Verbose)
-                    Console.Error.WriteLine($"llvmnet: {function}: {VectorEmitter.Describe(differences, products)}");
+                    Console.Error.WriteLine($"llvmnet: {function}: {VectorEmitter.Describe(differences, products, averages)}");
         }
         constructors = Program.DefineMethod("__llvmnet_run_constructors", MethodAttributes.Public | MethodAttributes.Static, typeof(void), Type.EmptyTypes);
         // In portable mode musl's start object calls main and exit and runs constructors after __init_libc.

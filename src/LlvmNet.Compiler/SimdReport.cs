@@ -32,7 +32,7 @@ internal static class SimdReport
     };
 
     internal static void Write(byte[] image, IReadOnlyCollection<(string Function, string? Reason)> scalarized,
-        IReadOnlyCollection<(string Function, uint Differences, uint Products)> reductions, int fragmentBits, TextWriter output)
+        IReadOnlyCollection<(string Function, uint Differences, uint Products, uint Averages)> reductions, int fragmentBits, TextWriter output)
     {
         using var stream = new MemoryStream(image, false);
         using var reader = new PEReader(stream);
@@ -66,8 +66,10 @@ internal static class SimdReport
             $"{functions.Sum(function => function.Calls)} SIMD helper calls; {scalarized.Count} functions with vector IR run as scalar code");
         foreach ((string function, string? reason) in scalarized.OrderBy(entry => entry.Function, StringComparer.Ordinal))
             output.WriteLine($"llvmnet: simd: scalarized {Llvm.Demangle(function)} ({reason ?? "its vector code moves more lanes than it computes on"})");
-        foreach ((string function, uint differences, uint products) in reductions.OrderBy(entry => entry.Function, StringComparer.Ordinal))
+        foreach ((string function, uint differences, uint products, _) in reductions.Where(entry => entry.Differences + entry.Products != 0).OrderBy(entry => entry.Function, StringComparer.Ordinal))
             output.WriteLine($"llvmnet: simd: reductions of {Llvm.Demangle(function)}: {VectorEmitter.Describe(differences, products)}");
+        foreach ((string function, _, _, uint averages) in reductions.Where(entry => entry.Averages != 0).OrderBy(entry => entry.Function, StringComparer.Ordinal))
+            output.WriteLine($"llvmnet: simd: averages of {Llvm.Demangle(function)}: {VectorEmitter.Describe(0, 0, averages)}");
         if (helpers.Count != 0)
         {
             output.WriteLine($"llvmnet: simd: {"calls",7} {"x64",-22} {"ARM64",-22} helper: functions");
