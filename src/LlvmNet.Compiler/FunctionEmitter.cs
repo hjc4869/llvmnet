@@ -390,7 +390,9 @@ internal sealed class FunctionEmitter : ValueEmitter
             case 50 when Types.Vector(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0))) is not null:
                 Vectors.Extract(value);
                 break;
-            case 51 when VectorEmitter.Chained(value):
+            // A chain of insertelements is built at its last insert, by the typed lowering only: without typed vectors
+            // (--vector-lowering=scalar) each insert writes its lane.
+            case 51 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null && VectorEmitter.Chained(value):
                 return;
             case 51 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null:
                 Vectors.Insert(value);

@@ -72,6 +72,13 @@ dotnet "$test_output/shifts-256.dll"
 DOTNET_EnableAVX2=0 dotnet "$test_output/shifts-256.dll"
 "$llvmnet" --runtime=portable --nativeaot --aot-instruction-set x86-64-v3 "$test_output/shifts.bc" -o "$test_output/shifts-aot" >"$test_output/shifts-aot.log" 2>&1
 "$test_output/shifts-aot"
+# The hidden --vector-lowering=scalar, the scalarizer's form of all vector code for comparisons: the shifts and the
+# vectorizer's loops (masks built by insertelement chains, early exits) as native computes them.
+"$llvmnet" --runtime=portable --vector-lowering=scalar "$test_output/shifts.bc" -o "$test_output/shifts-scalar.dll"
+dotnet "$test_output/shifts-scalar.dll"
+clang-22 -O3 "$root/tests/c/vector-loops.c" -o "$test_output/loops-native"
+"$llvmnet" --runtime=portable -O3 --vector-lowering=scalar "$root/tests/c/vector-loops.c" -o "$test_output/loops-scalar.dll"
+dotnet "$test_output/loops-scalar.dll" | diff -u <("$test_output/loops-native") -
 # tests/ir/vector-lowering.ll (which ir.sh runs with the default lowering) with every translatable function typed.
 for runtime in portable system; do
     tag_ir "$runtime" "$root/tests/ir/vector-lowering.ll" "$test_output/ir-$runtime.bc"
