@@ -27,6 +27,8 @@ The owner asked for SPEC CPU2017 525.x264_r's first refrate workload against nat
 
 - **SV-26 (done).** A row's sum of absolute differences is `psadbw` and one extract, as natively, instead of folding psadbw's zero lanes and clearing the padding of a load that is zero already; narrow loads in 256-bit fragments no longer clear their upper half with `vinserti128`. x264: 15.82 s at Vector128, 14.65 s at `x86-64-v3`.
 
+- **PF-21 (done).** 8- and 16-bit sign extensions are `conv.i1` and `conv.i2`, which RyuJIT folds into the load as `movsx`, instead of a shift pair after a `movzx`. Every program's scalar code; x264 takes 26.75 s scalar, 15.71 at Vector128 and 14.47 at `x86-64-v3`.
+
 ## Progress (2026-11-05 and 06, JP-02 to JP-07 and JP-09)
 
 The owner asked to start [13-jit-patterns.md](13-jit-patterns.md) in the order decided on 2026-11-05. Measurements are in [evidence/2026-11-05-jit-shapes.md](../evidence/2026-11-05-jit-shapes.md).

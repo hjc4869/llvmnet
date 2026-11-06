@@ -186,6 +186,13 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
         int storage = width <= 32 ? 32 : 64;
         if (width == 0 || width == storage)
             return;
+        // conv.i1 and conv.i2, which RyuJIT folds into the load before them (movsx from memory), where a shift pair
+        // stays two shifts after a movzx (PF-21).
+        if (width is 8 or 16)
+        {
+            Il.Emit(width == 8 ? OpCodes.Conv_I1 : OpCodes.Conv_I2);
+            return;
+        }
         Il.Emit(OpCodes.Ldc_I4, storage - width);
         Il.Emit(OpCodes.Shl);
         Il.Emit(OpCodes.Ldc_I4, storage - width);
