@@ -127,9 +127,10 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         foreach (nint type in Enumerable.Range(0, Llvm.LLVMGetNumOperands(instruction)).Select(index => Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index))).Append(result))
         {
             if (TypeSystem.Kind(type) != 13) continue;
-            if (types.Vector(type) is not VectorShape shape) return $"lanes of {Llvm.PrintType(type)}";
-            // Masks are read, written and converted to integers as bits in one ulong.
-            if (shape is { Mask: true, Lanes: > 64 }) return $"more than 64 i1 lanes in {Llvm.PrintType(type)}";
+            // Masks are read, written and converted to integers as bits in one ulong, so a wider one has no shape.
+            if (types.Vector(type) is null)
+                return TypeSystem.Kind(Llvm.LLVMGetElementType(type)) == 8 && TypeSystem.Width(Llvm.LLVMGetElementType(type)) == 1
+                    ? $"more than 64 i1 lanes in {Llvm.PrintType(type)}" : $"lanes of {Llvm.PrintType(type)}";
             vectors = true;
         }
         if (!vectors) return null;

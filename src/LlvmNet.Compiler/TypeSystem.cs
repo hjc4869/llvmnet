@@ -97,7 +97,10 @@ internal sealed class TypeSystem : IDisposable
         return Llvm.LLVMIsFunctionVarArg(functionType) != 0 ? [.. result, typeof(nint)] : result;
     }
 
-    /// <summary>The typed representation of a vector type, or null when the lowering is off or no CIL vector has its lanes.</summary>
+    /// <summary>The typed representation of a vector type, or null when the lowering is off or no CIL vector has its lanes.
+    /// A mask of more than 64 lanes has none (masks are bits in one ulong): the functions with one are scalarized
+    /// (VectorEmitter.Legalize), whose remaining vectors of it, such as the insertelement chain of a bitcast to i80, are
+    /// then aggregates as without the lowering, not typed masks that would lose their lanes past 64.</summary>
     internal VectorShape? Vector(nint type)
     {
         if (!typedVectors || Kind(type) != 13) return null;
@@ -109,7 +112,7 @@ internal sealed class TypeSystem : IDisposable
             2 => typeof(float),
             3 => typeof(double),
             12 => typeof(long),
-            8 => Width(element) switch { 1 => MaskLane(lanes, FragmentBits), 8 => typeof(sbyte), 16 => typeof(short), 32 => typeof(int), 64 => typeof(long), _ => null },
+            8 => Width(element) switch { 1 => lanes <= 64 ? MaskLane(lanes, FragmentBits) : null, 8 => typeof(sbyte), 16 => typeof(short), 32 => typeof(int), 64 => typeof(long), _ => null },
             _ => null
         };
         shape = lane is null ? null : Shape(lanes, lane, Kind(element) == 8 && Width(element) == 1);
