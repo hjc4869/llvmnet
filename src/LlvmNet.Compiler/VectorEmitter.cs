@@ -26,7 +26,8 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
 
     /// <summary>
     /// Scalarizes, through LLVM's scalarizer, every function with vector code this lowering does not translate (lanes of
-    /// no CIL vector type such as i24 or i128, vector getelementptr, atomics, vector intrinsics without a lowering), so
+    /// no CIL vector type such as i24 or i128, atomics, vector intrinsics without a lowering; the driver has expanded
+    /// vector getelementptrs into address arithmetic, llvmnet_expand_vector_geps), so
     /// that only typed vectors remain at its boundaries; and every function whose vector code moves more lanes than it
     /// computes on. Each lane inserted or extracted costs an instruction in Vector128 form and nothing as scalars, and
     /// each operation on N lanes saves N - 1 scalar operations, so a function stays vector code when its operations save

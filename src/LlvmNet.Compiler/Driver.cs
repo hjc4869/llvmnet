@@ -610,6 +610,7 @@ internal static class Driver
             {
                 Llvm.WrapVectorInvokes(prepared.Handle);
                 Llvm.NarrowVectorIntegers(prepared.Handle);
+                Llvm.ExpandVectorGeps(prepared.Handle);
                 Llvm.FuseMultiplyAdds(prepared.Handle);
                 Llvm.RemoveTargetAttributes(prepared.Handle);
                 Llvm.LowerConstrainedFloatingPoint(prepared.Handle);

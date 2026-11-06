@@ -3,6 +3,7 @@
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/CodeGen/ExpandReductions.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GetElementPtrTypeIterator.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
@@ -144,6 +145,62 @@ extern "C" unsigned llvmnet_fuse_multiply_adds(LLVMModuleRef moduleRef)
         }
     }
     return fused;
+}
+
+// Vector getelementptrs, which the loop vectorizer's runtime alias checks and gathers make (getelementptr i8, <2 x ptr>
+// %bounds, i64 1), as integer arithmetic on the addresses: ptrtoint of the base (a scalar base splatted), plus each
+// index sign-extended to 64 bits and scaled by its element size (a shift for a power of two), plus the field offsets of
+// struct indices, and inttoptr back. The typed lowering translates those and scalarized a function with a vector GEP,
+// its vectorized loops included (x264's frame_init_lowres_core ran 26 times native that way, SV-25). Returns how many
+// it rewrote.
+extern "C" unsigned llvmnet_expand_vector_geps(LLVMModuleRef moduleRef)
+{
+    auto *module = llvm::unwrap(moduleRef);
+    const llvm::DataLayout &layout = module->getDataLayout();
+    std::vector<llvm::GetElementPtrInst *> geps;
+    for (auto &function : *module)
+        for (auto &block : function)
+            for (auto &instruction : block)
+                if (auto *gep = llvm::dyn_cast<llvm::GetElementPtrInst>(&instruction); gep != nullptr && gep->getType()->isVectorTy())
+                    geps.push_back(gep);
+    for (auto *gep : geps) {
+        llvm::IRBuilder<> builder(gep);
+        auto *type = llvm::cast<llvm::FixedVectorType>(gep->getType());
+        unsigned lanes = type->getNumElements();
+        auto *addresses = llvm::FixedVectorType::get(builder.getInt64Ty(), lanes);
+        auto splat = [&](llvm::Value *value) { return value->getType()->isVectorTy() ? value : builder.CreateVectorSplat(lanes, value); };
+        llvm::Value *sum = builder.CreatePtrToInt(splat(gep->getPointerOperand()), addresses);
+        uint64_t constant = 0;
+        auto step = llvm::gep_type_begin(gep);
+        for (auto index = gep->idx_begin(); index != gep->idx_end(); ++index, ++step) {
+            llvm::Value *operand = *index;
+            if (llvm::StructType *structure = step.getStructTypeOrNull()) {
+                auto *field = llvm::cast<llvm::Constant>(operand);
+                if (field->getType()->isVectorTy()) field = field->getSplatValue();
+                constant += layout.getStructLayout(structure)->getElementOffset(llvm::cast<llvm::ConstantInt>(field)->getZExtValue());
+                continue;
+            }
+            uint64_t stride = step.getSequentialElementStride(layout).getFixedValue();
+            if (stride == 0) continue;
+            if (auto *number = llvm::dyn_cast<llvm::ConstantInt>(operand)) {
+                constant += number->getSExtValue() * stride;
+                continue;
+            }
+            llvm::Value *offset = builder.CreateSExtOrTrunc(splat(operand), addresses);
+            if (llvm::isPowerOf2_64(stride)) {
+                if (stride > 1) offset = builder.CreateShl(offset, llvm::ConstantInt::get(addresses, llvm::Log2_64(stride)));
+            } else {
+                offset = builder.CreateMul(offset, llvm::ConstantInt::get(addresses, stride));
+            }
+            sum = builder.CreateAdd(sum, offset);
+        }
+        if (constant != 0) sum = builder.CreateAdd(sum, llvm::ConstantInt::get(addresses, constant));
+        llvm::Value *result = builder.CreateIntToPtr(sum, type);
+        result->takeName(gep);
+        gep->replaceAllUsesWith(result);
+        gep->eraseFromParent();
+    }
+    return static_cast<unsigned>(geps.size());
 }
 
 namespace {

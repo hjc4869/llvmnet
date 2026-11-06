@@ -6,6 +6,9 @@ target triple = "x86_64-pc-linux-gnu"
 
 @nan = global float 0x7FF8000000000000
 @words = global [4 x i32] [i32 10, i32 20, i32 30, i32 40]
+@records = global [2 x { i8, [3 x i16] }] [{ i8, [3 x i16] } { i8 1, [3 x i16] [i16 2, i16 3, i16 4] }, { i8, [3 x i16] } { i8 5, [3 x i16] [i16 6, i16 7, i16 8] }]
+@triples = global [2 x [3 x i16]] [[3 x i16] [i16 1, i16 2, i16 3], [3 x i16] [i16 4, i16 5, i16 6]]
+@one = global i64 1
 @sink = global <3 x i32> zeroinitializer, align 16
 
 define i32 @predicates() {
@@ -110,9 +113,36 @@ entry:
   %start = extractelement <2 x i32> %low, i32 0
   %distance = sub i32 %gap, %start
   %c3 = icmp ne i32 %distance, 8
+  ; Vector getelementptrs (SV-25), which the driver expands into address arithmetic: a vector base with a scalar index,
+  ; a scalar base with vector indices, a struct field between vector indices, and a variable index with a stride of 6.
+  %previous = getelementptr i32, <2 x ptr> %p, i64 -1
+  %previous1 = extractelement <2 x ptr> %previous, i32 1
+  %value30 = load i32, ptr %previous1
+  %c4 = icmp ne i32 %value30, 30
+  %spread = getelementptr [4 x i32], ptr @words, i64 0, <2 x i64> <i64 3, i64 2>
+  %spread0 = extractelement <2 x ptr> %spread, i32 0
+  %value40 = load i32, ptr %spread0
+  %c5 = icmp ne i32 %value40, 40
+  %fields = getelementptr { i8, [3 x i16] }, ptr @records, <2 x i64> <i64 0, i64 1>, i32 1, <2 x i64> <i64 2, i64 1>
+  %field0 = extractelement <2 x ptr> %fields, i32 0
+  %field1 = extractelement <2 x ptr> %fields, i32 1
+  %value4 = load i16, ptr %field0
+  %value7 = load i16, ptr %field1
+  %fieldsum = add i16 %value4, %value7
+  %c6 = icmp ne i16 %fieldsum, 11
+  %one = load i64, ptr @one
+  %rowsof = insertelement <2 x i64> <i64 0, i64 poison>, i64 %one, i32 1
+  %rows = getelementptr [3 x i16], ptr @triples, <2 x i64> %rowsof, i64 2
+  %row1 = extractelement <2 x ptr> %rows, i32 1
+  %value6 = load i16, ptr %row1
+  %c7 = icmp ne i16 %value6, 6
   %f01 = or i1 %c0, %c1
   %f23 = or i1 %c2, %c3
-  %failed = or i1 %f01, %f23
+  %f45 = or i1 %c4, %c5
+  %f67 = or i1 %c6, %c7
+  %f03 = or i1 %f01, %f23
+  %f47 = or i1 %f45, %f67
+  %failed = or i1 %f03, %f47
   %result = zext i1 %failed to i32
   ret i32 %result
 }

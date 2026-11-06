@@ -23,6 +23,8 @@ The owner asked for SPEC CPU2017 525.x264_r's first refrate workload against nat
 
 - **SV-24 (done).** Per-lane vector shifts: the SLP vectorizer's partial splats run as one shift, constant counts per lane as a multiplication, and counts per lane as AVX2's or AdvSimd's shifts instead of a lane loop that stalled on every lane. x264 at `x86-64-v3` takes 16.10 s instead of 19.92 (native 9.84).
 
+- **SV-25 (done).** Vector `getelementptr`s, which the loop vectorizer's alias checks make, are expanded into address arithmetic before the lowering instead of scalarizing their whole function: x264's `frame_init_lowres_core` runs vectorized at `x86-64-v3` again, 15.25 s for the workload.
+
 ## Progress (2026-11-05 and 06, JP-02 to JP-07 and JP-09)
 
 The owner asked to start [13-jit-patterns.md](13-jit-patterns.md) in the order decided on 2026-11-05. Measurements are in [evidence/2026-11-05-jit-shapes.md](../evidence/2026-11-05-jit-shapes.md).

@@ -75,8 +75,13 @@ DOTNET_EnableAVX2=0 dotnet "$test_output/shifts-256.dll"
 # tests/ir/vector-lowering.ll (which ir.sh runs with the default lowering) with every translatable function typed.
 for runtime in portable system; do
     tag_ir "$runtime" "$root/tests/ir/vector-lowering.ll" "$test_output/ir-$runtime.bc"
-    "$llvmnet" --runtime="$runtime" --vector-lowering=typed "$test_output/ir-$runtime.bc" -o "$test_output/ir-$runtime.dll"
+    "$llvmnet" --runtime="$runtime" --vector-lowering=typed -v "$test_output/ir-$runtime.bc" -o "$test_output/ir-$runtime.dll" 2>"$test_output/ir-$runtime.log"
     dotnet "$test_output/ir-$runtime.dll"
+    # Vector getelementptrs are address arithmetic (SV-25): pointers stays vector code.
+    if grep -q 'llvmnet: scalarized.* pointers\b' "$test_output/ir-$runtime.log"; then
+        printf 'FAIL: tests/ir/vector-lowering.ll: pointers was scalarized\n' >&2
+        exit 1
+    fi
 done
 "$llvmnet" --runtime=portable --vector-lowering=typed --nativeaot "$test_output/ir-portable.bc" -o "$test_output/ir-aot" >"$test_output/ir-aot.log" 2>&1
 "$test_output/ir-aot"

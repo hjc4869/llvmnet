@@ -23,6 +23,8 @@ internal static unsafe class Llvm
     internal static extern uint WrapVectorInvokes(nint source);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_narrow_vector_integers")]
     internal static extern uint NarrowVectorIntegers(nint module);
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_expand_vector_geps")]
+    internal static extern uint ExpandVectorGeps(nint module);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_fuse_multiply_adds")]
     internal static extern uint FuseMultiplyAdds(nint module);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_scalarize_functions")]
