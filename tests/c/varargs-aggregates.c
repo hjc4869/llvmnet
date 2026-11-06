@@ -36,6 +36,14 @@ static void show(struct big label, int count, ...)
     printf("\n");
 }
 
+/* A variadic call in a loop: under the JIT the call area of such a function stays a localloc block, elsewhere it is a
+ * frame slot (PF-24); after fifteen integers in memory, a long double that va_arg aligns to 16 bytes. */
+static void repeat(int times)
+{
+    for (int round = 0; round < times; round++)
+        show((struct big){ "in a loop", round }, 11, 8, 0.25, 7, round, 7, 2, 7, 3, 7, 4, 7, 5, 7, 6, 7, 7, 7, 8, 7, 9, 9, 0.5L + round);
+}
+
 int main(void)
 {
     struct mixed mixed = { 7, 2.5 };
@@ -50,5 +58,6 @@ int main(void)
     show((struct big){ "after registers", 2 }, 12, 7, 1, 7, 2, 7, 3, 7, 4, 7, 5, 0, mixed, 1, reals, 2, triple, 3, halves, 4, big, 6, bytes, 8, 9.5);
     show((struct big){ "floating full", 3 }, 10, 8, 1.0, 8, 2.0, 8, 3.0, 8, 4.0, 8, 5.0, 8, 6.0, 8, 7.0, 1, reals, 0, mixed, 3, halves);
     show((struct big){ "scalars", 4 }, 5, 7, -1, 8, 0.125, 9, 2.0L, 7, 1000000, 2, triple);
+    repeat(2);
     return 0;
 }

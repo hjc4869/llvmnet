@@ -41,6 +41,8 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal HostInterop? Host { get; private set; }
     internal bool TrapMissingArguments => options.TrapMissingArguments;
     internal bool CheckIndirectCalls => options.CheckIndirectCalls;
+    /// <summary>Whether the image is compiled by NativeAOT (--nativeaot or --aot-project) rather than run by the JIT.</summary>
+    internal bool NativeAot => options.NativeAot;
     internal void Warning(string message) => options.Warnings?.Warning(null, message);
 
     /// <summary>CIL-level signature text used by --check-indirect-calls; calli compatibility is decided at this level.</summary>
