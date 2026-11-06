@@ -60,6 +60,8 @@ internal sealed class CilCompiler(CompilerOptions options)
     /// <summary>The NativeExtension subclass of each linked extension, which the image initializer registers.</summary>
     private readonly List<ConstructorInfo> extensionProviders = [];
     private MethodBuilder constructors = null!;
+    // A NativeAOT image's initializer, which its entry point calls (EmitInitializer); null where Program's type initializer runs it.
+    private MethodBuilder? initializer;
     private nint libcMain;
     private nint libcFinalizer;
 
@@ -543,12 +545,15 @@ internal sealed class CilCompiler(CompilerOptions options)
     /// initialized (impImportStaticReadOnlyField), as PF-17's reloads need (JP-04). A holder class past Program has no
     /// type initializer, and the runtime counts such a class as initialized from the start (IsInitedIfStaticDataAllocated),
     /// so code compiled before Program's initializer has written those fields would read them as zero: they stay
-    /// writable, as do thread-local globals, whose getters write each thread's address.
+    /// writable, as do thread-local globals, whose getters write each thread's address. In a NativeAOT image Program has
+    /// no type initializer either (EmitInitializer) and its fields stay writable too: ILC reads an initonly field as a
+    /// constant only for a class whose type initializer it ran at build time, and these are written outside one.
     /// </summary>
     private FieldBuilder AddressField(string name, bool threadLocal)
     {
         TypeBuilder holder = FieldHolder();
-        return holder.DefineField(name, typeof(nint), FieldAttributes.Assembly | FieldAttributes.Static | (holder == Program && !threadLocal ? FieldAttributes.InitOnly : 0));
+        return holder.DefineField(name, typeof(nint), FieldAttributes.Assembly | FieldAttributes.Static |
+            (holder == Program && !threadLocal && !options.NativeAot ? FieldAttributes.InitOnly : 0));
     }
 
     internal FieldBuilder Constant(nint value)
@@ -576,6 +581,8 @@ internal sealed class CilCompiler(CompilerOptions options)
             throw new NotSupportedException("The entry point must be int main(void), int main(int[, char **[, char **]]), or a Fortran main.");
         MethodBuilder entry = Program.DefineMethod("__Entry", MethodAttributes.Public | MethodAttributes.Static, typeof(int), [typeof(string[])]);
         ILGenerator il = entry.GetILGenerator();
+        // Where Program's type initializer would have run: before the entry point's body.
+        if (initializer is not null) il.Emit(OpCodes.Call, initializer);
         if (libcMain != 0)
         {
             // musl: __llvmnet_libc_main(argc, argv, envp, main) initializes libc, runs constructors, calls main and exit.
@@ -696,7 +703,13 @@ internal sealed class CilCompiler(CompilerOptions options)
             getter.Emit(OpCodes.Ldsfld, field);
             getter.Emit(OpCodes.Ret);
         }
-        ILGenerator il = Program.DefineTypeInitializer().GetILGenerator();
+        // NativeAOT cannot run Program's type initializer at build time (it calls the runtime and allocates native memory),
+        // so a type initializer would make every method of Program check on entry that it has run, and every method that
+        // reads a global check before the read (`cmp [static base - 8], 0`, PF-26). An executable's entry point calls this
+        // method first instead, before any translated code runs; NativeAOT builds no libraries, whose first call would.
+        if (options.NativeAot && !options.Library)
+            initializer = Program.DefineMethod("__llvmnet_initialize", MethodAttributes.Assembly | MethodAttributes.Static, typeof(void), Type.EmptyTypes);
+        ILGenerator il = initializer?.GetILGenerator() ?? Program.DefineTypeInitializer().GetILGenerator();
         il.Emit(OpCodes.Ldstr, options.AbiTag);
         il.Emit(OpCodes.Ldstr, BuildInfo.Version);
         il.Emit(OpCodes.Call, typeof(AbiContract).GetMethod(nameof(AbiContract.Require), [typeof(string), typeof(string)])!);

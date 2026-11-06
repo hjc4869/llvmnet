@@ -6,7 +6,7 @@ The compiler (`llvmnet`) and `LlvmNet.Runtime` share one version, set by `Versio
 
 - `llvmnet --version` prints that version, the LLVM version loaded into the compiler and the ABI tags it can emit.
 - Every emitted assembly carries three `AssemblyMetadata` entries: `llvmnet.abi`, `llvmnet.version` and `llvmnet.llvm`. `LlvmNet.Checks inspect <assembly>` prints them.
-- Each emitted image's type initializer calls `AbiContract.Require(abi, compilerVersion)`, which throws before any translated code runs when the loaded runtime is incompatible with the compiler that produced the image.
+- Each emitted image's initializer (`Program`'s type initializer, or in a NativeAOT image the method its entry point calls first) calls `AbiContract.Require(abi, compilerVersion)`, which throws before any translated code runs when the loaded runtime is incompatible with the compiler that produced the image.
 - `--cil-reference` rejects, at compile time, a managed library compiled by an incompatible llvmnet version or for another ABI.
 
 Compatibility follows Semantic Versioning with the usual 0.x rule: while the major version is 0, the major and minor versions must both match, because any 0.x minor release may change the runtime interface. From 1.0 on, the major version must match.
