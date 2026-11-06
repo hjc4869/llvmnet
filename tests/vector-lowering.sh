@@ -43,11 +43,25 @@ for runtime in portable system; do
     DOTNET_EnableHWIntrinsic=0 dotnet "$test_output/$runtime-O2-typed.dll" >"$test_output/$runtime-software.txt"
     diff -u "$test_output/native-O2.txt" "$test_output/$runtime-software.txt"
 done
-# --vector-width=256: Vector256 fragments, with AVX and without (where .NET computes them as halves).
-"$llvmnet" --runtime=portable -O2 --vector-width=256 --vector-lowering=typed -w "$source_file" -o "$test_output/portable-256.dll"
-dotnet "$test_output/portable-256.dll" | diff -u "$test_output/native-O2.txt" -
-DOTNET_EnableAVX=0 dotnet "$test_output/portable-256.dll" | diff -u "$test_output/native-O2.txt" -
-vector_code "$test_output/portable-256.dll"
+# --vector-width=256: Vector256 fragments for vectors of more than 128 bits and Vector128 for the others (SV-41), with
+# AVX and without (where .NET computes Vector256 as halves).
+for level in -O0 -O2 -O3; do
+    "$llvmnet" --runtime=portable "$level" --vector-width=256 --vector-lowering=typed -w "$source_file" -o "$test_output/portable-256$level.dll"
+    dotnet "$test_output/portable-256$level.dll" | diff -u "$test_output/native$level.txt" -
+    DOTNET_EnableAVX=0 dotnet "$test_output/portable-256$level.dll" | diff -u "$test_output/native$level.txt" -
+    vector_code "$test_output/portable-256$level.dll"
+done
+# The vector IR fixtures typed at 256 bits; tests/ir/vector-widths.ll, where values of the two widths meet, also without
+# AVX2 and as NativeAOT at x86-64-v3.
+for fixture in "$root"/tests/ir/vector-*.ll; do
+    name="ir256-$(basename "$fixture" .ll)"
+    tag_ir portable "$fixture" "$test_output/$name.bc"
+    "$llvmnet" --runtime=portable --vector-width=256 --vector-lowering=typed "$test_output/$name.bc" -o "$test_output/$name.dll"
+    dotnet "$test_output/$name.dll"
+done
+DOTNET_EnableAVX2=0 dotnet "$test_output/ir256-vector-widths.dll"
+"$llvmnet" --runtime=portable --vector-width=256 --vector-lowering=typed --nativeaot --aot-instruction-set x86-64-v3 "$test_output/ir256-vector-widths.bc" -o "$test_output/widths-aot" >"$test_output/widths-aot.log" 2>&1
+"$test_output/widths-aot"
 "$llvmnet" --runtime=portable -O2 --vector-lowering=typed -w --nativeaot "$source_file" -o "$test_output/portable-aot" >"$test_output/portable-aot.log" 2>&1
 "$test_output/portable-aot" | diff -u "$test_output/native-O2.txt" -
 "$llvmnet" --runtime=system -O0 --vector-lowering=typed -w --nativeaot "$source_file" -o "$test_output/system-aot" >"$test_output/system-aot.log" 2>&1
@@ -92,4 +106,4 @@ for runtime in portable system; do
 done
 "$llvmnet" --runtime=portable --vector-lowering=typed --nativeaot "$test_output/ir-portable.bc" -o "$test_output/ir-aot" >"$test_output/ir-aot.log" 2>&1
 "$test_output/ir-aot"
-printf 'PASS: vector extensions at -O0 to -O3 match native in both modes and both vector lowerings, under the JIT with and without hardware intrinsics and as NativeAOT, as Vector128 code, and the IR fixture typed\n'
+printf 'PASS: vector extensions at -O0 to -O3 match native in both modes and both vector lowerings, under the JIT with and without hardware intrinsics and as NativeAOT, as Vector128 code and at 256 bits, and the IR fixtures typed at both widths\n'

@@ -66,7 +66,7 @@ grep -q '^llvmnet: simd: averages of lowres: 3 rounding averages of bytes or hal
 grep -Eq '^llvmnet: simd: +[0-9]+ Sse2 +AdvSimd +X86\.Pavgb \(llvm\.x86\.sse2\.pavg\.b\): ' "$test_output/report.log"
 grep -Eq '^llvmnet: simd: +[0-9]+ Sse2 +AdvSimd\.Arm64 +X86\.Pmaddwd \(llvm\.x86\.sse2\.pmadd\.wd\): ' "$test_output/report.log"
 "$llvmnet" -O3 --isa=x86-64-v3 --report-simd "$source_file" -o "$test_output/report-v3.dll" 2>"$test_output/report-v3.log"
-grep -Eq '^llvmnet: simd: [0-9]+ functions make [0-9]+ Vector256 operations' "$test_output/report-v3.log"
+grep -Eq '^llvmnet: simd: [0-9]+ functions make [0-9]+ Vector128 and Vector256 operations' "$test_output/report-v3.log"
 grep -Eq '^llvmnet: simd: +[0-9]+ Avx2/Sse2 +AdvSimd\.Arm64 +X86\.Pmaddwd256 ' "$test_output/report-v3.log"
 for flags in "-O2" "-O3 --isa=x86-64-v3"; do
     name="aot${flags// /}"

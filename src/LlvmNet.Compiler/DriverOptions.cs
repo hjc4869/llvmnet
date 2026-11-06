@@ -147,7 +147,7 @@ internal static class DriverOptions
         new("--simd128", OptionKind.Flag, Modes, "--isa=wasm-simd128: compile wasm_simd128.h intrinsics to Vector128 code (docs/user/simd128.md)", H),
         new("--vector-lowering=", OptionKind.Joined, Hidden, "", H, value: "<auto|typed|scalar>"),
         new("--vector-idioms=", OptionKind.Joined, Hidden, "", H, value: "<on|off>"),
-        new("--vector-width=", OptionKind.Joined, Modes, "128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a 256-bit vector as one instruction where the host has AVX2 and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128; --isa=x86-64-v3 implies 256", H, value: "<bits>"),
+        new("--vector-width=", OptionKind.Joined, Modes, "128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a vector of more than 128 bits as Vector256 (shorter ones stay Vector128), a 256-bit one as one instruction where the host has AVX2, and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128; --isa=x86-64-v3 implies 256", H, value: "<bits>"),
         // Managed and native libraries
         new("--cil-reference", OptionKind.JoinedOrSeparate, Managed, "Resolve calls to the public CExport methods of a managed library built with -shared, in the same mode", H, value: "<assembly>"),
         new("--system-library", OptionKind.JoinedOrSeparate, Managed, "System mode: a native shared library whose functions the program calls through generated bridges", H, value: "<library>"),

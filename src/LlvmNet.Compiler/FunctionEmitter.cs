@@ -545,7 +545,8 @@ internal sealed class FunctionEmitter : ValueEmitter
     /// turns a branch into cmov only outside loops (ifconversion.cpp), and an unpredictable branch in a loop costs far
     /// more than these four operations (PNG's Paeth filter ran 3.4-5.7 times native time). A boolean select is the and
     /// or the or it stands for. Floating-point, 128-bit and aggregate selects keep the branch, which is exact for every
-    /// value. Integer min/max against a constant keep theirs too (Intrinsic explains why).
+    /// value, and so does a select on a loop-carried chain (<see cref="LoopCarried"/>). Integer min/max against a
+    /// constant keep theirs too (Intrinsic explains why).
     /// </summary>
     private void Select(nint value)
     {
@@ -569,6 +570,11 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Il.Emit(and ? OpCodes.And : OpCodes.Or);
                 return;
             }
+            if (LoopCarried(value) && Running(condition))
+            {
+                Carry(() => Load(condition), whenTrue, whenFalse, managed);
+                return;
+            }
             (nint Less, nint Greater, bool Signed, bool Inverted)? order = Order(condition);
             if (order is { Inverted: true })
                 (whenTrue, whenFalse) = (whenFalse, whenTrue);
@@ -587,15 +593,97 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Xor);
             return;
         }
+        Branch(() => Load(condition), whenTrue, whenFalse);
+    }
+
+    /// <summary>A select as a branch on the condition <paramref name="condition"/> pushes (nonzero for <paramref name="whenTrue"/>).</summary>
+    private void Branch(Action condition, nint whenTrue, nint whenFalse)
+    {
         Label otherwise = Il.DefineLabel();
         Label end = Il.DefineLabel();
-        Load(condition);
+        condition();
         Il.Emit(OpCodes.Brfalse, otherwise);
         Load(whenTrue);
         Il.Emit(OpCodes.Br, end);
         Il.MarkLabel(otherwise);
         Load(whenFalse);
         Il.MarkLabel(end);
+    }
+
+    /// <summary>
+    /// A select on a loop-carried chain (<see cref="LoopCarried"/>) as a branch around its running value, which it almost
+    /// always keeps: the other value is stored first, and the running one replaces it unless the condition chose the
+    /// other. The usual case is then a branch not taken and a move, as native code lays out a running maximum (cmp, ja,
+    /// mov), where a branch to either arm made RyuJIT jump over the empty arm of the running value at every element.
+    /// With both or neither arm running it is <see cref="Branch"/>.
+    /// </summary>
+    private void Carry(Action condition, nint whenTrue, nint whenFalse, Type managed)
+    {
+        bool trueRuns = LoopCarried(whenTrue);
+        if (trueRuns == LoopCarried(whenFalse))
+        {
+            Branch(condition, whenTrue, whenFalse);
+            return;
+        }
+        LocalBuilder result = Scratch(managed);
+        Label kept = Il.DefineLabel();
+        Load(trueRuns ? whenFalse : whenTrue);
+        Il.Emit(OpCodes.Stloc, result);
+        condition();
+        Il.Emit(trueRuns ? OpCodes.Brfalse : OpCodes.Brtrue, kept);
+        Load(trueRuns ? whenTrue : whenFalse);
+        Il.Emit(OpCodes.Stloc, result);
+        Il.MarkLabel(kept);
+        Il.Emit(OpCodes.Ldloc, result);
+    }
+
+    /// <summary>
+    /// Whether a scalar select or integer minimum or maximum is on a loop-carried chain: its value comes back to it
+    /// through selects, minimums, maximums and phis alone, as a running maximum does (m = a[i] &gt; m ? a[i] : m, which
+    /// LLVM writes as llvm.umax, a chain of them in an unrolled loop). Without a branch each iteration waits for the
+    /// previous one's comparison and mask, about five cycles, where native code's branch, which a running minimum or
+    /// maximum almost always takes the same way, lets iterations overlap (PF-18: a byte maximum ran 7.2 times native);
+    /// LLVM's x86 backend turns a cmov on a loop-carried dependency into a branch for the same reason
+    /// (X86CmovConversion). A select keeps the branch only when its condition compares such a running value
+    /// (<see cref="Running"/>), as the index of a running minimum does; selects whose values come from arithmetic, as
+    /// Paeth's, are not on such a chain.
+    /// </summary>
+    private static bool LoopCarried(nint instruction)
+    {
+        HashSet<nint> seen = [];
+        Stack<nint> work = new(Carried(instruction));
+        while (work.TryPop(out nint value))
+        {
+            if (value == instruction) return true;
+            if (seen.Count < 64 && seen.Add(value))
+                foreach (nint operand in Carried(value)) work.Push(operand);
+        }
+        return false;
+    }
+
+    /// <summary>Whether a select's condition is an integer comparison of a running value: a phi, select, minimum or
+    /// maximum on a loop-carried chain (<see cref="LoopCarried"/>). A running extreme changes rarely, so the comparison
+    /// almost always goes the same way; a condition on the loop's data, as in x = c ? f(x) : x, may not.</summary>
+    private static bool Running(nint condition) =>
+        Llvm.LLVMIsAInstruction(condition) != 0 && Llvm.LLVMGetInstructionOpcode(condition) == 42 &&
+        (LoopCarried(Llvm.LLVMGetOperand(condition, 0)) || LoopCarried(Llvm.LLVMGetOperand(condition, 1)));
+
+    /// <summary>The values a phi, a select or an integer minimum or maximum passes on: the phi's incoming values, the
+    /// select's arms, the others' operands; none for any other value.</summary>
+    private static nint[] Carried(nint value)
+    {
+        if (Llvm.LLVMIsAInstruction(value) == 0 || TypeSystem.Kind(Llvm.LLVMTypeOf(value)) == 13) return [];
+        switch (Llvm.LLVMGetInstructionOpcode(value))
+        {
+            case 44:
+                return [.. Enumerable.Range(0, (int)Llvm.LLVMCountIncoming(value)).Select(index => Llvm.LLVMGetIncomingValue(value, (uint)index))];
+            case 46:
+                return [Llvm.LLVMGetOperand(value, 1), Llvm.LLVMGetOperand(value, 2)];
+            case 45 when Llvm.LLVMGetCalledValue(value) is nint target && Llvm.LLVMIsAFunction(target) != 0 &&
+                Llvm.Name(target).Split('.') is ["llvm", "smin" or "smax" or "umin" or "umax", ..]:
+                return [Llvm.LLVMGetOperand(value, 0), Llvm.LLVMGetOperand(value, 1)];
+        }
+        return [];
     }
 
     /// <summary>Whether the value is the integer constant <paramref name="number"/>, sign-extended (an i1 true is -1).</summary>
@@ -2844,12 +2932,13 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Ldloc, result);
             return;
         }
-        // Without branches, as Select explains, except against a constant bound. A constant bound is a clamp (FFmpeg's
-        // 10-bit pixels are smax(x, 0) then umin(x, 1023)) whose comparison almost always goes the same way, and a
-        // predicted branch costs less than a mask: with masks, HEVC decoding took 12% longer, and 5% with only
-        // smax(x, 0) as x & ~(x >> 31). Two variable operands are a data-dependent choice, as Paeth's umin(pb, pa),
-        // where a mispredicted branch costs far more. Up to 32 bits, with d = left - right in 64 bits and s = d >> 63
-        // (all ones when left < right): minimum = right + (d & s), maximum = left - (d & s); wider,
+        // Without branches, as Select explains, except against a constant bound and on a loop-carried chain
+        // (LoopCarried, Carry). A constant bound is a clamp (FFmpeg's 10-bit pixels are smax(x, 0) then umin(x, 1023))
+        // whose comparison almost always goes the same way, and a predicted branch costs less than a mask: with masks,
+        // HEVC decoding took 12% longer, and 5% with only smax(x, 0) as x & ~(x >> 31). Two variable operands are a
+        // data-dependent choice, as Paeth's umin(pb, pa), where a mispredicted branch costs far more. Up to 32 bits,
+        // with d = left - right in 64 bits and s = d >> 63 (all ones when left < right): minimum = right + (d & s),
+        // maximum = left - (d & s); wider,
         // right ^ ((left ^ right) & -(left < right)). abs is (x ^ s) - s with s = x >> (bits - 1), which wraps the
         // minimum to itself.
         if (operation is "smin" or "smax" or "umin" or "umax")
@@ -2858,6 +2947,20 @@ internal sealed class FunctionEmitter : ValueEmitter
             nint right = Llvm.LLVMGetOperand(instruction, 1);
             nint type = Llvm.LLVMTypeOf(left);
             bool signed = operation[0] == 's', minimum = operation.EndsWith("min", StringComparison.Ordinal);
+            if (Llvm.LLVMIsAConstantInt(left) == 0 && Llvm.LLVMIsAConstantInt(right) == 0 && LoopCarried(instruction))
+            {
+                Carry(() =>
+                {
+                    Load(left);
+                    if (signed)
+                        SignExtend(type);
+                    Load(right);
+                    if (signed)
+                        SignExtend(type);
+                    Il.Emit(operation switch { "smin" => OpCodes.Clt, "smax" => OpCodes.Cgt, "umin" => OpCodes.Clt_Un, _ => OpCodes.Cgt_Un });
+                }, left, right, Types.Map(type));
+                return;
+            }
             if (Llvm.LLVMIsAConstantInt(left) != 0 || Llvm.LLVMIsAConstantInt(right) != 0)
             {
                 Load(left);

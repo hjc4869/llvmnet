@@ -62,7 +62,7 @@ internal static class SimdReport
             }
             if (operations + calls != 0) functions.Add((Llvm.Demangle(name), operations, calls));
         }
-        output.WriteLine($"llvmnet: simd: {functions.Count} functions make {functions.Sum(function => function.Operations)} Vector{fragmentBits} operations and " +
+        output.WriteLine($"llvmnet: simd: {functions.Count} functions make {functions.Sum(function => function.Operations)} {(fragmentBits == 256 ? "Vector128 and Vector256" : "Vector128")} operations and " +
             $"{functions.Sum(function => function.Calls)} SIMD helper calls; {scalarized.Count} functions with vector IR run as scalar code");
         foreach ((string function, string? reason) in scalarized.OrderBy(entry => entry.Function, StringComparer.Ordinal))
             output.WriteLine($"llvmnet: simd: scalarized {Llvm.Demangle(function)} ({reason ?? "its vector code moves more lanes than it computes on"})");
