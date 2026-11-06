@@ -1222,12 +1222,36 @@ internal sealed class FunctionEmitter : ValueEmitter
                 depth[value] = depth[user] + 1;
             }
         }
+        // A GEP of constant offsets from an argument or a value with a local is computed at each of its uses (PF-23),
+        // where RyuJIT folds it into the address of a load or store as native code does: LLVM hoists a structure's
+        // field addresses into a loop head for the blocks below it, and a local for each was stored on every pass. The
+        // base is then live where the GEP is used (ShareFunctionLocals counts a value computed where it is used as a
+        // use of its operands there). A GEP whose base is such a GEP keeps its local.
+        var offsets = new HashSet<nint>();
+        foreach (nint block in Llvm.Blocks(function))
+            foreach (nint value in Llvm.Instructions(block))
+                if (Llvm.LLVMGetInstructionOpcode(value) == 29 && !atUse.Contains(value) && ConstantOffsets(value))
+                    offsets.Add(value);
+        foreach (nint value in offsets)
+        {
+            nint pointer = Llvm.LLVMGetOperand(value, 0);
+            if (arguments.ContainsKey(pointer) || Llvm.LLVMIsAInstruction(pointer) != 0 && !atUse.Contains(pointer) && !offsets.Contains(pointer))
+                atUse.Add(value);
+        }
 
         static bool Scalar(nint type) => TypeSystem.Kind(type) is 2 or 3 or 12 || TypeSystem.Kind(type) == 8 && TypeSystem.Width(type) <= 64;
         bool Operands(nint instruction)
         {
             for (uint index = 0; index < Llvm.LLVMGetNumOperands(instruction); index++)
                 if (!Scalar(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, index)))) return false;
+            return true;
+        }
+        static bool ConstantOffsets(nint gep)
+        {
+            if (TypeSystem.Kind(Llvm.LLVMTypeOf(gep)) != 12 || TypeSystem.Kind(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(gep, 0))) != 12) return false;
+            for (uint index = 1; index < Llvm.LLVMGetNumOperands(gep); index++)
+                if (Llvm.LLVMIsAConstantInt(Llvm.LLVMGetOperand(gep, index)) == 0 || TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(gep, index))) > 64)
+                    return false;
             return true;
         }
         bool PlainMemory(nint instruction, nint type) => Llvm.LLVMGetOrdering(instruction) == 0 && Scalar(type) &&

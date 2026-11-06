@@ -1,4 +1,4 @@
-# Evidence: PF-22, phi copies in functions that share locals (2026-11-07)
+# Evidence: PF-22 and PF-23, phi copies and field addresses in large functions (2026-11-07)
 
 Host: AMD Ryzen AI MAX+ 395 (Zen 5, 16 cores, 32 threads), 124 GB, Linux 6.12.115, .NET 10.0.14 (ILCompiler 10.0.14), clang 22.1.8. Branch `claude/phi-coalescing-4bf36c` from `x264-perf` at `22a0f55`. Found by the SPECrate 2017 integer profile ([evidence](2026-11-06-spec-intrate.md#profiles-of-the-two-largest-gaps)).
 
@@ -80,3 +80,51 @@ The geometric mean is 1.000, and 0.987 without olden-em3d (jpeg and susan, which
 ### Correctness
 
 `tests/phi-copies.sh` (core) generates dispatch loops of about 1,450 LLVM values and 230 phis (`tests/c/phi-copies.py`): 40 variables of five types, whose 44 cases rotate them in cycles of two to seven (swaps among them), forward them through branches and small inner loops, share switch targets, and keep values from before the last pass live past the loop. Three programs must print what their native builds print in both modes under the JIT, two as NativeAOT, and `run` must have fewer than 110 locals (72 to 77 with coalescing, 174 to 182 without). Before the test, 70 such programs (seeds 10 to 79) at `-O1`, `-O2` and `-O3` in both modes, 420 builds, matched native. The core gate passed 104 of 105 tests; `x86-intrinsics` failed when `grep -q` closed a pipe Clang was still writing its macros to (`error: unable to open output file '-': 'Broken pipe'`) and passed when run again.
+
+## PF-23: constant-offset GEPs computed at their uses
+
+### The cause
+
+LLVM hoists a structure's field addresses into a loop head for the blocks below it: `S_regmatch`'s block `%192` computes 19 of them (`getelementptr inbounds nuw i8, ptr %212, i64 32`, ...) for its switch's cases. JP-05 computes a value where it is used only when that is its one use, in its block, so each had a local, and NativeAOT's code computed and stored all 19 on every pass of the dispatch loop (`lea rbx,[r9+0x20]`, `mov [rbp-0x338],rbx`), where native code folds each into its users' addressing modes.
+
+### The change
+
+`ChooseUseSiteValues` also computes at each of its uses, in any block, a GEP whose indices are all constant integers and whose base is an argument or a value with a local (neither computed where it is used nor itself such a GEP). ShareFunctionLocals already counts a value computed where it is used as a use of its operands there, so the base is live where the GEP was used, and an edge that copies such a GEP into a phi computes it there. `Gep` adds a GEP's constant indices and fields into one offset, added once with a 32-bit constant where it fits, instead of an `ldc.i8` multiplication and addition per index, which keeps a GEP computed at each of its uses small: `getelementptr i8, ptr %p, i64 32` was 22 bytes of IL besides its base's load (`ldc.i8 conv.i8 ldc.i8 mul conv.i add`) and is 4 (`ldc.i4.s conv.i add`).
+
+### Code
+
+| `S_regmatch` | PF-22 | PF-23 |
+| --- | ---: | ---: |
+| IL bytes | 64,968 | 55,887 |
+| IL instructions | 22,180 | 22,110 |
+| locals | 143 | 105 |
+| local references | 7,621 | 7,383 |
+| NativeAOT machine code, bytes (native 25,027) | 42,717 | 41,294 |
+| machine instructions | 9,353 | 9,056 |
+| moves between a register and a stack slot | 2,287 | 2,057 |
+| constant-offset addresses stored to a stack slot | 49 | 11 |
+
+Block `%192` now goes from `%181`'s loads straight to the switch; none of its 19 addresses is computed or stored there. Folding the offsets is most of the IL saved: perlbench's IL goes from 5,427,961 to 4,358,022 bytes, and to 4,317,244 with the folding alone; in `S_regmatch` computing the GEPs at their uses adds 2,002 bytes and 1,547 IL instructions to the folding alone, and removes 38 locals and 238 local references. Methods past a MinOpts threshold stay at 11: `my_re_op_compile`, past the instruction limit before (20,427 instructions), falls below it with the folding alone (19,305) and is back over it (20,170). The translated machine code goes from 3,188,631 to 3,105,716 bytes, and `S_find_byclass` has 978 register and stack-slot moves (1,539 after PF-22, 1,449 before). FFmpeg's decode harness goes from 15,981,859 to 12,711,550 bytes of IL, with 16 methods past a MinOpts threshold as before, 11 of them past the IL, block or local thresholds instead of 14. In the benchmark set the JIT no longer compiles tramp3d's `main` with MinOpts.
+
+### Speed
+
+perlbench as for PF-22. PF-22's build against this one side by side, three rounds, on the loaded host; medians, elapsed and user seconds:
+
+| workload | PF-22 | PF-23 | PF-23/PF-22 | user PF-22 | user PF-23 | PF-23/PF-22 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| checkspam | 229.6 | 165.3 | 0.72 | 224.1 | 163.7 | 0.73 |
+| diffmail | 79.2 | 72.8 | 0.92 | 78.8 | 72.1 | 0.92 |
+| splitmail | 205.2 | 187.1 | 0.91 | 196.8 | 180.8 | 0.92 |
+| all three | 514.0 | 425.2 | 0.83 | 499.7 | 416.7 | 0.83 |
+
+The build before PF-22 against this one, three rounds, later and on a quieter host (load average 4 to 12; a core gate run started during the third round): checkspam 241.3 s to 104.5 (0.43), diffmail 92.8 to 60.7 (0.65), splitmail 103.8 to 96.6 (0.93; the rounds 0.79, 0.95 and 1.25), all three 438.0 to 261.9 (0.60). The 2026-11-06 run took 355 s llvmnet and 150 s native for the three. In the sampler's profiles of checkspam, PF-22's build against this one side by side, `S_regmatch` takes 42.1 s instead of 62.8 and the whole run 155.2 instead of 175.1. `Perl_leave_scope`, which is smaller (1,434 machine instructions instead of 1,711, 355 slot moves instead of 532), took 9.8 s instead of 7.7; a third of its samples are on the jump-table dispatch of its switch, the same code in both builds.
+
+### The benchmark set
+
+PF-23 changes the IL of nearly every function, through the folded offsets and the GEPs computed at their uses. NativeAOT, as for PF-22 (five rounds, user seconds), PF-23 against PF-22: heapsort 0.98, lpbench 0.98, bullet 0.89, lame 1.02, linpack 1.02, mafft 1.00, nbench 0.99, reed-solomon 0.99, stepanov-abstraction 1.03, tramp3d 0.98, olden-em3d 1.01, ptrdist-anagram 0.96, ptrdist-yacr2 1.00, richards 1.04, mutex 0.97, atomics 0.99, printf 1.02, malloc 1.00, a geometric mean of 0.992 (0.979 against the build before PF-22, without olden-em3d). Seven rounds of others: fftbench 1.08 (1.05 under the JIT), olden-bh 0.99, almabench 1.00, hash 0.97. More rounds of three: richards 1.08 as NativeAOT (11 rounds) and 0.97 under the JIT (7), heapsort 0.96 and 1.03, lpbench 1.03 and 1.02. `scripts/benchmark.py --group micro --group suite --repeats 3` with this compiler passes against `tests/perf/baseline.tsv`: host-normalized geometric means 0.985 under the JIT and 0.981 as NativeAOT over 53 benchmarks, no benchmark past its threshold, mafft's `constants` the one method compiled with MinOpts. FFmpeg's decodes with one thread as NativeAOT: 1.00 (H.264) and 0.98 (HEVC) of PF-22's time, frame hashes matching native.
+
+Two programs are slower, and their hot loops are smaller. fftbench's `polynomial<double>::fft` (149 values) loads both halves of a complex value as `[r9]` and `[r9+0x8]` instead of computing `r9+8` into a register and spilling it, yet takes 10% longer in the sampler's profile, the extra samples on those cache-missing loads, in both builds' layouts and under the JIT. richards' `schedule` (41 values) folds its field addresses the same way and is 10% slower as NativeAOT, 3% faster under the JIT. Computing GEPs at their uses only in functions of more than 512 values, the ones that share locals, measured against PF-22: fftbench 1.00 instead of 1.16, richards 1.02 instead of 1.04, heapsort 1.01 instead of 1.03, but ptrdist-anagram 1.03 instead of 0.89, bullet 0.95 instead of 0.89, nbench 1.00 instead of 0.98, tramp3d 1.00 instead of 0.96, and perlbench's splitmail 1.09 of the time with every function (checkspam and diffmail the same). Every function keeps it; the two slower loops are open.
+
+### Correctness
+
+`tests/ir/constant-geps.ll` computes field addresses of an argument in a loop head, used in the cases below and copied into a phi on their edges, with struct and array indices added into one offset, a GEP of such a GEP, a negative `i32` index and offsets past 32 bits, against native in both modes under the JIT. The core gate passed 105 of 105 tests. The 32 IR tests also pass as portable NativeAOT; 30 more generated dispatch loops (`tests/c/phi-copies.py`, seeds 100 to 129) at three levels in both modes matched native, as did every program of the benchmark set under the JIT and NativeAOT, perlbench's refrate outputs and FFmpeg's frame hashes.
