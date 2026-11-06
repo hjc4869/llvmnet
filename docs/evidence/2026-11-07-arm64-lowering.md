@@ -38,3 +38,26 @@ An 8-byte vector load (`load <8 x i8>`, a row of 8 pixels) was `Vector128.Create
 x264 takes 10.38 s instead of 11.18 (native 5.76 in the same rounds, 1.80 times instead of 1.94). x64's code is unchanged.
 
 **Correctness.** The new fixture [tests/c/vector-pixels.c](../../tests/c/vector-pixels.c) has rows of 4, 8 and 16 bytes loaded, computed and stored, row sums of absolute differences, widened differences and sums, a quantization, a Hadamard transform of 16-bit halves and constant shuffles of one and two sources; [tests/vector-sweep.sh](../../tests/vector-sweep.sh) compares it with native clang in both modes at `-O3` and `-march=x86-64-v3`, as NativeAOT and without hardware intrinsics, and the xp bundle runs it on macOS ARM64 and Linux ARM64. On the M6 it, `vector-reductions.c` and `vector-extensions.c` print native's output under the JIT with and without hardware intrinsics.
+
+## SV-35: a row's sum of absolute differences as uabd and uaddlv
+
+x264's SADs reduce each row on its own: the x86 cost model's SLP vectorizer makes `sad_8x8` eight `llvm.vector.reduce.add` of `zext(abs(sub(zext <8 x i8>, zext <8 x i8>)))`, added as scalars, and `sad_16x16` a loop of 16-byte rows. SV-21 makes each one `llvm.x86.sse2.psad.bw` of the row padded to 16 bytes, and SV-26 extracts the 64-bit lane (or two) that summed the row's bytes: `psadbw` and `movq` on x64, as natively. On ARM64 the x86 helper's exact composition of psadbw's two sums is `uabd.16b` and three `uaddlp` (to `.8h`, `.4s`, `.2d`) before the `umov`, where native AArch64 code takes the total with `uabd` and `uaddlv` (or `udot` with ones):
+
+| Form (M6, RyuJIT) | ARM64 |
+| --- | --- |
+| `X86.Psadbw` and lane 0 (before) | `uabd.16b`, `uaddlp.8h`, `uaddlp.4s`, `uaddlp.2d`, `umov x` |
+| `AddAcrossWidening(AbsoluteDifference(l.GetLower(), r.GetLower()))` | `uabd.8b`, `uaddlv h`, `umov w` |
+| the same on 16 bytes | `uabd.16b`, `uaddlv h`, `umov w` |
+| `Dp.DotProduct(Zero, AbsoluteDifference(l, r), One)` and `AddAcross` | `movi`, `uabd`, `movi`, `udot`, `addv`, `umov` |
+
+A reduction whose tree is one leaf needs only the total, which psadbw's exact two sums do not express, so the recognizer now writes llvmnet's own operation for it: `i64 @llvm.llvmnet.sad(<16 x i8> %left, <16 x i8> %right, i32 %bytes)`, the row padded with zeros as before and its length (2 to 16 bytes), truncated or extended to the reduction's type. Its helper, `Vectors.SumAbsoluteDifferences` (`[LlvmIntrinsic("llvm.llvmnet.sad")]`, which `TargetIntrinsics` now collects from `Vectors` as well as `X86`), runs `uabd` and `uaddlv` on ARM64, the 8-byte forms for rows of at most 8 bytes, and reads the result register's 64 bits (uaddlv zeroes it above the sum), so a row is `ldr d`, `ldr d`, `uabd.8b`, `uaddlv`, `umov`. On x64 it runs `X86.Psadbw` and the 64-bit sums that summed the row, what the recognizer's IR computed before. The result is 64 bits wide because an `int` made RyuJIT spill every row's sum on x64 (`sad_x4_8x16` grew from 540 to 579 instructions). Rows of more than 16 bytes, accumulator loops (a tree of adds and phis) and the products keep psadbw and pmaddwd.
+
+| Function (ARM64 instructions) | base | SV-34 | SV-35 |
+| --- | ---: | ---: | ---: |
+| `x264_pixel_sad_8x8` | 115 | 81 | 65 |
+| `x264_pixel_sad_x4_8x8` | 451 | 313 | 249 |
+| `x264_pixel_sad_16x16` | 26 | 26 | 22 |
+
+x264 takes 10.32 s against SV-34's 10.46 in the same rounds (native 5.88), 1.3% and within the noise: the rows were already short after SV-34. x64's code is the same in all but two functions, whose 16-byte rows now add their two sums at once and spill less: `sad_16x8` is 95 instructions instead of 107, `sad_x4_8x16` 527 instead of 540.
+
+**Correctness.** [tests/vector-reductions.sh](../../tests/vector-reductions.sh) checks that `--report-simd` names the helper for the fixture's two row SADs (`pix_abs16`, `pix_abs8`) while the accumulator loops keep `X86.Psadbw`, with native output in every configuration it runs; `vector-pixels.c` has rows of 4, 8 and 16 bytes. Both print native's output on the M6 and on Linux ARM64 under the JIT, with and without hardware intrinsics.

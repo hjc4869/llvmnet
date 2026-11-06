@@ -350,7 +350,8 @@ unsigned OperandBytes(const Idiom &idiom) { return LaneCount(idiom.leaf->getType
 // Computes a group of leaves of one kind, type and block, in order: the instruction on their operands concatenated,
 // 16 bytes at a time (32, AVX2's forms, when vectors run as Vector256 fragments and the group has that many), padded
 // with zeros to one instruction. The last leaf takes the result, as lanes of its type (concatenated with zeros or cut
-// to its lanes; a reduction of the leaf itself takes all of them) and the others zero.
+// to its lanes; a reduction of the leaf itself takes all of them) and the others zero. A reduction of one row of at most
+// 16 bytes becomes the total alone.
 void Replace(llvm::ArrayRef<Idiom> group, unsigned fragmentBits, llvm::CallInst *reduction)
 {
     llvm::Instruction *last = group.back().leaf;
@@ -366,6 +367,19 @@ void Replace(llvm::ArrayRef<Idiom> group, unsigned fragmentBits, llvm::CallInst 
     llvm::Intrinsic::ID id = products ? wide ? llvm::Intrinsic::x86_avx2_pmadd_wd : llvm::Intrinsic::x86_sse2_pmadd_wd
                                       : wide ? llvm::Intrinsic::x86_avx2_psad_bw : llvm::Intrinsic::x86_sse2_psad_bw;
     unsigned chunk = (wide ? 32 : 16) / (products ? 2 : 1);
+    if (reduction != nullptr && !products && LaneCount(left->getType()) <= 16) {
+        // A row reduced on its own needs only its total (SV-35): llvmnet's llvm.llvmnet.sad of the row padded with zeros to
+        // 16 bytes and its length, which x64 runs as psadbw and the 64-bit sums that summed the row, as below, and ARM64 as
+        // uabd and uaddlv, where psadbw's two exact sums take three pairwise additions.
+        llvm::Type *bytes = llvm::FixedVectorType::get(builder.getInt8Ty(), 16);
+        llvm::FunctionCallee sad = last->getModule()->getOrInsertFunction("llvm.llvmnet.sad", builder.getInt64Ty(), bytes, bytes, builder.getInt32Ty());
+        llvm::Value *total = builder.CreateCall(sad, {Lanes(builder, left, 0, 16), Lanes(builder, right, 0, 16), builder.getInt32(LaneCount(left->getType()))});
+        builder.SetInsertPoint(reduction);
+        reduction->replaceAllUsesWith(builder.CreateZExtOrTrunc(total, reduction->getType()));
+        reduction->eraseFromParent();
+        llvm::RecursivelyDeleteTriviallyDeadInstructions(last);
+        return;
+    }
     llvm::Function *intrinsic = llvm::Intrinsic::getOrInsertDeclaration(last->getModule(), id);
     llvm::SmallVector<llvm::Value *, 8> parts;
     for (unsigned first = 0; first < std::max(LaneCount(left->getType()), chunk); first += chunk)

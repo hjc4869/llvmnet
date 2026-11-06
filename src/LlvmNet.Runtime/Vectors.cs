@@ -304,6 +304,25 @@ public static unsafe class Vectors
     public static Vector256<T> Select<T>(Vector256<T> mask, Vector256<T> ifTrue, Vector256<T> ifFalse) where T : unmanaged =>
         Avx2.IsSupported ? Avx2.BlendVariable(ifFalse.AsByte(), ifTrue.AsByte(), mask.AsByte()).As<byte, T>() : Vector256.ConditionalSelect(mask, ifTrue, ifFalse);
 
+    /// <summary>
+    /// The sum of the absolute differences of the first <paramref name="bytes"/> bytes (2 to 16) of two vectors whose other
+    /// bytes are zero in both: llvmnet's operation for a reduction of one row, where only the total matters (SV-35, from
+    /// SV-21's recognizer, native/vectors.cpp). x64 runs psadbw and adds the 64-bit sums that summed the row's bytes, as
+    /// the recognizer wrote it before; ARM64 runs uabd and uaddlv, where psadbw's two exact sums take three pairwise
+    /// additions (uaddlp). uaddlv zeroes the register above its 16-bit sum, so its 64-bit view is the total, one umov.
+    /// The total is 64 bits wide, as psadbw's sums are, and the reduction truncates it: an int result made RyuJIT spill
+    /// every row's sum on x64.
+    /// </summary>
+    [LlvmIntrinsic("llvm.llvmnet.sad"), MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static long SumAbsoluteDifferences(Vector128<byte> left, Vector128<byte> right, int bytes)
+    {
+        if (AdvSimd.Arm64.IsSupported)
+            return (bytes <= 8 ? AdvSimd.Arm64.AddAcrossWidening(AdvSimd.AbsoluteDifference(left.GetLower(), right.GetLower()))
+                : AdvSimd.Arm64.AddAcrossWidening(AdvSimd.AbsoluteDifference(left, right))).AsInt64().ToScalar();
+        Vector128<long> sums = X86.Psadbw(left, right).AsInt64();
+        return bytes <= 8 ? sums.GetElement(0) : sums.GetElement(0) + sums.GetElement(1);
+    }
+
     // Scalars that become vector lanes and that ILC must not fold as constants (VectorEmitter.LoadLane): function addresses,
     // relocatable constants to ILC, which a folded Vector128.Create keeps as their compile-time handle values.
 
