@@ -111,6 +111,22 @@ __attribute__((noinline)) static unsigned char clip_pixel8(int a) { if (a & ~0xF
 __attribute__((noinline)) static long clamp_long(long x, long low, long high) { return x < low ? low : x > high ? high : x; }
 __attribute__((noinline)) static unsigned select_flag(_Bool flag, unsigned a, unsigned b) { return flag ? a : b; }
 __attribute__((noinline)) static long select_wide(long x, long y, long a, long b) { return x < y ? a : b; }
+/* Loop-carried selects keep a branch (PF-18): a running maximum of bytes, a chain of umax in the unrolled loop, and a
+ * running minimum with its index, an smin and a select of the index on the same comparison. */
+__attribute__((noinline)) static unsigned char running_max(const unsigned char *bytes, int count) {
+    unsigned char best = 0;
+#pragma clang loop vectorize(disable)
+    for (int i = 0; i < count; i++) best = bytes[i] > best ? bytes[i] : best;
+    return best;
+}
+__attribute__((noinline)) static int running_argmin(const int64_t *items, int count) {
+    int64_t least = INT64_MAX;
+    int where = -1;
+#pragma clang loop vectorize(disable)
+    for (int i = 0; i < count; i++)
+        if (items[i] < least) least = items[i], where = i;
+    return where;
+}
 
 static void kernels(void) {
     for (int i = 0; i < COUNT; i++)
@@ -123,6 +139,12 @@ static void kernels(void) {
             mix(select_flag(z & 1, (unsigned)x, (unsigned)y));
             mix((uint64_t)select_wide(x, y, z, x ^ y));
         }
+    unsigned char bytes[COUNT];
+    for (int i = 0; i < COUNT; i++) bytes[i] = (unsigned char)(values[i] * 37);
+    for (int count = 0; count <= COUNT; count++) {
+        mix(running_max(bytes, count));
+        mix((uint64_t)running_argmin(values, count));
+    }
     printf("%-20s %016llx\n", "kernels", (unsigned long long)hash);
 }
 

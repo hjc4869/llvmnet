@@ -1,4 +1,4 @@
-# Evidence: vector fragments sized per value (SV-41) (2026-11-07)
+# Evidence: vector fragments sized per value (SV-41) and loop-carried selects (PF-18) (2026-11-07)
 
 Host: AMD Ryzen AI MAX+ 395 (Zen 5), Linux 6.12.113, .NET 10.0.14 (ILCompiler 10.0.14), Debian clang 22.1.8. Base commit `22a0f55` (branch `x264-perf`). The workload, builds and tools are those of [2026-11-06-x264.md](2026-11-06-x264.md): SPEC CPU2017 525.x264_r's first refrate invocation, toolchains packaged with `scripts/package-toolchain.sh` (`artifacts/spec-portable-toolchain-x264-sv41base` at the base, `-sv41` with the change), `artifacts/x264-perf/build.sh`, and the `LD_PRELOAD` sampler against `--aot-debug` builds. Every run below wrote native's bitstream and statistics (md5 `225bcd8b…`, `15c045d5…`).
 
@@ -72,3 +72,73 @@ So x264 at `x86-64-v3` takes 3.7% less time with fragments sized per value; on t
 
 - A deinterleave of a `Vector256` of 32-bit lanes into a `Vector128` (`<8 x i32>` to its even lanes) is two shuffles of its halves and a blend, where the 256-bit lowering had one `vpermd`; native code has `vextracti128` and `vshufps`. Neither form appears in the profile.
 - Masks keep the module's lane widths, so a `<4 x i1>` from a `<4 x i32>` comparison is widened to 64-bit lanes when it is stored (as before); a comparison used only by selects is computed again at the select, at its own width, and costs nothing.
+
+## PF-18: loop-carried selects keep a branch
+
+PF-15 computes integer selects and min/max of two variables with masks, because RyuJIT never turns a branch into `cmov` inside a loop ([2026-11-04-jit-patterns.md](2026-11-04-jit-patterns.md#what-the-jits-sources-say)). On a running maximum (`m = a[i] > m ? a[i] : m`, which LLVM writes as `llvm.umax`, four of them in a chain per iteration of the unrolled loop) every element then waits for the previous one's subtraction, shift and mask: the SIMD survey's scalar `max8` ran 7.2 times native ([2026-11-03-simd-survey.md](2026-11-03-simd-survey.md#hand-written-vectors-against-scalar-and-native-code)). Native clang keeps one compare and branch per element (`cmpb`, `ja`, and a `mov` on the path not taken): LLVM's x86 backend turns a `cmov` on a loop-carried dependency into a branch (X86CmovConversion). Integer `Math.Max` is no intrinsic on x64 or ARM64, so it would be a branch too.
+
+### What changed
+
+- **The chain** (`FunctionEmitter.LoopCarried`): a scalar select or integer min/max is loop-carried when its value comes back to it through phis, selects (their arms) and min/max alone. The unrolled `umax` chain is; Paeth's selects are not, since their values pass through arithmetic.
+- **Min/max** of two variables on such a chain keep a branch. Min/max against a constant bound keep theirs as before (unchanged IL).
+- **Selects** on such a chain keep a branch when their condition is an integer comparison of a running value (a phi, select or min/max on a chain, `FunctionEmitter.Running`): the index select of a running minimum (`if (v[i] < m) m = v[i], where = i;`, an `smin` and a `select` on the same comparison). A condition on the loop's data, as in `x = c ? f(x) : x`, keeps the mask, because nothing says it is predictable.
+- **The layout** (`FunctionEmitter.Carry`): the first version branched to either arm, as the floating-point select does. RyuJIT then laid out the running value's arm, which is empty after register allocation, as a fall-through `jmp` over the other: a taken jump per element, and `max8` stayed at about 2 times native (JIT 1.35 s, NativeAOT 1.42 s against 0.70 under the same load). The other value is now stored first and the running value replaces it unless the comparison chose the other, so the usual case is a branch not taken and a move, as natively: per element `movzx`, `cmp`, `ja`, `mov` (`DOTNET_JitDisasm`).
+
+### max8 and the PF-15 reproducer
+
+The survey's `kernels.c max8` (4,096 bytes, 600,000 rounds), built `-O2 -fno-vectorize -fno-slp-vectorize` natively and with llvmnet in portable mode before (`ba12bee`, toolchain `-sv41`) and after, seven interleaved runs pinned to one core (`artifacts/pf18`; user seconds, medians; the JIT's startup floor is 0.09 s, NativeAOT's 0.003):
+
+| Build | Before (s) | After (s) | After / native, net of startup |
+| --- | ---: | ---: | ---: |
+| native | 0.653 | | |
+| JIT | 3.079 | 0.974 | 1.35 |
+| NativeAOT | 3.120 | 0.584 | 0.89 |
+
+In an earlier interleaved set under less load the after builds were 1.32 (JIT) and 1.16 (NativeAOT) times native. The JIT's runs vary between 0.75 and 1.06 s from run to run.
+
+The PF-15 reproducer (`artifacts/oss/results/libpng-repro/paeth-select/paeth.c`, `-O2`) compiles to the same IL before and after (`main`, into which the filter is inlined, `LlvmNet.Checks il-opcodes`), so it is unchanged; it ran 0.0619 s per 24 MB pass under the JIT and 0.0683 as NativeAOT against native's 0.0479 on random data (0.0733 against 0.0572 smooth).
+
+### Tests
+
+`tests/c/select.c` gains `running_max` (bytes, a `umax` chain) and `running_argmin` (64-bit values, `smin` and the index select), whose results join the hash that both modes must print as natively. `tests/select.sh` checks that their CIL has no mask arithmetic left (no `xor` or `shr`; their loops branch anyway); the previous compiler's has five `shr` in `running_max` and twenty `xor` in `running_argmin`. The five branch-free kernels (Paeth's predictor among them) still have no branch. The core gate passes all 104 tests at a host load of 5 to 18. Two earlier runs at a load of 70 to 100 passed 103: in both, `x86-intrinsics.sh` stopped in its macro checks after all its intrinsic checks had passed. The cause is `macros -mavx2 | grep -q ...`: `grep -q` exits at the first match, and Clang, still writing the macros, fails with a broken pipe under `pipefail`. No translation is involved.
+
+### The benchmark set
+
+`scripts/benchmark.py --vectorized --repeats 3` (`artifacts/bench/v3-fragments-pf18`, while other sessions kept the host at a load of 15 to 100) exits 1. Five benchmarks pass 1.25 times the checked-in baseline: `varargs` (NativeAOT 1.30), `float80` (JIT 1.30), `salsa20` (NativeAOT 1.29), `olden-treeadd` (JIT 1.27) and `ptrdist-ft` (JIT 1.28, NativeAOT 1.51). PF-18 changes the CIL of none of them. The engines' geometric means against the baseline are 1.03 (JIT) and 1.01 (NativeAOT), under the 1.10 threshold. The methods that run under MinOpts are the same as in the previous run (`artifacts/bench/x264-perf-final`).
+
+To separate the change from the load, every image of the previous run was translated again, before and after PF-18, and its methods compared (`artifacts/pf18/benchmarks/ilcmp.sh`, `LlvmNet.Checks inspect-methods`; 126 scalar and vectorized images). 27 images of 14 benchmarks change; the other 99 are the same. Four benchmarks (`bullet`, `fftbench`, `hash2-cxx`, `mutex`) change only in musl's `__private_cond_signal`, where the select of the first waiter (`if (!first) first = p;`) becomes a branch. `tramp3d` has that change plus evaluators with a running maximum. `susan` changes only when vectorized.
+
+Each of the 14 ran before and after back to back (`artifacts/pf18/benchmarks/ab.py`): seven interleaved runs, pinned to one core (four for `mutex`), comparing median user time. The JIT pairs ran at a load of about 9, translated by each compiler with one runtime library. The NativeAOT pairs ran at a load of about 5, published by each compiler.
+
+| Benchmark | JIT after / before | NativeAOT after / before |
+| --- | ---: | ---: |
+| bullet | 1.016 | 1.006 |
+| fannkuch | 0.998 | 0.995 |
+| fftbench | 1.007 | 1.002 |
+| hash2-cxx | 0.997 | 1.004 |
+| huffbench | 1.039 (1.026 at a load of 3) | 0.995 |
+| jpeg | 1.030 | (3 ms) |
+| lame | 0.979 | 1.006 |
+| mafft | 0.992 | 1.003 |
+| mutex | 1.243 on two cores; wall time 1.03 on four | 1.021 |
+| nbench | 0.994 | 1.006 |
+| ptrdist-yacr2 | 0.995 | 0.986 |
+| reed-solomon | 1.009 | 1.000 |
+| susan (vectorized) | 0.977 | 0.84 (17 against 21 ms) |
+| tramp3d | 0.999 | 1.029 |
+
+Three results are larger than the others; none comes from a slower branch:
+
+- **huffbench under the JIT.** `compdecomp` contains the whole program inlined. Its compiled code (`DOTNET_JitDisasm`, `artifacts/pf18/benchmarks/huff-*.asm`) differs in only two places:
+  - The two `umax` of the code-length table, which run 256 times per call, become `cmp`, `ja`, `mov`.
+  - The padding of two hot loops behind them. The method is 24 bytes shorter, so one loop head gets 14 bytes of alignment instead of none and another none instead of 8.
+
+  The hot loops have the same instructions, so the 3 to 4% comes from where those loops are placed. As NativeAOT it is unchanged.
+- **mutex** varies with how its threads are scheduled. Its change runs once per signal: 0.24 s over 400,000 signals would be 600 ns each. On four cores its user time ranged from 3.0 to 9.1 s from run to run.
+- **jpeg and tramp3d** are small. `jpeg` runs 0.1 s under the JIT, of which 0.09 s is startup. `tramp3d` as NativeAOT runs 0.105 s, and its difference is 3 ms.
+
+Compared with the previous run's times, the 14 had moved further than the other benchmarks: by 11% more under the JIT (geometric mean), mostly the small ones (`jpeg` takes 2 ms natively). The paired runs do not reproduce that shift, so it came from the load.
+
+### Not done
+
+- `x264_clip_uint8` (`x & ~255 ? (-x) >> 31 : x`) is a select on a comparison with a constant, not a loop-carried one, so it keeps PF-15's mask, where native code has a `cmov`. Its condition is a clamp's and almost always goes the same way, as min/max against a constant bound do, but PF-15 found that branches for all selects did not help HEVC; a branch for selects on comparisons with constants needs that measurement.
