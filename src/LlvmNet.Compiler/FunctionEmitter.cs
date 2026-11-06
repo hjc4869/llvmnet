@@ -309,6 +309,9 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Il.Emit(OpCodes.Ldnull);
                 Il.Emit(OpCodes.Throw);
                 return;
+            // The shift and the and that a multiplication's lowering computes from their operand (VectorEmitter.HalfSigns).
+            case 21 or 23 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null && Vectors.Fused(value):
+                return;
             case >= 8 and <= 25:
                 Binary(value, opcode);
                 break;

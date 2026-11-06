@@ -72,6 +72,19 @@ dotnet "$test_output/shifts-256.dll"
 DOTNET_EnableAVX2=0 dotnet "$test_output/shifts-256.dll"
 "$llvmnet" --runtime=portable --nativeaot --aot-instruction-set x86-64-v3 "$test_output/shifts.bc" -o "$test_output/shifts-aot" >"$test_output/shifts-aot.log" 2>&1
 "$test_output/shifts-aot"
+# The sign of each half of a lane spread over it, x264's abs2 (SV-39), is one arithmetic shift of the halves: only the
+# fixture's three look-alikes multiply. With and without hardware intrinsics and at 256 bits.
+tag_ir portable "$root/tests/ir/vector-sign-halves.ll" "$test_output/sign-halves.bc"
+"$llvmnet" --runtime=portable "$test_output/sign-halves.bc" -o "$test_output/sign-halves.dll"
+dotnet "$test_output/sign-halves.dll"
+DOTNET_EnableHWIntrinsic=0 dotnet "$test_output/sign-halves.dll"
+"$llvmnet" --runtime=portable --vector-width=256 "$test_output/sign-halves.bc" -o "$test_output/sign-halves-256.dll"
+dotnet "$test_output/sign-halves-256.dll"
+calls="$(dotnet "$checks" vector-calls "$test_output/sign-halves.dll")"
+if [[ "$calls" != *"op_Multiply 3,"* ]]; then
+    printf 'FAIL: tests/ir/vector-sign-halves.ll: expected op_Multiply 3 (the look-alikes) in %s\n' "$calls" >&2
+    exit 1
+fi
 # The hidden --vector-lowering=scalar, the scalarizer's form of all vector code for comparisons: the shifts and the
 # vectorizer's loops (masks built by insertelement chains, early exits) as native computes them.
 "$llvmnet" --runtime=portable --vector-lowering=scalar "$test_output/shifts.bc" -o "$test_output/shifts-scalar.dll"

@@ -98,3 +98,20 @@ The helper reads the narrow operands where the add is, after their last use in t
 x264 takes 9.79 s against SV-36's 10.17 in the same rounds (native 5.80), 3.7% faster. x64's code is the same in every function but `x264_me_search_ref`, where the longer live ranges change which registers 42 instructions use.
 
 **Correctness.** `vector-pixels.c` has differences and squares of rows of 4, 8 and 16 bytes (twice and four times the width), sums of bytes and halfwords and `tall_differences`, one function of 600 values in the order that exposed the shared local; it and the semantics probes print native's output on the M6 and on Linux ARM64 under the JIT with and without hardware intrinsics, and `vector-sweep.sh` checks that `--report-simd` names the widening helpers.
+
+## SV-39: abs2's sign spread as one arithmetic shift
+
+x264's `abs2` takes the absolute value of the two 16-bit halves of a 32-bit lane: `((a >> 15) & 0x10001) * 0xffff` spreads each half's sign over that half, then `(a + s) ^ s`. The vectorizers keep the multiplication, so `satd_8x4`, `sa8d_8x8` and `hadamard_ac` ran `ushr`, `and` (with a `movi` constant) and `mul` per vector on ARM64 (on x64 `psrld`, `pand` and `pmulld`; native SSE2 code shifts, masks, shifts left and subtracts). Native AArch64 code is one `cmlt` per vector: LLVM's AArch64 backend folds the shape (`performMulVectorCmpZeroCombine`).
+
+The rule is generic: in lanes of 2h bits, `mul(and(lshr(x, h - 1), 1 | 1 << h), (1 << h) - 1)` is all ones in each h-bit half where that half of x is negative, which is an arithmetic shift of the halves by h - 1. `VectorEmitter.Binary` now emits that for a multiplication of this shape in 16-, 32- and 64-bit lanes (a comparison with zero for byte halves, which have no arithmetic shift on x64): `sshr` on ARM64, `psraw` or `psrad` on x64. The `and` and the `lshr` emit nothing when the multiplication is their one user (`VectorEmitter.Fused`), and x counts as used at the multiplication for local sharing.
+
+| Function | SV-37 | SV-39 |
+| --- | ---: | ---: |
+| `x264_pixel_satd_8x4`, ARM64 | 145 | 135 |
+| `x264_pixel_satd_8x4`, x64 | 196 | 184 |
+| `sa8d_8x8`, x64 | 210 | 178 |
+| `pixel_hadamard_ac`, x64 | 737 | 643 |
+
+x264 takes 9.60 s against SV-37's 9.81 on the M6 in the same rounds (native 5.81), 2.1% faster. On x64 the four functions with the shape (`satd_8x4`, `satd_4x4`, `sa8d_8x8`, `pixel_hadamard_ac`) are shorter, each `psrld`, `pand` and `pmulld` one `psraw`, and `pixel_hadamard_ac` has 58 fewer register moves; two other functions differ only in alignment padding.
+
+**Correctness.** [tests/ir/vector-sign-halves.ll](../../tests/ir/vector-sign-halves.ll) computes the shape in 16-, 32- and 64-bit lanes, with the and's operands either way round, and three look-alikes (another factor, another shift, the factor first), and compares each with the halves' arithmetic shift computed directly; `ir.sh` runs it natively and in both modes, `vector-lowering.sh` without hardware intrinsics and at 256 bits and checks that only the look-alikes multiply. It passes on the M6 and on Linux ARM64 with and without hardware intrinsics, at 128 and 256 bits, and `vector-pixels.c`'s `hadamard` prints native's output there.

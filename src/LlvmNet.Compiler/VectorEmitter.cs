@@ -845,6 +845,30 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             });
             return;
         }
+        if (opcode == 12 && HalfSigns(value) is nint signs)
+        {
+            // The sign of each half of the lanes spread over it (SV-39): one arithmetic shift of the halves, sshr on ARM64
+            // as native AArch64's cmlt, psraw or psrad on x64, and a comparison with zero for bytes, where it was a shift, an
+            // and and a multiplication. The and and the shift emit nothing (Fused).
+            Type half = Signed(shape.LaneBits / 2);
+            Build(shape, index =>
+            {
+                Fragment(signs, index);
+                As(shape.Lane, half);
+                if (half == typeof(sbyte))
+                {
+                    Zero(half);
+                    Call("LessThan", half, 2);
+                }
+                else
+                {
+                    il.Emit(OpCodes.Ldc_I4, shape.LaneBits / 2 - 1);
+                    il.Emit(OpCodes.Call, Api("ShiftRightArithmetic", null, V(half), typeof(int)));
+                }
+                As(half, shape.Lane);
+            });
+            return;
+        }
         if (Widening(value) is var (narrowLeft, narrowRight, signed))
         {
             // Both extensions and the operation in one AdvSimd instruction on ARM64 (SV-37); other hosts add the extensions
@@ -907,8 +931,37 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         return to.LaneBits == 2 * from.LaneBits || to.LaneBits == 4 * from.LaneBits && from.LaneBits == 8 ? (narrowLeft, narrowRight, opcode == 32) : null;
     }
 
+    /// <summary>
+    /// The x of mul(and(lshr(x, h - 1), 1 | 1 &lt;&lt; h), (1 &lt;&lt; h) - 1) in lanes of 2h bits, or null. The shift
+    /// and the and leave the sign bit of each h-bit half of x in its lowest bit, and the multiplication spreads it over
+    /// the half, so each half of the product is all ones where that half of x is negative (x264's abs2), which native
+    /// AArch64 code computes as one cmlt (SV-39).
+    /// </summary>
+    private nint? HalfSigns(nint multiply)
+    {
+        if (Llvm.LLVMGetInstructionOpcode(multiply) != 12 || types.Vector(Llvm.LLVMTypeOf(multiply)) is not { Mask: false } shape || shape.LaneBits < 16)
+            return null;
+        int half = shape.LaneBits / 2;
+        nint and = Llvm.LLVMGetOperand(multiply, 0);
+        if (!SplatOf(Llvm.LLVMGetOperand(multiply, 1), (1UL << half) - 1) || Llvm.LLVMIsAInstruction(and) == 0 || Llvm.LLVMGetInstructionOpcode(and) != 23)
+            return null;
+        for (uint operand = 0; operand < 2; operand++)
+        {
+            nint shift = Llvm.LLVMGetOperand(and, operand);
+            if (SplatOf(Llvm.LLVMGetOperand(and, 1 - operand), 1UL | 1UL << half) && Llvm.LLVMIsAInstruction(shift) != 0 &&
+                Llvm.LLVMGetInstructionOpcode(shift) == 21 && SplatOf(Llvm.LLVMGetOperand(shift, 1), (ulong)half - 1))
+                return Llvm.LLVMGetOperand(shift, 0);
+        }
+        return null;
+    }
+
+    /// <summary>Whether a vector is a splat of the constant, its undefined lanes aside; the constants asked for are
+    /// positive in their lanes.</summary>
+    private static bool SplatOf(nint vector, ulong value) =>
+        SplatScalar(vector) is nint scalar && Llvm.LLVMIsAConstantInt(scalar) != 0 && (ulong)Llvm.LLVMConstIntGetSExtValue(scalar) == value;
+
     /// <summary>The values an instruction's lowering reads besides its operands, which must stay in their locals until
-    /// it (FunctionEmitter.ShareFunctionLocals): a widening add's narrow operands.</summary>
+    /// it (FunctionEmitter.ShareFunctionLocals): a widening add's narrow operands, the x of <see cref="HalfSigns"/>.</summary>
     internal IEnumerable<nint> Reads(nint instruction)
     {
         if (Widening(instruction) is var (left, right, _))
@@ -916,6 +969,22 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             yield return left;
             yield return right;
         }
+        if (HalfSigns(instruction) is nint signs) yield return signs;
+    }
+
+    /// <summary>Whether an instruction is computed in its one user's lowering from its own operands, and so emits nothing
+    /// itself, as a chained insertelement does: the and and the shift of <see cref="HalfSigns"/>.</summary>
+    internal bool Fused(nint value)
+    {
+        nint use = Llvm.LLVMGetFirstUse(value);
+        if (use == 0 || Llvm.LLVMGetNextUse(use) != 0) return false;
+        nint user = Llvm.LLVMGetUser(use);
+        return Llvm.LLVMGetInstructionOpcode(value) switch
+        {
+            23 => HalfSigns(user) is not null,
+            21 => Llvm.LLVMGetInstructionOpcode(user) == 23 && Fused(user),
+            _ => false
+        };
     }
 
     /// <summary>The scalar every lane of a splat holds: a constant vector with equal lanes, or the insertelement and
