@@ -1330,7 +1330,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// A shufflevector: each result fragment is classified by the source fragments its lanes come from. Lanes from one
     /// fragment are that fragment (in order) or a Shuffle with constant indices, which RyuJIT compiles to one instruction
     /// where the host has it (pshufd, shufps, pshufb, tbl); lanes from two fragments that are halves of each are Create
-    /// of the halves (movlhps, unpckhpd), and any other mix is a ConditionalSelect of such shuffles. An i1 vector is
+    /// of the halves (movlhps, unpckhpd), and any other mix is a blend of such shuffles (Vectors.Select: pblendvb or bsl). An i1 vector is
     /// shuffled as a mask at the result's lane width.
     /// </summary>
     internal void Shuffle(nint value)
@@ -1428,7 +1428,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                     As(IntegerLane(result.Lane), result.Lane);
                     Permute(operand, fragment, pattern);
                     il.Emit(OpCodes.Ldloc, gathered);
-                    Call("ConditionalSelect", result.Lane, 3);
+                    il.Emit(OpCodes.Call, Helper(nameof(Vectors.Select), result.Lane, V(result.Lane), V(result.Lane), V(result.Lane)));
                     Release(gathered);
                 }
                 else

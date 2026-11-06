@@ -270,6 +270,18 @@ public static unsafe class Vectors
     public static Vector256<long> WidenLowest64(Vector256<short> value) =>
         Avx2.IsSupported ? Avx2.ConvertToVector256Int64(value.GetLower()) : Vector256.WidenLower(Vector256.WidenLower(value));
 
+    // The lanes of a shuffle's two sources by a constant mask of whole lanes (VectorEmitter.Gather): pblendvb where the host
+    // has SSE4.1, one instruction, where RyuJIT compiles a ConditionalSelect whose constant mask it has hoisted into a
+    // register as and, andn and or; ARM64's ConditionalSelect is one bsl.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<T> Select<T>(Vector128<T> mask, Vector128<T> ifTrue, Vector128<T> ifFalse) where T : unmanaged =>
+        Sse41.IsSupported ? Sse41.BlendVariable(ifFalse.AsByte(), ifTrue.AsByte(), mask.AsByte()).As<byte, T>() : Vector128.ConditionalSelect(mask, ifTrue, ifFalse);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<T> Select<T>(Vector256<T> mask, Vector256<T> ifTrue, Vector256<T> ifFalse) where T : unmanaged =>
+        Avx2.IsSupported ? Avx2.BlendVariable(ifFalse.AsByte(), ifTrue.AsByte(), mask.AsByte()).As<byte, T>() : Vector256.ConditionalSelect(mask, ifTrue, ifFalse);
+
     // Bit counts and reversals per lane, composed from shifts, masks and adds that every host executes as vector
     // instructions (no ISA has a vector popcount below AVX-512 BITALG and NEON's byte cnt). A count of a zero lane is
     // the lane width, which ctlz and cttz leave as the defined result when their zero-is-poison flag is clear.
