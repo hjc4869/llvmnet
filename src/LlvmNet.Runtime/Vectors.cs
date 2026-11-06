@@ -282,6 +282,18 @@ public static unsafe class Vectors
     public static Vector256<T> Select<T>(Vector256<T> mask, Vector256<T> ifTrue, Vector256<T> ifFalse) where T : unmanaged =>
         Avx2.IsSupported ? Avx2.BlendVariable(ifFalse.AsByte(), ifTrue.AsByte(), mask.AsByte()).As<byte, T>() : Vector256.ConditionalSelect(mask, ifTrue, ifFalse);
 
+    // Scalars that become vector lanes and that ILC must not fold as constants (VectorEmitter.LoadLane): function addresses,
+    // relocatable constants to ILC, which a folded Vector128.Create keeps as their compile-time handle values.
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static nint OpaqueAddress(nint value) => value;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static int Opaque(int value) => value;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static long Opaque(long value) => value;
+
     // Bit counts and reversals per lane, composed from shifts, masks and adds that every host executes as vector
     // instructions (no ISA has a vector popcount below AVX-512 BITALG and NEON's byte cnt). A count of a zero lane is
     // the lane width, which ctlz and cttz leave as the defined result when their zero-is-poison flag is clear.

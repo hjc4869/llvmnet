@@ -364,11 +364,28 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                     Scalar(shape.Lane, lane < lanes.Length ? Bits(lanes[lane]) : 0);
                     continue;
                 }
-                values.Load(lanes[lane]);
+                LoadLane(lanes[lane]);
                 if (shape.Lane == typeof(long)) il.Emit(OpCodes.Conv_I8);
             }
         }
         il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(shape.Lane, shape.PerFragment).ToArray()));
+    }
+
+    /// <summary>
+    /// Pushes a scalar that becomes a vector lane. To ILC a function's address (ldftn) is a relocatable constant, and RyuJIT
+    /// folds a Vector128.Create or WithElement of constants into a vector literal holding the handles' values at compile
+    /// time, without their relocations, so a vector of function addresses compared unequal to every function pointer as
+    /// NativeAOT (SPEC CPU2017 502.gcc_r's gimplify_expr compares one with eight; the JIT folds the real addresses). Such
+    /// lanes, and constant expressions that may contain one, go through Vectors.Opaque, which ILC does not fold.
+    /// </summary>
+    private void LoadLane(nint lane)
+    {
+        values.Load(lane);
+        nint stripped = Llvm.LLVMIsAGlobalAlias(lane) != 0 ? Llvm.LLVMAliasGetAliasee(lane) : lane;
+        if (Llvm.LLVMIsAFunction(stripped) == 0 && Llvm.LLVMIsAConstantExpr(stripped) == 0) return;
+        Type type = TypeSystem.Kind(Llvm.LLVMTypeOf(lane)) == 12 ? typeof(nint) : types.Map(Llvm.LLVMTypeOf(lane));
+        if (type == typeof(nint) || type == typeof(int) || type == typeof(long))
+            il.Emit(OpCodes.Call, typeof(Vectors).GetMethod(type == typeof(nint) ? nameof(Vectors.OpaqueAddress) : nameof(Vectors.Opaque), [type])!);
     }
 
     /// <summary>Pushes a lane constant from its bits. Float NaNs go through their bits, because RyuJIT holds float constants
@@ -1317,7 +1334,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// <summary>Pushes a scalar as a lane of the shape: pointers as 64-bit integers, i1 as all ones or zero.</summary>
     private void LaneValue(nint element, VectorShape shape)
     {
-        values.Load(element);
+        LoadLane(element);
         if (shape.Mask)
         {
             il.Emit(OpCodes.Neg);

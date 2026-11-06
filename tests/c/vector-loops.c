@@ -1,6 +1,7 @@
 /* Loop shapes that LLVM's loop and SLP vectorizers transform. Results are printed as checksums;
  * native clang with the same flags is the oracle. The searches over fixed-size arrays are early-exit loops, which the
- * loop vectorizer leaves through llvm.experimental.cttz.elts (SV-31). */
+ * loop vectorizer leaves through llvm.experimental.cttz.elts (SV-31). known() compares a function pointer with eight
+ * functions, which the SLP vectorizer makes one comparison with a vector of function addresses (SV-33). */
 #include <stdint.h>
 #include <stdio.h>
 #define N 1027
@@ -25,6 +26,19 @@ static uint8_t haystack[300];
 static int32_t flags[64];
 __attribute__((noinline)) static int first_byte(uint8_t needle) { for (int i = 0; i < 300; i++) if (haystack[i] == needle) return i; return -1; }
 __attribute__((noinline)) static int first_set(void) { for (int i = 0; i < 64; i++) if (flags[i]) return i; return 64; }
+
+typedef int (*unary)(int);
+__attribute__((noinline)) static int u0(int x) { return x + 1; }
+__attribute__((noinline)) static int u1(int x) { return x * 3; }
+__attribute__((noinline)) static int u2(int x) { return x ^ 5; }
+__attribute__((noinline)) static int u3(int x) { return x - 7; }
+__attribute__((noinline)) static int u4(int x) { return x << 2; }
+__attribute__((noinline)) static int u5(int x) { return x >> 1; }
+__attribute__((noinline)) static int u6(int x) { return ~x; }
+__attribute__((noinline)) static int u7(int x) { return -x; }
+__attribute__((noinline)) static int u8(int x) { return x & 9; }
+__attribute__((noinline)) static int known(unary f) { return f == u0 || f == u1 || f == u2 || f == u3 || f == u4 || f == u5 || f == u6 || f == u7; }
+static unary unaries[] = {u0, u3, u8, u7, u5};
 
 int main(void)
 {
@@ -56,6 +70,7 @@ int main(void)
         for (int i = 0; i < 64; i++) flags[i] = i == k;
         h = mix(h, (uint32_t)first_set());
     }
+    for (int i = 0; i < 5; i++) h = mix(h, (uint32_t)(known(unaries[i]) * 2 + unaries[i](i)));
     printf("checksum %016llx\n", (unsigned long long)h);
     printf("float %.6e %.6e double %.12e %.12e\n", fsum, fdot, dsum, ddot);
     return 0;
