@@ -814,9 +814,13 @@ internal sealed class FunctionEmitter : ValueEmitter
             {
                 if (Llvm.LLVMGetIncomingBlock(phi, index) != source)
                     continue;
-                Load(Llvm.LLVMGetIncomingValue(phi, index));
-                copies.Add(phi);
                 found = true;
+                nint incoming = Llvm.LLVMGetIncomingValue(phi, index);
+                // A phi that shares the copied value's local (ShareFunctionLocals) already holds it.
+                if (locals.TryGetValue(phi, out LocalBuilder? destination) && locals.TryGetValue(incoming, out LocalBuilder? copied) && destination == copied)
+                    break;
+                Load(incoming);
+                copies.Add(phi);
                 break;
             }
             if (!found)
@@ -1287,6 +1291,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         var home = new List<int>();
         var low = new List<int>();
         var high = new List<int>();
+        var phis = new List<int>();
         int[] start = new int[blocks.Length], end = new int[blocks.Length];
         int position = 0;
         for (int block = 0; block < blocks.Length; block++)
@@ -1297,6 +1302,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             {
                 if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0 && !atUse.Contains(instruction))
                 {
+                    if (Llvm.LLVMGetInstructionOpcode(instruction) == 44) phis.Add(values.Count);
                     valueIndex.Add(instruction, values.Count);
                     values.Add(instruction);
                     home.Add(block);
@@ -1307,6 +1313,17 @@ internal sealed class FunctionEmitter : ValueEmitter
             }
             end[block] = position - 1;
         }
+        // Phis and the values they copy, which may join one local; their last use in each block decides that.
+        bool[] coalescing = new bool[values.Count];
+        int[] definition = [.. low];
+        foreach (int phi in phis)
+        {
+            coalescing[phi] = true;
+            definition[phi] = start[home[phi]];
+            for (uint index = 0; index < Llvm.LLVMCountIncoming(values[phi]); index++)
+                if (valueIndex.TryGetValue(Llvm.LLVMGetIncomingValue(values[phi], index), out int incoming)) coalescing[incoming] = true;
+        }
+        var lastUse = new Dictionary<(int Value, int Block), int>();
         void Extend(int value, int at)
         {
             low[value] = Math.Min(low[value], at);
@@ -1326,6 +1343,8 @@ internal sealed class FunctionEmitter : ValueEmitter
             if (!valueIndex.TryGetValue(operand, out int value)) return;
             Extend(value, at);
             if (block != home[value]) uses.Add((value, block));
+            if (coalescing[value])
+                lastUse[(value, block)] = lastUse.TryGetValue((value, block), out int last) ? Math.Max(last, at) : at;
             if (Llvm.LLVMGetInstructionOpcode(operand) is 42 or 43 or 51 or 52 && seen.Add(operand))
                 for (int index = 0; index < Llvm.LLVMGetNumOperands(operand); index++)
                     Use(Llvm.LLVMGetOperand(operand, (uint)index), block, at);
@@ -1398,24 +1417,110 @@ internal sealed class FunctionEmitter : ValueEmitter
                 if ((liveIn[block][index >> 6] & 1UL << index) != 0) Extend(global[index], start[block]);
                 if ((liveOut[block][index >> 6] & 1UL << index) != 0) Extend(global[index], end[block]);
             }
-        // Linear scan: a value takes a local of its type that the values before it no longer use.
+        // Where each phi and copied value is live: in each block it is defined in or live into, from its definition
+        // (a phi's at the block's start) or the block's start to its last use there or the block's end, as sorted
+        // [From, To] position segments, disjoint because blocks are.
+        var segments = new List<(int From, int To)>?[values.Count];
+        for (int value = 0; value < values.Count; value++)
+            if (coalescing[value]) segments[value] = [];
+        int segmentIndex = 0;
+        for (int block = 0; block < blocks.Length; block++)
+        {
+            for (; segmentIndex < values.Count && home[segmentIndex] == block; segmentIndex++)
+            {
+                if (!coalescing[segmentIndex]) continue;
+                bool liveAfter = bit.TryGetValue(segmentIndex, out int index) && (liveOut[block][index >> 6] & 1UL << index) != 0;
+                int through = lastUse.TryGetValue((segmentIndex, block), out int at) ? Math.Max(at, definition[segmentIndex]) : definition[segmentIndex];
+                segments[segmentIndex]!.Add((definition[segmentIndex], liveAfter ? end[block] : through));
+            }
+            for (int word = 0; word < words; word++)
+                for (ulong bits = liveIn[block][word]; bits != 0; bits &= bits - 1)
+                {
+                    int index = word * 64 + System.Numerics.BitOperations.TrailingZeroCount(bits);
+                    int value = global[index];
+                    if (!coalescing[value]) continue;
+                    bool liveAfter = (liveOut[block][index >> 6] & 1UL << index) != 0;
+                    segments[value]!.Add((start[block], liveAfter || !lastUse.TryGetValue((value, block), out int at) ? end[block] : at));
+                }
+        }
+        // A phi joins the class of a value it copies, as LLVM's register coalescer joins a copy's intervals, when no
+        // member of one class is live where a member of the other is (SSA interference); a class then has one local
+        // and its edge copies are not emitted. An edge loads every value it copies before it stores any phi, so a
+        // copied value whose last use is the edge does not conflict with the phi; one still live after it, or a phi
+        // live where the other is defined, does. The phis of one block conflict at its start, and an instruction
+        // reads its operands where its result is written, so it never joins them.
+        int[] parent = [.. Enumerable.Range(0, values.Count)];
+        int Find(int value)
+        {
+            while (parent[value] != value) value = parent[value] = parent[parent[value]];
+            return value;
+        }
+        // Copies of phis go first: a dispatch loop forwards its values through chains of phis, which one class can
+        // take whole, and a value computed from a phi of the chain (an induction variable's next value), joined first,
+        // would keep the chain apart.
+        bool[] isPhi = new bool[values.Count];
+        foreach (int phi in phis) isPhi[phi] = true;
+        foreach (bool forwarding in (bool[])[true, false])
+            foreach (int phi in phis)
+                for (uint index = 0; index < Llvm.LLVMCountIncoming(values[phi]); index++)
+                {
+                    if (!valueIndex.TryGetValue(Llvm.LLVMGetIncomingValue(values[phi], index), out int incoming) || isPhi[incoming] != forwarding)
+                        continue;
+                    int left = Find(phi), right = Find(incoming);
+                    if (left == right || Overlap(segments[left]!, segments[right]!)) continue;
+                    parent[right] = left;
+                    segments[left] = Merge(segments[left]!, segments[right]!);
+                    segments[right] = null;
+                }
+        // Linear scan: a class takes a local of its type that the classes before it no longer use, over the span of
+        // its members' ranges.
+        int[] first = [.. low], last = [.. high];
+        for (int value = 0; value < values.Count; value++)
+        {
+            int root = Find(value);
+            first[root] = Math.Min(first[root], low[value]);
+            last[root] = Math.Max(last[root], high[value]);
+        }
+        var assigned = new LocalBuilder?[values.Count];
         var available = new Dictionary<Type, Stack<LocalBuilder>>();
         var active = new PriorityQueue<int, int>();
-        foreach (int value in Enumerable.Range(0, values.Count).OrderBy(value => low[value]))
+        foreach (int root in Enumerable.Range(0, values.Count).Where(value => parent[value] == value).OrderBy(value => first[value]))
         {
-            while (active.TryPeek(out int expired, out int last) && last < low[value])
+            while (active.TryPeek(out int expired, out int until) && until < first[root])
             {
                 active.Dequeue();
-                LocalBuilder released = locals[values[expired]];
+                LocalBuilder released = assigned[expired]!;
                 if (!available.TryGetValue(released.LocalType, out Stack<LocalBuilder>? free)) available.Add(released.LocalType, free = new());
                 free.Push(released);
             }
-            Type managed = Types.Map(Llvm.LLVMTypeOf(values[value]));
+            Type managed = Types.Map(Llvm.LLVMTypeOf(values[root]));
             LocalBuilder local = available.TryGetValue(managed, out Stack<LocalBuilder>? pool) && pool.TryPop(out LocalBuilder? previous) ? previous : Il.DeclareLocal(managed);
             if (local.LocalIndex >= ushort.MaxValue)
                 throw new NotSupportedException($"Function {Llvm.Name(function)} exceeds the CIL local-variable limit.");
-            locals[values[value]] = local;
-            active.Enqueue(value, high[value]);
+            assigned[root] = local;
+            active.Enqueue(root, last[root]);
+        }
+        for (int value = 0; value < values.Count; value++)
+            locals[values[value]] = assigned[Find(value)]!;
+
+        static bool Overlap(List<(int From, int To)> left, List<(int From, int To)> right)
+        {
+            for (int i = 0, j = 0; i < left.Count && j < right.Count;)
+            {
+                if (left[i].To < right[j].From) i++;
+                else if (right[j].To < left[i].From) j++;
+                else return true;
+            }
+            return false;
+        }
+        static List<(int From, int To)> Merge(List<(int From, int To)> left, List<(int From, int To)> right)
+        {
+            var merged = new List<(int From, int To)>(left.Count + right.Count);
+            int i = 0, j = 0;
+            while (i < left.Count && j < right.Count) merged.Add(left[i].From < right[j].From ? left[i++] : right[j++]);
+            for (; i < left.Count; i++) merged.Add(left[i]);
+            for (; j < right.Count; j++) merged.Add(right[j]);
+            return merged;
         }
     }
 
