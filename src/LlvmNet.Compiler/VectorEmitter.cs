@@ -704,6 +704,15 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         else
         {
             int levels = System.Numerics.BitOperations.Log2((uint)(to.LaneBits / from.LaneBits));
+            if (!floating && levels >= 2 && index % (1 << levels) == 0)
+            {
+                // The lowest lanes of a fragment widened by two or three steps at once: one pmovzx or pmovsx (SV-29).
+                source(index >> levels);
+                As(from.Lane, Lane(from.LaneBits));
+                il.Emit(OpCodes.Call, Helper(to.LaneBits == 32 ? nameof(Vectors.WidenLowest32) : nameof(Vectors.WidenLowest64), null, V(Lane(from.LaneBits))));
+                As(Lane(to.LaneBits), to.Lane);
+                return;
+            }
             Widen(levels, index);
             As(Lane(to.LaneBits), to.Lane);
 

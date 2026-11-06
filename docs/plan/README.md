@@ -33,6 +33,8 @@ The owner asked for SPEC CPU2017 525.x264_r's first refrate workload against nat
 
 - **SV-28 (done).** Rounding averages of bytes and 16-bit values run as `pavgb` and `pavgw` (`urhadd` on ARM64), as LLVM's x86 backend compiles them, instead of widened arithmetic: x264's lowres filter and half-pel averages, 15.51 s at Vector128.
 
+- **SV-29 (done).** Integer widenings by two or three steps (bytes to 32-bit lanes) are one `pmovzx`/`pmovsx` with the load folded, as natively, instead of a step at a time: x264's `satd` rows, 14.96 s at Vector128 and 14.03 at `x86-64-v3`.
+
 ## Progress (2026-11-05 and 06, JP-02 to JP-07 and JP-09)
 
 The owner asked to start [13-jit-patterns.md](13-jit-patterns.md) in the order decided on 2026-11-05. Measurements are in [evidence/2026-11-05-jit-shapes.md](../evidence/2026-11-05-jit-shapes.md).

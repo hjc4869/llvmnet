@@ -218,6 +218,58 @@ public static unsafe class Vectors
         return value;
     }
 
+    // Widenings of a fragment's lowest lanes by two or three steps (VectorEmitter.Resize): SSE4.1's pmovzx and pmovsx, and
+    // AVX2's 256-bit forms, do each in one instruction where WidenLower twice is two (x264's zext <4 x i8> to <4 x i32>);
+    // elsewhere, ARM64 included, the steps.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> WidenLowest32(Vector128<byte> value) =>
+        Sse41.IsSupported ? Sse41.ConvertToVector128Int32(value).AsUInt32() : Vector128.WidenLower(Vector128.WidenLower(value));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<int> WidenLowest32(Vector128<sbyte> value) =>
+        Sse41.IsSupported ? Sse41.ConvertToVector128Int32(value) : Vector128.WidenLower(Vector128.WidenLower(value));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ulong> WidenLowest64(Vector128<byte> value) =>
+        Sse41.IsSupported ? Sse41.ConvertToVector128Int64(value).AsUInt64() : Vector128.WidenLower(Vector128.WidenLower(Vector128.WidenLower(value)));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<long> WidenLowest64(Vector128<sbyte> value) =>
+        Sse41.IsSupported ? Sse41.ConvertToVector128Int64(value) : Vector128.WidenLower(Vector128.WidenLower(Vector128.WidenLower(value)));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ulong> WidenLowest64(Vector128<ushort> value) =>
+        Sse41.IsSupported ? Sse41.ConvertToVector128Int64(value).AsUInt64() : Vector128.WidenLower(Vector128.WidenLower(value));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<long> WidenLowest64(Vector128<short> value) =>
+        Sse41.IsSupported ? Sse41.ConvertToVector128Int64(value) : Vector128.WidenLower(Vector128.WidenLower(value));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<uint> WidenLowest32(Vector256<byte> value) =>
+        Avx2.IsSupported ? Avx2.ConvertToVector256Int32(value.GetLower()).AsUInt32() : Vector256.WidenLower(Vector256.WidenLower(value));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<int> WidenLowest32(Vector256<sbyte> value) =>
+        Avx2.IsSupported ? Avx2.ConvertToVector256Int32(value.GetLower()) : Vector256.WidenLower(Vector256.WidenLower(value));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ulong> WidenLowest64(Vector256<byte> value) =>
+        Avx2.IsSupported ? Avx2.ConvertToVector256Int64(value.GetLower()).AsUInt64() : Vector256.WidenLower(Vector256.WidenLower(Vector256.WidenLower(value)));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<long> WidenLowest64(Vector256<sbyte> value) =>
+        Avx2.IsSupported ? Avx2.ConvertToVector256Int64(value.GetLower()) : Vector256.WidenLower(Vector256.WidenLower(Vector256.WidenLower(value)));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<ulong> WidenLowest64(Vector256<ushort> value) =>
+        Avx2.IsSupported ? Avx2.ConvertToVector256Int64(value.GetLower()).AsUInt64() : Vector256.WidenLower(Vector256.WidenLower(value));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<long> WidenLowest64(Vector256<short> value) =>
+        Avx2.IsSupported ? Avx2.ConvertToVector256Int64(value.GetLower()) : Vector256.WidenLower(Vector256.WidenLower(value));
+
     // Bit counts and reversals per lane, composed from shifts, masks and adds that every host executes as vector
     // instructions (no ISA has a vector popcount below AVX-512 BITALG and NEON's byte cnt). A count of a zero lane is
     // the lane width, which ctlz and cttz leave as the defined result when their zero-is-poison flag is clear.
