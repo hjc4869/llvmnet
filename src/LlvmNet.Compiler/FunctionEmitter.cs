@@ -1405,7 +1405,9 @@ internal sealed class FunctionEmitter : ValueEmitter
         // where RyuJIT folds it into the address of a load or store as native code does: LLVM hoists a structure's
         // field addresses into a loop head for the blocks below it, and a local for each was stored on every pass. The
         // base is then live where the GEP is used (ShareFunctionLocals counts a value computed where it is used as a
-        // use of its operands there). A GEP whose base is such a GEP keeps its local.
+        // use of its operands there). A GEP whose base is such a GEP keeps its local. One of a static alloca's frame slot
+        // (FrameSlots, PF-24) is the slot's address plus the offset at each use, a stack address RyuJIT folds, unless the
+        // alignment rounds the slot's address.
         var offsets = new HashSet<nint>();
         foreach (nint block in Llvm.Blocks(function))
             foreach (nint value in Llvm.Instructions(block))
@@ -1414,7 +1416,8 @@ internal sealed class FunctionEmitter : ValueEmitter
         foreach (nint value in offsets)
         {
             nint pointer = Llvm.LLVMGetOperand(value, 0);
-            if (arguments.ContainsKey(pointer) || Llvm.LLVMIsAInstruction(pointer) != 0 && !atUse.Contains(pointer) && !offsets.Contains(pointer))
+            if (arguments.ContainsKey(pointer) || Llvm.LLVMIsAInstruction(pointer) != 0 && !atUse.Contains(pointer) && !offsets.Contains(pointer) ||
+                frameSlots.TryGetValue(pointer, out var frame) && frame.Alignment <= 8)
                 atUse.Add(value);
         }
 
