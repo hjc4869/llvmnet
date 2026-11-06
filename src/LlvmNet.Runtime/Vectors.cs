@@ -292,6 +292,62 @@ public static unsafe class Vectors
     public static Vector256<long> WidenLowest64(Vector256<short> value) =>
         Avx2.IsSupported ? Avx2.ConvertToVector256Int64(value.GetLower()) : Vector256.WidenLower(Vector256.WidenLower(value));
 
+    // Narrowings of one fragment whose upper half is zero (VectorEmitter.Resize: a vector of half a fragment or less, as
+    // the x86 cost model's 64-bit vectors): xtn alone on ARM64, which zeroes the upper half, where Vector128.Narrow with a
+    // zero vector is xtn, movi and xtn2 (SV-36); sqxtn and uqxtn for the saturating forms, fcvtn for doubles.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<sbyte> NarrowLower(Vector128<short> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingLower(value).ToVector128Unsafe() : Vector128.Narrow(value, Vector128<short>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<byte> NarrowLower(Vector128<ushort> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingLower(value).ToVector128Unsafe() : Vector128.Narrow(value, Vector128<ushort>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<short> NarrowLower(Vector128<int> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingLower(value).ToVector128Unsafe() : Vector128.Narrow(value, Vector128<int>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ushort> NarrowLower(Vector128<uint> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingLower(value).ToVector128Unsafe() : Vector128.Narrow(value, Vector128<uint>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<int> NarrowLower(Vector128<long> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingLower(value).ToVector128Unsafe() : Vector128.Narrow(value, Vector128<long>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> NarrowLower(Vector128<ulong> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingLower(value).ToVector128Unsafe() : Vector128.Narrow(value, Vector128<ulong>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<float> NarrowLower(Vector128<double> value) =>
+        AdvSimd.Arm64.IsSupported ? AdvSimd.Arm64.ConvertToSingleLower(value).ToVector128Unsafe() : Vector128.Narrow(value, Vector128<double>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<sbyte> NarrowWithSaturationLower(Vector128<short> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingSaturateLower(value).ToVector128Unsafe() : Vector128.NarrowWithSaturation(value, Vector128<short>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<byte> NarrowWithSaturationLower(Vector128<ushort> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingSaturateLower(value).ToVector128Unsafe() : Vector128.NarrowWithSaturation(value, Vector128<ushort>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<short> NarrowWithSaturationLower(Vector128<int> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingSaturateLower(value).ToVector128Unsafe() : Vector128.NarrowWithSaturation(value, Vector128<int>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ushort> NarrowWithSaturationLower(Vector128<uint> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingSaturateLower(value).ToVector128Unsafe() : Vector128.NarrowWithSaturation(value, Vector128<uint>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<int> NarrowWithSaturationLower(Vector128<long> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingSaturateLower(value).ToVector128Unsafe() : Vector128.NarrowWithSaturation(value, Vector128<long>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> NarrowWithSaturationLower(Vector128<ulong> value) =>
+        AdvSimd.IsSupported ? AdvSimd.ExtractNarrowingSaturateLower(value).ToVector128Unsafe() : Vector128.NarrowWithSaturation(value, Vector128<ulong>.Zero);
+
     // The lanes of a shuffle's two sources by a constant mask of whole lanes (VectorEmitter.Gather): pblendvb where the host
     // has SSE4.1, one instruction, where RyuJIT compiles a ConditionalSelect whose constant mask it has hoisted into a
     // register as and, andn and or; ARM64's ConditionalSelect is one bsl.

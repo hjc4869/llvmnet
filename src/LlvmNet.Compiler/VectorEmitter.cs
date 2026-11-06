@@ -715,6 +715,13 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 }
                 Type lane = Lane(from.LaneBits >> (level - 1));
                 Narrow(level - 1, 2 * fragment);
+                if (!Wide && (2 * fragment + 1) << (level - 1) >= from.Fragments)
+                {
+                    // Zeros above the source's fragments: the lower half alone, xtn on ARM64, where Narrow with a zero
+                    // vector is xtn, movi and xtn2 (SV-36).
+                    il.Emit(OpCodes.Call, Helper(saturate ? nameof(Vectors.NarrowWithSaturationLower) : nameof(Vectors.NarrowLower), null, V(lane)));
+                    return;
+                }
                 Narrow(level - 1, 2 * fragment + 1);
                 il.Emit(OpCodes.Call, Api(saturate ? "NarrowWithSaturation" : "Narrow", null, V(lane), V(lane)));
             }

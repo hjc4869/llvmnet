@@ -61,3 +61,20 @@ A reduction whose tree is one leaf needs only the total, which psadbw's exact tw
 x264 takes 10.32 s against SV-34's 10.46 in the same rounds (native 5.88), 1.3% and within the noise: the rows were already short after SV-34. x64's code is the same in all but two functions, whose 16-byte rows now add their two sums at once and spill less: `sad_16x8` is 95 instructions instead of 107, `sad_x4_8x16` 527 instead of 540.
 
 **Correctness.** [tests/vector-reductions.sh](../../tests/vector-reductions.sh) checks that `--report-simd` names the helper for the fixture's two row SADs (`pix_abs16`, `pix_abs8`) while the accumulator loops keep `X86.Psadbw`, with native output in every configuration it runs; `vector-pixels.c` has rows of 4, 8 and 16 bytes. Both print native's output on the M6 and on Linux ARM64 under the JIT, with and without hardware intrinsics.
+
+## SV-36: narrowing to half a fragment as one xtn
+
+A vector of half a fragment or less, as the x86 cost model's 64-bit vectors are (`trunc <4 x i32> to <4 x i16>` in x264's `quant_4x4`, the 8-byte pixel rows of `get_ref` and `mc_chroma`), narrowed as `Vector128.Narrow(x, Zero)`, the zero standing for the fragments past the source. On ARM64 that is `xtn`, `movi` and `xtn2`, where `xtn` alone writes the narrowed lanes and zeroes the upper half; `quant_4x4` had eight such sequences. On x64 a narrowing of two steps (32 to 8 bits) computed `Narrow(Zero, Zero)` as well, which RyuJIT does not fold: two `xorps`, `packusdw` and `pand`, hoisted and spilled, then reloaded at each use.
+
+`VectorEmitter.Resize` now narrows the lower half alone when everything above it is zero, through `Vectors.NarrowLower` (and `NarrowWithSaturationLower` for `fptosi.sat`'s saturating steps): `AdvSimd.ExtractNarrowingLower(x).ToVector128Unsafe()` on ARM64 (`xtn`; `sqxtn` and `uqxtn` saturating, `fcvtn` for doubles) and `Vector128.Narrow(x, Zero)` elsewhere, which is what one step compiled to before.
+
+| Function (ARM64 instructions) | SV-35 | SV-36 |
+| --- | ---: | ---: |
+| `quant_4x4` | 164 | 148 |
+| `get_ref` | 776 | 747 |
+| `mc_chroma` | 293 | 285 |
+| `hpel_filter` | 769 | 761 |
+
+x264 takes 10.16 s against SV-35's 10.22 in the same rounds (native 5.81), within the noise. On x64, 12 functions change: the spilled zero of two-step narrowings is gone and the narrowing's zero is one `xorps` at its use; the other differences are register allocation (`get_ref` 1,181 instructions instead of 1,193, `mc_luma` 1,250 instead of 1,278, `hpel_filter` 1,030 instead of 1,014, where one loop holds one more vector on the stack).
+
+**Correctness.** The vector forms of the IR semantics probes (22,377 lines, every trunc, fptrunc and `fptosi.sat` shape) print native's output on the M6 and on Linux ARM64 under the JIT with and without hardware intrinsics, as do `vector-pixels.c` (its quantization), `vector-extensions.c` and `vector-loops.c`; `vector-lowering`, `vector-semantics` and `vector-sweep` pass on x64.
