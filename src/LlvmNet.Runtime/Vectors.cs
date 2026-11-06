@@ -13,9 +13,19 @@ namespace LlvmNet.Runtime;
 public static unsafe class Vectors
 {
     /// <summary>Reads <paramref name="size"/> bytes (1 to 15) into the low lanes of a vector, zero above.</summary>
+    /// <remarks>On ARM64 8 and 4 bytes are one ldr d or ldr s, which zeroes the rest of the register (as the 12 bytes'
+    /// ldr d does before ld1 fills lane 2); CreateScalar of an integer was movi, ldr x and ins (SV-34). ToVector128Unsafe
+    /// and CreateScalarUnsafe keep that register as it is, where ToVector128 would add a mov.</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector128<byte> Load(nint address, int size)
     {
+        if (AdvSimd.IsSupported)
+            switch (size)
+            {
+                case 8: return AdvSimd.LoadVector64((byte*)address).ToVector128Unsafe();
+                case 4: return Vector128.CreateScalarUnsafe(Unsafe.ReadUnaligned<float>((void*)address)).AsByte();
+                case 12: return AdvSimd.LoadAndInsertScalar(AdvSimd.LoadVector64((uint*)address).ToVector128Unsafe(), 2, (uint*)(address + 8)).AsByte();
+            }
         switch (size)
         {
             case 8: return Vector128.CreateScalar(Unsafe.ReadUnaligned<ulong>((void*)address)).AsByte();
@@ -35,9 +45,21 @@ public static unsafe class Vectors
     }
 
     /// <summary>Writes the low <paramref name="size"/> bytes (1 to 15) of a vector.</summary>
+    /// <remarks>On ARM64 8 and 4 bytes are one str d or str s, where ToScalar of an integer moved the lanes to a general
+    /// register first (umov).</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void Store(nint address, Vector128<byte> value, int size)
     {
+        if (AdvSimd.IsSupported)
+            switch (size)
+            {
+                case 8: AdvSimd.Store((byte*)address, value.GetLower()); return;
+                case 4: Unsafe.WriteUnaligned((void*)address, value.AsSingle().ToScalar()); return;
+                case 12:
+                    AdvSimd.Store((byte*)address, value.GetLower());
+                    AdvSimd.StoreSelectedScalar((uint*)(address + 8), value.AsUInt32(), 2);
+                    return;
+            }
         switch (size)
         {
             case 8: Unsafe.WriteUnaligned((void*)address, value.AsUInt64().ToScalar()); return;
