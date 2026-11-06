@@ -35,6 +35,8 @@ internal static unsafe class Llvm
     internal static extern uint RoundingAverages(nint function, uint fragmentBits);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_widening_reductions")]
     internal static extern uint WideningReductions(nint function, uint fragmentBits, out uint products);
+    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_strided_gathers")]
+    internal static extern uint StridedGathers(nint function, uint fragmentBits, int apply, out uint lanes, out uint loads);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_add_native_thunk")]
     internal static extern void AddNativeThunk(nint shim, nint function, nint call, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
     [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_add_native_forwarder")]

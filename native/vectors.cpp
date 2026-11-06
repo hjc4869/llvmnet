@@ -9,7 +9,9 @@
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/IntrinsicsX86.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Operator.h>
 #include <algorithm>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <llvm/IR/PassManager.h>
@@ -615,4 +617,372 @@ extern "C" unsigned llvmnet_rounding_averages(LLVMValueRef functionRef, unsigned
     }
     llvm::RecursivelyDeleteTriviallyDeadInstructionsPermissive(dead);
     return averages;
+}
+
+
+namespace {
+
+// An address as the start of its chain of inbounds getelementptrs (the root), a sum of values times constants and a
+// constant offset in bytes: the addresses of one root lie in the root's object, and two with the same terms differ by
+// their constants. Integers are taken modulo 2^64, as addresses are, so only 64-bit adds, disjoint ors, subtractions
+// and shifts or multiplications by constants are looked through; any other value is a term of its own.
+struct Address
+{
+    llvm::Value *root = nullptr;
+    std::vector<std::pair<llvm::Value *, uint64_t>> terms;
+    uint64_t offset = 0;
+    bool Same(const Address &other) const { return root == other.root && terms == other.terms; }
+};
+
+void Linear(llvm::Value *value, uint64_t scale, std::map<llvm::Value *, uint64_t> &terms, uint64_t &offset, unsigned depth)
+{
+    if (auto *number = llvm::dyn_cast<llvm::ConstantInt>(value); number != nullptr && number->getBitWidth() <= 64) {
+        offset += scale * number->getValue().sext(64).getZExtValue();
+        return;
+    }
+    auto *operation = llvm::dyn_cast<llvm::BinaryOperator>(value);
+    if (depth != 0 && operation != nullptr && operation->getType()->isIntegerTy(64)) {
+        llvm::Value *left = operation->getOperand(0), *right = operation->getOperand(1);
+        auto *constant = llvm::dyn_cast<llvm::ConstantInt>(right);
+        switch (operation->getOpcode()) {
+        case llvm::Instruction::Or:
+            if (!llvm::cast<llvm::PossiblyDisjointInst>(operation)->isDisjoint()) break;
+            [[fallthrough]];
+        case llvm::Instruction::Add:
+            Linear(left, scale, terms, offset, depth - 1);
+            Linear(right, scale, terms, offset, depth - 1);
+            return;
+        case llvm::Instruction::Sub:
+            Linear(left, scale, terms, offset, depth - 1);
+            Linear(right, 0 - scale, terms, offset, depth - 1);
+            return;
+        case llvm::Instruction::Shl:
+            if (constant == nullptr || constant->getZExtValue() >= 64) break;
+            Linear(left, scale << constant->getZExtValue(), terms, offset, depth - 1);
+            return;
+        case llvm::Instruction::Mul:
+            if (constant == nullptr) break;
+            Linear(left, scale * constant->getZExtValue(), terms, offset, depth - 1);
+            return;
+        default:
+            break;
+        }
+    }
+    terms[value] += scale;
+}
+
+Address Decompose(llvm::Value *pointer, const llvm::DataLayout &layout)
+{
+    std::map<llvm::Value *, uint64_t> terms;
+    uint64_t offset = 0;
+    while (auto *gep = llvm::dyn_cast<llvm::GEPOperator>(pointer)) {
+        llvm::SmallMapVector<llvm::Value *, llvm::APInt, 4> variables;
+        llvm::APInt constant(64, 0);
+        if (!gep->isInBounds() || gep->getType()->isVectorTy() || layout.getIndexTypeSizeInBits(gep->getType()) != 64 ||
+            !gep->collectOffset(layout, 64, variables, constant))
+            break;
+        for (auto &[index, scale] : variables) Linear(index, scale.getZExtValue(), terms, offset, 8);
+        offset += constant.getZExtValue();
+        pointer = gep->getPointerOperand();
+    }
+    Address address{pointer, {}, offset};
+    for (auto &[value, scale] : terms)
+        if (scale != 0) address.terms.emplace_back(value, scale);
+    return address;
+}
+
+// A simple load or store of a block: its address, its size and the stretch of the block it executes with.
+struct Access
+{
+    unsigned region;
+    Address address;
+    uint64_t size;
+};
+
+// An insertelement chain that builds every lane of a vector from a simple load of its block, lane k's load at lane 0's
+// address plus k strides of one range, and the plan for it: pieces (vector loads of piece bytes) at offsets from lane
+// 0's address, out of whose concatenation one shufflevector takes the lanes.
+struct Gather
+{
+    llvm::InsertElementInst *end;
+    llvm::SmallVector<llvm::LoadInst *, 16> loads;
+    Address address;
+    uint64_t stride = 0, element = 0, span = 0, piece = 0;
+    llvm::LoadInst *last = nullptr;
+    unsigned position = 0, epoch = 0, region = 0;
+    llvm::SmallVector<int64_t, 4> starts;
+    uint64_t Pieces() const { return (span + piece - 1) / piece; }
+};
+
+// The gather the chain ending at end is, if it is one: at least four lanes of 1 to 8 bytes, each set once, a stride
+// apart that is a multiple of the lane size, within 64 bytes.
+std::optional<Gather> Chain(llvm::InsertElementInst *end, const llvm::DataLayout &layout)
+{
+    auto *type = llvm::cast<llvm::FixedVectorType>(end->getType());
+    llvm::Type *lane = type->getElementType();
+    unsigned lanes = type->getNumElements();
+    uint64_t bytes = layout.getTypeStoreSize(lane);
+    if (lanes < 4 || lanes > 64 || !(lane->isIntegerTy() || lane->isFloatingPointTy()) || bytes > 8 || !llvm::isPowerOf2_64(bytes) ||
+        layout.getTypeSizeInBits(lane) != bytes * 8)
+        return std::nullopt;
+    Gather gather{end};
+    gather.loads.assign(lanes, nullptr);
+    llvm::Value *vector = end;
+    while (auto *insert = llvm::dyn_cast<llvm::InsertElementInst>(vector)) {
+        auto *index = llvm::dyn_cast<llvm::ConstantInt>(insert->getOperand(2));
+        auto *load = llvm::dyn_cast<llvm::LoadInst>(insert->getOperand(1));
+        if ((insert != end && !insert->hasOneUse()) || insert->getParent() != end->getParent() || index == nullptr || index->getZExtValue() >= lanes ||
+            load == nullptr || !load->isSimple() || load->getType() != lane || load->getParent() != end->getParent() ||
+            gather.loads[index->getZExtValue()] != nullptr)
+            return std::nullopt;
+        gather.loads[index->getZExtValue()] = load;
+        vector = insert->getOperand(0);
+    }
+    if (!llvm::isa<llvm::UndefValue>(vector) || llvm::is_contained(gather.loads, nullptr)) return std::nullopt;
+    gather.address = Decompose(gather.loads[0]->getPointerOperand(), layout);
+    for (unsigned index = 1; index < lanes; ++index) {
+        Address other = Decompose(gather.loads[index]->getPointerOperand(), layout);
+        if (index == 1) gather.stride = other.offset - gather.address.offset;
+        if (!other.Same(gather.address) || other.offset - gather.address.offset != gather.stride * index) return std::nullopt;
+    }
+    gather.element = bytes;
+    gather.span = gather.stride * (lanes - 1) + bytes;
+    if (gather.stride < bytes || gather.stride % bytes != 0 || gather.span > 64) return std::nullopt;
+    return gather;
+}
+
+// Whether an instruction ends the stretch of a block in which accesses prove each other's bytes dereferenceable: a call,
+// which may free the object, or an instruction after which the block may not go on.
+bool Barrier(llvm::Instruction &instruction)
+{
+    return (llvm::isa<llvm::CallBase>(instruction) && !llvm::isa<llvm::IntrinsicInst>(instruction)) ||
+           !llvm::isGuaranteedToTransferExecutionToSuccessor(&instruction);
+}
+
+// Multiples of a power of two at or below and at or above a value.
+int64_t Floor(int64_t value, int64_t unit) { return value & -unit; }
+int64_t Ceil(int64_t value, int64_t unit) { return (value + unit - 1) & -unit; }
+
+// Plans the gathers of one block, in the order of their last loads. A gather's pieces read the bytes between and around
+// its lanes only where the block shows them dereferenceable: in the stretch the gather's loads execute with (no barrier
+// between), every simple access through the same root and terms is in the root's object, the object is contiguous, so
+// every byte from the lowest to the highest of those accesses is; so are the bytes the root is known to point to (an
+// alloca, a global, a dereferenceable argument or load) when the address has no terms. The pieces are 16 bytes (fewer for
+// a shorter gather), as few as cover the gather, inside those bytes; where they do not fit, the pieces start at the first
+// lane and end at the last one, overlapping, and a gather shorter than its piece reads two halves. Gathers that see one
+// memory (no write between them) share pieces at the same address, whose offsets interval stabbing picks.
+std::vector<Gather> Plan(llvm::BasicBlock &block, const llvm::DataLayout &layout)
+{
+    struct Place
+    {
+        unsigned position, epoch, region;
+    };
+    std::vector<Gather> gathers;
+    std::vector<Access> accesses;
+    llvm::DenseMap<llvm::Instruction *, Place> places;
+    unsigned position = 0, epoch = 0, region = 0;
+    for (auto &instruction : block) {
+        places[&instruction] = {position++, epoch, region};
+        auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction);
+        auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction);
+        if ((load != nullptr && load->isSimple()) || (store != nullptr && store->isSimple()))
+            accesses.push_back({region, Decompose(llvm::getLoadStorePointerOperand(&instruction), layout),
+                                layout.getTypeStoreSize(llvm::getLoadStoreType(&instruction)).getFixedValue()});
+        auto *insert = llvm::dyn_cast<llvm::InsertElementInst>(&instruction);
+        auto *next = insert != nullptr && insert->hasOneUse() ? llvm::dyn_cast<llvm::InsertElementInst>(*insert->user_begin()) : nullptr;
+        if (insert != nullptr && llvm::isa<llvm::FixedVectorType>(insert->getType()) && (next == nullptr || next->getOperand(0) != insert))
+            if (auto gather = Chain(insert, layout)) {
+                // The loads see one memory when nothing between them writes and execute together when no barrier is
+                // between them; the pieces load before the last of them.
+                bool together = true;
+                for (auto *lane : gather->loads) {
+                    Place place = places.lookup(lane);
+                    if (gather->last == nullptr) {
+                        gather->epoch = place.epoch;
+                        gather->region = place.region;
+                    }
+                    together &= place.epoch == gather->epoch && place.region == gather->region;
+                    if (gather->last == nullptr || place.position > gather->position) {
+                        gather->last = lane;
+                        gather->position = place.position;
+                    }
+                }
+                if (together) gathers.push_back(std::move(*gather));
+            }
+        if (Barrier(instruction)) ++region;
+        if (instruction.mayWriteToMemory()) ++epoch;
+    }
+    // The offsets, from lane 0, at which a gather's pieces may start one after the other.
+    struct Window
+    {
+        size_t gather;
+        int64_t low, high;
+    };
+    std::vector<Window> windows;
+    for (size_t index = 0; index < gathers.size(); ++index) {
+        Gather &gather = gathers[index];
+        auto element = static_cast<int64_t>(gather.element), span = static_cast<int64_t>(gather.span);
+        int64_t low = 0, high = span;
+        for (const Access &access : accesses)
+            if (access.region == gather.region && access.address.Same(gather.address)) {
+                auto relative = static_cast<int64_t>(access.address.offset - gather.address.offset);
+                low = std::min(low, relative);
+                high = std::max(high, relative + static_cast<int64_t>(access.size));
+            }
+        if (gather.address.terms.empty()) {
+            bool canBeNull = false, canBeFreed = false;
+            auto known = static_cast<int64_t>(gather.address.root->getPointerDereferenceableBytes(layout, canBeNull, canBeFreed));
+            int64_t start = -static_cast<int64_t>(gather.address.offset);
+            if (known > 0 && start < high && low < start + known) {
+                low = std::min(low, start);
+                high = std::max(high, start + known);
+            }
+        }
+        gather.piece = std::min<uint64_t>(16, llvm::PowerOf2Ceil(gather.span));
+        auto piece = static_cast<int64_t>(gather.piece), size = static_cast<int64_t>(gather.Pieces()) * piece;
+        int64_t first = Ceil(std::max(low, span - size), element), last = Floor(std::min<int64_t>(0, high - size), element);
+        if (first <= last) {
+            windows.push_back({index, first, last});
+        } else if (span < piece) {
+            gather.piece /= 2;
+            gather.starts = {0, span - piece / 2};
+        } else {
+            for (int64_t at = 0; at + 1 < static_cast<int64_t>(gather.Pieces()); ++at) gather.starts.push_back(at * piece);
+            gather.starts.push_back(span - piece);
+        }
+    }
+    std::vector<bool> placed(windows.size());
+    for (size_t index = 0; index < windows.size(); ++index) {
+        if (placed[index]) continue;
+        const Gather &reference = gathers[windows[index].gather];
+        // Offsets from the reference's lane 0, the same modulo the lane size in a class.
+        auto shift = [&](const Window &window) { return static_cast<int64_t>(gathers[window.gather].address.offset - reference.address.offset); };
+        std::vector<size_t> members;
+        for (size_t other = index; other < windows.size(); ++other) {
+            const Gather &gather = gathers[windows[other].gather];
+            if (!placed[other] && gather.epoch == reference.epoch && gather.address.Same(reference.address) &&
+                gather.loads[0]->getType() == reference.loads[0]->getType() && gather.piece == reference.piece &&
+                gather.Pieces() == reference.Pieces() && shift(windows[other]) % static_cast<int64_t>(gather.element) == 0) {
+                placed[other] = true;
+                members.push_back(other);
+            }
+        }
+        std::stable_sort(members.begin(), members.end(),
+                         [&](size_t left, size_t right) { return windows[left].high + shift(windows[left]) < windows[right].high + shift(windows[right]); });
+        std::optional<int64_t> stab;
+        for (size_t member : members) {
+            const Window &window = windows[member];
+            if (!stab || window.low + shift(window) > *stab) stab = window.high + shift(window);
+            Gather &gather = gathers[window.gather];
+            for (uint64_t at = 0; at < gather.Pieces(); ++at) gather.starts.push_back(*stab - shift(window) + static_cast<int64_t>(at * gather.piece));
+        }
+    }
+    std::stable_sort(gathers.begin(), gathers.end(), [](const Gather &left, const Gather &right) { return left.position < right.position; });
+    return gathers;
+}
+
+// The pieces one after the other, as a tree of concatenating shufflevectors; a piece without a partner gets undefined
+// lanes above it.
+llvm::Value *Join(llvm::IRBuilder<> &builder, llvm::SmallVector<llvm::Value *, 8> parts)
+{
+    while (parts.size() > 1) {
+        llvm::SmallVector<llvm::Value *, 8> pairs;
+        for (size_t index = 0; index < parts.size(); index += 2) {
+            unsigned lanes = LaneCount(parts[index]->getType());
+            llvm::SmallVector<int, 64> mask(lanes * 2);
+            std::iota(mask.begin(), mask.end(), 0);
+            if (index + 1 < parts.size()) {
+                pairs.push_back(builder.CreateShuffleVector(parts[index], parts[index + 1], mask));
+                continue;
+            }
+            std::fill(mask.begin() + lanes, mask.end(), -1);
+            pairs.push_back(builder.CreateShuffleVector(parts[index], mask));
+        }
+        parts = std::move(pairs);
+    }
+    return parts[0];
+}
+
+// Replaces each planned gather's chain by one shufflevector of its pieces' concatenation, at the chain's end, unless
+// apply is false, and returns how many pieces they load. A piece loads before the last load of the first gather that
+// uses it, from lane 0's address plus its offset, at the alignment lane 0's load guarantees there; gathers that see one
+// memory share it.
+unsigned Rewrite(std::vector<Gather> &gathers, bool apply)
+{
+    struct Piece
+    {
+        unsigned epoch;
+        Address address;
+        llvm::Type *lane;
+        uint64_t offset, size;
+        llvm::LoadInst *load;
+    };
+    std::vector<Piece> pieces;
+    for (Gather &gather : gathers) {
+        llvm::Type *lane = gather.loads[0]->getType();
+        auto *type = llvm::FixedVectorType::get(lane, static_cast<unsigned>(gather.piece / gather.element));
+        llvm::SmallVector<llvm::Value *, 8> parts;
+        for (int64_t start : gather.starts) {
+            uint64_t offset = gather.address.offset + static_cast<uint64_t>(start);
+            auto found = std::find_if(pieces.begin(), pieces.end(), [&](const Piece &piece) {
+                return piece.epoch == gather.epoch && piece.lane == lane && piece.offset == offset && piece.size == gather.piece &&
+                       piece.address.Same(gather.address);
+            });
+            if (found != pieces.end()) {
+                parts.push_back(found->load);
+                continue;
+            }
+            llvm::LoadInst *load = nullptr;
+            if (apply) {
+                llvm::IRBuilder<> builder(gather.last);
+                llvm::Value *pointer = gather.loads[0]->getPointerOperand();
+                if (start != 0) pointer = builder.CreateConstInBoundsGEP1_64(builder.getInt8Ty(), pointer, static_cast<uint64_t>(start));
+                load = builder.CreateAlignedLoad(type, pointer, llvm::commonAlignment(gather.loads[0]->getAlign(), static_cast<uint64_t>(start)));
+            }
+            pieces.push_back({gather.epoch, gather.address, lane, offset, gather.piece, load});
+            parts.push_back(load);
+        }
+        if (!apply) continue;
+        auto per = static_cast<int64_t>(gather.piece / gather.element), element = static_cast<int64_t>(gather.element);
+        llvm::SmallVector<int, 64> mask(gather.loads.size());
+        for (size_t index = 0; index < mask.size(); ++index) {
+            auto at = static_cast<int64_t>(index * gather.stride);
+            for (size_t part = 0; part < gather.starts.size(); ++part)
+                if (at >= gather.starts[part] && at + element <= gather.starts[part] + static_cast<int64_t>(gather.piece)) {
+                    mask[index] = static_cast<int>(static_cast<int64_t>(part) * per + (at - gather.starts[part]) / element);
+                    break;
+                }
+        }
+        llvm::IRBuilder<> builder(gather.end);
+        llvm::Value *gathered = builder.CreateShuffleVector(Join(builder, parts), mask);
+        gather.end->replaceAllUsesWith(gathered);
+        llvm::RecursivelyDeleteTriviallyDeadInstructions(gather.end);
+    }
+    return static_cast<unsigned>(pieces.size());
+}
+
+} // namespace
+
+// Gathers of evenly strided elements of one range (SV-40), which the loop vectorizer's SSE2 cost model leaves as one
+// scalar load and insertelement per lane (x264's frame_init_lowres_core reads 144 bytes two apart that way): each
+// becomes wide loads and one shufflevector, which the typed lowering runs as uzp1/uzp2, packs or pshufb. Only bytes
+// the block shows dereferenceable are read (Plan). With 256-bit fragments, whose IR comes from the AVX2 cost model that
+// loads interleaved groups whole, gathers are left alone. Returns how many gathers the function has and stores their
+// lanes and the wide loads they take; rewrites them unless apply is zero, so that the typed lowering's cost can count
+// the inserts it saves first.
+extern "C" unsigned llvmnet_strided_gathers(LLVMValueRef functionRef, unsigned fragmentBits, int apply, unsigned *lanes, unsigned *loads)
+{
+    auto *function = llvm::unwrap<llvm::Function>(functionRef);
+    const llvm::DataLayout &layout = function->getParent()->getDataLayout();
+    unsigned gathers = 0;
+    *lanes = 0;
+    *loads = 0;
+    if (fragmentBits != 128) return 0;
+    for (auto &block : *function) {
+        std::vector<Gather> planned = Plan(block, layout);
+        gathers += static_cast<unsigned>(planned.size());
+        for (const Gather &gather : planned) *lanes += static_cast<unsigned>(gather.loads.size());
+        *loads += Rewrite(planned, apply != 0);
+    }
+    return gathers;
 }

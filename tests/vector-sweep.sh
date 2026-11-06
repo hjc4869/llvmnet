@@ -6,11 +6,12 @@
 # as natively (SV-09).
 # vector-loops, whose loops the vectorizers transform, must run as vector code (ADR-16 Level 1): its
 # images call Vector128. vector-pixels has the encoder kernels whose ARM64 forms differ from x64's (SV-34 to SV-39); it
-# also runs as NativeAOT and without hardware intrinsics, the helpers' portable paths.
+# also runs as NativeAOT and without hardware intrinsics, the helpers' portable paths. strided-gathers reads its
+# sources against unmapped pages (SV-40).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"
-fixtures=(vector-loops vector-pixels core math intrinsics int128 unaligned)
+fixtures=(vector-loops vector-pixels core math intrinsics int128 unaligned strided-gathers)
 profiles=("vectorize:-O3 -fvectorize -fslp-vectorize" "fast-math:-O3 -ffast-math -fvectorize -fslp-vectorize" "avx2:-O3 -march=x86-64-v3 -fvectorize -fslp-vectorize")
 matched=0 rejected=() vector_calls=()
 for profile in "${profiles[@]}"; do

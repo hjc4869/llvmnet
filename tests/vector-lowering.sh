@@ -119,4 +119,43 @@ for runtime in portable system; do
 done
 "$llvmnet" --runtime=portable --vector-lowering=typed --nativeaot "$test_output/ir-portable.bc" -o "$test_output/ir-aot" >"$test_output/ir-aot.log" 2>&1
 "$test_output/ir-aot"
-printf 'PASS: vector extensions at -O0 to -O3 match native in both modes and both vector lowerings, under the JIT with and without hardware intrinsics and as NativeAOT, as Vector128 code and at 256 bits, and the IR fixtures typed at both widths\n'
+# Strided gathers as wide loads and a shuffle (SV-40). tests/ir/strided-gathers.ll's -v lines tell which bytes around
+# its lanes a gather may read: one load where the object's size or another access of the range covers a 16-byte
+# window, the pieces between the first and the last lane where nothing does, none for lanes that see a store or are not
+# inbounds of one base. tests/c/strided-gathers.c (also in vector-sweep.sh) reads its sources against unmapped pages,
+# which fault natively and in system mode: at -O1 and -O3, under the JIT with SSE2 only (the packs) and without
+# hardware intrinsics, and as NativeAOT at x86-64-v2 (the default) and the baseline instruction set.
+for runtime in portable system; do
+    tag_ir "$runtime" "$root/tests/ir/strided-gathers.ll" "$test_output/gathers-$runtime.bc"
+    "$llvmnet" --runtime="$runtime" -v "$test_output/gathers-$runtime.bc" -o "$test_output/gathers-$runtime.dll" 2>"$test_output/gathers-$runtime.log"
+    for knob in DOTNET_EnableHWIntrinsic=1 DOTNET_EnableSSE42=0 DOTNET_EnableHWIntrinsic=0; do env "$knob" dotnet "$test_output/gathers-$runtime.dll"; done
+done
+plans="$(grep -E '^llvmnet: [a-z]+: [0-9]+ strided gathers? from' "$test_output/gathers-portable.log" | sed -E 's/^llvmnet: //' | sort)"
+expected="called: 1 strided gather from 2 wide loads
+covered: 1 strided gather from 1 wide load
+deref: 1 strided gather from 1 wide load
+doubles: 1 strided gather from 4 wide loads
+halves: 1 strided gather from 3 wide loads
+isolated: 1 strided gather from 2 wide loads
+known: 1 strided gather from 1 wide load
+shared: 2 strided gathers from 1 wide load"
+if [[ "$plans" != "$expected" ]]; then
+    printf 'FAIL: tests/ir/strided-gathers.ll: the gathers were planned as\n%s\nexpected\n%s\n' "$plans" "$expected" >&2
+    exit 1
+fi
+gathers="$root/tests/c/strided-gathers.c"
+for level in -O1 -O3; do
+    clang-22 "$level" "$gathers" -o "$test_output/gathers-native$level"
+    "$test_output/gathers-native$level" >"$test_output/gathers-native$level.txt"
+    for runtime in portable system; do
+        "$llvmnet" --runtime="$runtime" "$level" "$gathers" -o "$test_output/gathers-c-$runtime$level.dll"
+        for knob in DOTNET_EnableHWIntrinsic=1 DOTNET_EnableSSE42=0 DOTNET_EnableHWIntrinsic=0; do
+            env "$knob" dotnet "$test_output/gathers-c-$runtime$level.dll" | diff -u "$test_output/gathers-native$level.txt" -
+        done
+    done
+done
+for set in x86-64-v2 baseline; do
+    "$llvmnet" --runtime=system -O3 --nativeaot --aot-instruction-set "$set" "$gathers" -o "$test_output/gathers-aot-$set" >"$test_output/gathers-aot-$set.log" 2>&1
+    "$test_output/gathers-aot-$set" | diff -u "$test_output/gathers-native-O3.txt" -
+done
+printf 'PASS: vector extensions at -O0 to -O3 match native in both modes and both vector lowerings, under the JIT with and without hardware intrinsics and as NativeAOT, as Vector128 code and at 256 bits, the IR fixtures typed at both widths, and strided gathers planned and read within their ranges\n'
