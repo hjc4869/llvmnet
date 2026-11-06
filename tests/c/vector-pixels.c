@@ -172,7 +172,15 @@ NOINLINE static i32x4 shuffles32(i32x4 a, i32x4 b)
     r ^= __builtin_shufflevector(b, b, 1, 1, 3, 3) * 17;
     r += __builtin_shufflevector(a, a, 3, 2, 1, 0);
     r += __builtin_shufflevector(b, a, 3, 4, 5, 6);
+    r ^= __builtin_shufflevector(b, b, 0, 0, 2, 2) * 21;
     return r;
+}
+
+typedef int64_t i64x2 __attribute__((vector_size(16)));
+
+NOINLINE static i64x2 shuffles64(i64x2 a, i64x2 b)
+{
+    return __builtin_shufflevector(a, a, 1, 0) * 3 + __builtin_shufflevector(a, b, 1, 2) - __builtin_shufflevector(b, a, 0, 3);
 }
 
 NOINLINE static i16x8 shuffles16(i16x8 a, i16x8 b)
@@ -281,6 +289,9 @@ int main(void)
         i32x4 b32 = {(int32_t)hash(k + 9), (int32_t)hash(k + 10), (int32_t)hash(k + 11), (int32_t)hash(k + 12)};
         i32x4 r32 = shuffles32(a32, b32);
         for (int i = 0; i < 4; i++) h = mix(h, (uint32_t)r32[i]);
+        i64x2 a64 = {(int64_t)hash(k + 20) << 32 | hash(k + 21), (int64_t)hash(k + 22)}, b64 = {(int64_t)hash(k + 23), -(int64_t)hash(k + 24) << 16};
+        i64x2 r64 = shuffles64(a64, b64);
+        for (int i = 0; i < 2; i++) h = mix(h, (uint64_t)r64[i]);
         i16x8 a16, b16;
         for (int i = 0; i < 8; i++) a16[i] = (int16_t)hash(20 * k + i), b16[i] = (int16_t)hash(20 * k + i + 8);
         i16x8 r16 = shuffles16(a16, b16);

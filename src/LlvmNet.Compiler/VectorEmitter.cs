@@ -1554,11 +1554,12 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 }
                 else
                 {
-                    // The halves of a Vector128 as the lanes of a Vector128<double>: unpcklpd and unpckhpd, or ins on
-                    // ARM64. Vector64 has no hardware acceleration on x64, where Create of two goes through memory.
+                    // The halves of a Vector128 as the lanes of a Vector128<double>: unpcklpd and unpckhpd on x64, one ins or
+                    // ext on ARM64 (Vectors.Halves, SV-38). Vector64 has no hardware acceleration on x64, where Create of two
+                    // goes through memory.
                     SourceElement(lower);
                     SourceElement(upper);
-                    il.Emit(OpCodes.Call, Api("Create", null, typeof(double), typeof(double)));
+                    il.Emit(OpCodes.Call, Helper(nameof(Vectors.Halves), null, V(typeof(double)), typeof(int), V(typeof(double)), typeof(int)));
                     As(typeof(double), result.Lane);
                 }
                 return;
@@ -1596,7 +1597,6 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             Source(half.Operand, half.Fragment);
             As(result.Lane, typeof(double));
             il.Emit(half.Upper ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
-            il.Emit(OpCodes.Call, Api("GetElement", typeof(double), V(typeof(double)), typeof(int)));
         }
 
         void Permute(int operand, int fragment, int[] pattern)
@@ -1608,6 +1608,14 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             Type indices = IntegerLane(result.Lane);
             for (int lane = 0; lane < per; lane++) Scalar(indices, pattern[lane] >= 0 ? pattern[lane] : pattern.All(element => element < 0 || element == fill) ? fill : lane);
             il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(indices, per).ToArray()));
+            if (!Wide && PermuteForm(pattern, result.LaneBits / 8) is int form and not 0)
+            {
+                // One permute instruction on ARM64 where the indices are one, the constant Shuffle elsewhere (SV-38).
+                As(indices, result.Lane);
+                il.Emit(OpCodes.Ldc_I4, form);
+                il.Emit(OpCodes.Call, Helper(nameof(Vectors.Shuffle), result.Lane, V(result.Lane), V(result.Lane), typeof(int)));
+                return;
+            }
             il.Emit(OpCodes.Call, Api("Shuffle", null, V(result.Lane), V(indices)));
         }
 
@@ -1637,6 +1645,30 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             }
             return lower is { } low && upper is { } high ? (low, high) : null;
         }
+    }
+
+    /// <summary>
+    /// The AdvSimd permute (<see cref="Vectors.Shuffle{T}"/>'s form) that gives a shuffle of one fragment, pattern[i] the
+    /// source lane of result lane i or -1 where it is free, or 0 for none (SV-38): zip1, zip2, uzp1, uzp2, trn1 or trn2 of
+    /// the fragment with itself, a rotation (ext) or the reversal of lanes within 16-, 32- or 64-bit groups (rev16, rev32,
+    /// rev64). A broadcast is left to RyuJIT, which makes it a dup.
+    /// </summary>
+    private static int PermuteForm(int[] pattern, int laneBytes)
+    {
+        int per = pattern.Length;
+        if (per < 2 || pattern.Where(element => element >= 0).Distinct().Count() <= 1) return 0;
+        bool Matches(Func<int, int> lane) => Enumerable.Range(0, per).All(index => pattern[index] < 0 || pattern[index] == lane(index) % per);
+        if (Matches(index => index / 2)) return Vectors.PermuteZip1;
+        if (Matches(index => per / 2 + index / 2)) return Vectors.PermuteZip2;
+        if (Matches(index => 2 * index)) return Vectors.PermuteUnzip1;
+        if (Matches(index => 2 * index + 1)) return Vectors.PermuteUnzip2;
+        if (Matches(index => index & ~1)) return Vectors.PermuteTranspose1;
+        if (Matches(index => index | 1)) return Vectors.PermuteTranspose2;
+        for (int count = 1; count < per; count++)
+            if (Matches(index => index + count)) return Vectors.PermuteRotate | count << 5;
+        for (int group = 2; group * laneBytes <= 8; group *= 2)
+            if (Matches(index => index / group * group + group - 1 - index % group)) return Vectors.PermuteReverse | group * laneBytes << 5;
+        return 0;
     }
 
     // ---- Reductions ----
@@ -1785,7 +1817,15 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             il.Emit(OpCodes.Ldloc, folded);
             for (int element = 0; element < per; element++) Scalar(indices, element < width ? element + width : element);
             il.Emit(OpCodes.Call, Lookup(owner, "Create", null, Enumerable.Repeat(indices, per).ToArray()));
-            il.Emit(OpCodes.Call, Lookup(owner, "Shuffle", null, [fragment, Fragment(indices)]));
+            if (owner == typeof(Vector128))
+            {
+                // The upper lanes to the lower ones: an ext on ARM64, where the other lanes are free (SV-38).
+                Reinterpret(Fragment(indices), fragment);
+                il.Emit(OpCodes.Ldc_I4, Vectors.PermuteRotate | width << 5);
+                il.Emit(OpCodes.Call, Lookup(typeof(Vectors), nameof(Vectors.Shuffle), lane, [fragment, fragment, typeof(int)]));
+            }
+            else
+                il.Emit(OpCodes.Call, Lookup(owner, "Shuffle", null, [fragment, Fragment(indices)]));
             il.Emit(OpCodes.Call, Lookup(owner, operation, lane, [fragment, fragment]));
             il.Emit(OpCodes.Stloc, folded);
         }

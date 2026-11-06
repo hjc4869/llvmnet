@@ -12,6 +12,9 @@ namespace LlvmNet.Runtime;
 /// </summary>
 public static unsafe class Vectors
 {
+    // The immediates of the permutes and lane inserts (ExtractVector128, InsertSelectedScalar) are constants once the helpers
+    // are inlined at the lowering's call sites, which pass constant forms and halves (X86.cs explains the same pragma).
+#pragma warning disable CA1857
     /// <summary>Reads <paramref name="size"/> bytes (1 to 15) into the low lanes of a vector, zero above.</summary>
     /// <remarks>On ARM64 8 and 4 bytes are one ldr d or ldr s, which zeroes the rest of the register (as the 12 bytes'
     /// ldr d does before ld1 fills lane 2); CreateScalar of an integer was movi, ldr x and ins (SV-34). ToVector128Unsafe
@@ -464,6 +467,97 @@ public static unsafe class Vectors
         Vector128<long> sums = X86.Psadbw(left, right).AsInt64();
         return bytes <= 8 ? sums.GetElement(0) : sums.GetElement(0) + sums.GetElement(1);
     }
+
+    // Constant shuffles of one source that AdvSimd does in one instruction (VectorEmitter.Gather, SV-38). RyuJIT compiles
+    // Vector128.Shuffle with constant indices to tbl and a constant load on ARM64, apart from a broadcast (dup) and a
+    // rotation by half the vector (ext); the interleaves of a vector with itself (zip1, zip2), its even and odd lanes
+    // (uzp1, uzp2), transposes (trn1, trn2), rotations (ext) and the reversals of lanes within 16-, 32- and 64-bit groups
+    // (rev16, rev32, rev64) are one instruction. form names the instruction, a rotation's first lane or a reversal's group
+    // bytes above bit 5; elsewhere Shuffle with the constant indices, as before.
+
+    public const int PermuteZip1 = 1, PermuteZip2 = 2, PermuteUnzip1 = 3, PermuteUnzip2 = 4, PermuteTranspose1 = 5, PermuteTranspose2 = 6,
+        PermuteRotate = 7, PermuteReverse = 8;
+
+    /// <summary>A shuffle of one vector by constant indices: <paramref name="form"/>'s permute on ARM64, Shuffle elsewhere.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<T> Shuffle<T>(Vector128<T> value, Vector128<T> indices, int form) where T : unmanaged =>
+        AdvSimd.Arm64.IsSupported ? sizeof(T) switch
+        {
+            1 => Permute(value.AsByte(), form & 31, form >> 5).As<byte, T>(),
+            2 => Permute(value.AsUInt16(), form & 31, form >> 5).As<ushort, T>(),
+            4 => Permute(value.AsUInt32(), form & 31, form >> 5).As<uint, T>(),
+            _ => Permute(value.AsUInt64(), form & 31, form >> 5).As<ulong, T>(),
+        } : ConstantShuffle(value, indices);
+
+    /// <summary>Vector128.Shuffle of the lane type, the indices of floating-point lanes as integers.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<T> ConstantShuffle<T>(Vector128<T> value, Vector128<T> indices) where T : unmanaged
+    {
+        if (typeof(T) == typeof(float)) return Vector128.Shuffle(value.AsSingle(), indices.AsInt32()).As<float, T>();
+        if (typeof(T) == typeof(double)) return Vector128.Shuffle(value.AsDouble(), indices.AsInt64()).As<double, T>();
+        if (typeof(T) == typeof(sbyte)) return Vector128.Shuffle(value.AsSByte(), indices.AsSByte()).As<sbyte, T>();
+        if (typeof(T) == typeof(byte)) return Vector128.Shuffle(value.AsByte(), indices.AsByte()).As<byte, T>();
+        if (typeof(T) == typeof(short)) return Vector128.Shuffle(value.AsInt16(), indices.AsInt16()).As<short, T>();
+        if (typeof(T) == typeof(ushort)) return Vector128.Shuffle(value.AsUInt16(), indices.AsUInt16()).As<ushort, T>();
+        if (typeof(T) == typeof(int)) return Vector128.Shuffle(value.AsInt32(), indices.AsInt32()).As<int, T>();
+        if (typeof(T) == typeof(uint)) return Vector128.Shuffle(value.AsUInt32(), indices.AsUInt32()).As<uint, T>();
+        if (typeof(T) == typeof(long)) return Vector128.Shuffle(value.AsInt64(), indices.AsInt64()).As<long, T>();
+        return Vector128.Shuffle(value.AsUInt64(), indices.AsUInt64()).As<ulong, T>();
+    }
+
+    // The permutes by lane size; count is a rotation's first lane or a reversal's group bytes.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<byte> Permute(Vector128<byte> value, int kind, int count) => kind switch
+    {
+        PermuteZip1 => AdvSimd.Arm64.ZipLow(value, value),
+        PermuteZip2 => AdvSimd.Arm64.ZipHigh(value, value),
+        PermuteUnzip1 => AdvSimd.Arm64.UnzipEven(value, value),
+        PermuteUnzip2 => AdvSimd.Arm64.UnzipOdd(value, value),
+        PermuteTranspose1 => AdvSimd.Arm64.TransposeEven(value, value),
+        PermuteTranspose2 => AdvSimd.Arm64.TransposeOdd(value, value),
+        PermuteRotate => AdvSimd.ExtractVector128(value, value, (byte)count),
+        _ => count == 2 ? AdvSimd.ReverseElement8(value.AsInt16()).AsByte()
+            : count == 4 ? AdvSimd.ReverseElement8(value.AsInt32()).AsByte() : AdvSimd.ReverseElement8(value.AsInt64()).AsByte(),
+    };
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<ushort> Permute(Vector128<ushort> value, int kind, int count) => kind switch
+    {
+        PermuteZip1 => AdvSimd.Arm64.ZipLow(value, value),
+        PermuteZip2 => AdvSimd.Arm64.ZipHigh(value, value),
+        PermuteUnzip1 => AdvSimd.Arm64.UnzipEven(value, value),
+        PermuteUnzip2 => AdvSimd.Arm64.UnzipOdd(value, value),
+        PermuteTranspose1 => AdvSimd.Arm64.TransposeEven(value, value),
+        PermuteTranspose2 => AdvSimd.Arm64.TransposeOdd(value, value),
+        PermuteRotate => AdvSimd.ExtractVector128(value, value, (byte)count),
+        _ => count == 4 ? AdvSimd.ReverseElement16(value.AsInt32()).AsUInt16() : AdvSimd.ReverseElement16(value.AsInt64()).AsUInt16(),
+    };
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<uint> Permute(Vector128<uint> value, int kind, int count) => kind switch
+    {
+        PermuteZip1 => AdvSimd.Arm64.ZipLow(value, value),
+        PermuteZip2 => AdvSimd.Arm64.ZipHigh(value, value),
+        PermuteUnzip1 => AdvSimd.Arm64.UnzipEven(value, value),
+        PermuteUnzip2 => AdvSimd.Arm64.UnzipOdd(value, value),
+        PermuteTranspose1 => AdvSimd.Arm64.TransposeEven(value, value),
+        PermuteTranspose2 => AdvSimd.Arm64.TransposeOdd(value, value),
+        PermuteRotate => AdvSimd.ExtractVector128(value, value, (byte)count),
+        _ => AdvSimd.ReverseElement32(value.AsInt64()).AsUInt32(),
+    };
+
+    // Two 64-bit lanes: a single-source zip, unzip or transpose is a broadcast, which VectorEmitter leaves to RyuJIT.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<ulong> Permute(Vector128<ulong> value, int kind, int count) => AdvSimd.ExtractVector128(value, value, (byte)count);
+
+    /// <summary>A half of each of two vectors of two 64-bit lanes as the lower and the upper half of the result: one ins or
+    /// ext on ARM64 (SV-38), where Create of the two lanes is dup and ins.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<double> Halves(Vector128<double> lower, int lowerHalf, Vector128<double> upper, int upperHalf) => AdvSimd.Arm64.IsSupported
+        ? lowerHalf == 0 ? AdvSimd.Arm64.InsertSelectedScalar(lower, 1, upper, (byte)upperHalf)
+            : upperHalf == 1 ? AdvSimd.Arm64.InsertSelectedScalar(upper, 0, lower, 1) : AdvSimd.ExtractVector128(lower, upper, 1)
+        : Vector128.Create(lower.GetElement(lowerHalf), upper.GetElement(upperHalf));
 
     // Scalars that become vector lanes and that ILC must not fold as constants (VectorEmitter.LoadLane): function addresses,
     // relocatable constants to ILC, which a folded Vector128.Create keeps as their compile-time handle values.

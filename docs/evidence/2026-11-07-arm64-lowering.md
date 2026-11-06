@@ -6,7 +6,7 @@ Host `mainmac`: Apple M6 (12 cores), macOS 27.2, .NET 10.0.14 (SDK 10.0.403, ILC
 
 The x86 evaluation's portable bitcode objects (`-O3`, the vectorizers' x86-64 cost model) are relinked with each compiler. The ARM64 code is read from RyuJIT's own listing: the program is linked as a JIT image and run for three frames on the Mac with `DOTNET_TieredCompilation=0` and `DOTNET_JitDisasm` naming the hot functions, which gives NativeAOT's instruction selection in under a second per change (counts below are instructions per function, without alignment padding). Timings are NativeAOT: each compiler writes an `--aot-project`, published on the Mac with `dotnet publish -r osx-arm64`, then timed by the x86 evaluation's `run-mac.py`: median of three, round-robin with native clang-22 NEON, every run from a fresh copy of the executable. macOS has no CPU affinity; the Mac was otherwise idle. Every build of every step wrote native's `BuckBunny_New.264` (md5 `225bcd8b…`) and `x264_stats.log` (`15c045d5…`).
 
-x64 must keep its code or get better. Where the ARM64 form is a branch on `AdvSimd.IsSupported` (a constant for the JIT and for ILC), x64 compiles what it compiled before; the check is x264's NativeAOT image for `linux-x64` (`--aot-debug`), whose `__managedcode` section disassembles to the same text before and after.
+x64 must keep its code or get better. Where the ARM64 form is a branch on `AdvSimd.IsSupported` (a constant for the JIT and for ILC), x64 compiles what it compiled before. The check is x264's NativeAOT image for `linux-x64` (`--aot-debug`): its `__managedcode` section is disassembled before and after each step and compared function by function, addresses aside; each section says which functions changed and how. SV-39 was done before SV-38, so its tables follow that order.
 
 ## SV-34: narrow vector loads and stores as one instruction
 
@@ -99,6 +99,22 @@ x264 takes 9.79 s against SV-36's 10.17 in the same rounds (native 5.80), 3.7% f
 
 **Correctness.** `vector-pixels.c` has differences and squares of rows of 4, 8 and 16 bytes (twice and four times the width), sums of bytes and halfwords and `tall_differences`, one function of 600 values in the order that exposed the shared local; it and the semantics probes print native's output on the M6 and on Linux ARM64 under the JIT with and without hardware intrinsics, and `vector-sweep.sh` checks that `--report-simd` names the widening helpers.
 
+## SV-38: constant shuffles of one source as one permute
+
+RyuJIT compiles `Vector128.Shuffle` with constant indices on ARM64 to `tbl` with a constant loaded from memory, except a broadcast (`dup`) and a rotation by half the vector (`ext`); a probe on the M6 shows `tbl` for `<1,0,3,2>`, `<1,2,3,0>`, `<0,0,2,2>`, `<0,0,1,1>`, `<3,2,1,0>` and the 16-bit `<1,0,3,2,...>`, where AdvSimd has `rev64`, `ext`, `trn1`, `zip1` and `rev32`. x264's `satd_8x4`, `sa8d_8x8` and `x264_mb_encode_8x8_chroma` swap the 32-bit lanes of each pair (`<1,0,3,2>`) in their Hadamard butterflies. A vector built from a half of each of two (`<0,1,6,7>`, the lowering's `Create` of two 64-bit lanes) was `dup` and `ins` where one `ins` does it, and the reduction tree's shuffles (`<2,3,2,3>`, `<1,1,2,3>`) were `tbl`.
+
+`Vectors.Shuffle(value, indices, form)` now takes, on ARM64, the permute that `VectorEmitter.PermuteForm` finds for a shuffle of one fragment, free lanes matching anything: `zip1`, `zip2`, `uzp1`, `uzp2`, `trn1` or `trn2` of the fragment with itself, `ext` for a rotation, `rev16`, `rev32` or `rev64` for lanes reversed within groups; elsewhere it is `Vector128.Shuffle` with the same constant indices. `Vectors.Halves` is one `ins` (or `ext`) on ARM64 and `Create` of the two lanes elsewhere, and the reduction tree brings each upper half down with an `ext`. Shuffles of two fragments keep their form here: SV-40 makes their stride-2 de-interleaves `uzp1` and `uzp2`, and the other two-source interleaves (x264's `pixel_hadamard_ac`, which this workload does not run) are left as they are.
+
+| Function (ARM64 instructions) | SV-39 | SV-38 |
+| --- | ---: | ---: |
+| `x264_pixel_satd_8x4` | 135 | 127 |
+| `quant_4x4` | 148 | 146 |
+| `mc_chroma` | 285 | 278 |
+
+x264 takes 9.60 s against SV-39's 9.62 in the same rounds (native 5.83): no measurable change, as a `tbl` whose index vector RyuJIT hoists costs about what the permute does on the M6. x64's code is the same in every function but three, which differ in alignment padding and a few register moves.
+
+**Correctness.** `vector-pixels.c` shuffles 8-, 16-, 32- and 64-bit lanes and floats of one and two sources (reversals, rotations, interleaves, even and odd lanes, transposes, halves, and results of half a fragment whose upper lanes are free); it prints native's output on the M6 and on Linux ARM64 with and without hardware intrinsics, as do the semantics probes, and `vector-sweep.sh` checks that the report names `Vectors.Shuffle` and `Vectors.Halves`.
+
 ## SV-39: abs2's sign spread as one arithmetic shift
 
 x264's `abs2` takes the absolute value of the two 16-bit halves of a 32-bit lane: `((a >> 15) & 0x10001) * 0xffff` spreads each half's sign over that half, then `(a + s) ^ s`. The vectorizers keep the multiplication, so `satd_8x4`, `sa8d_8x8` and `hadamard_ac` ran `ushr`, `and` (with a `movi` constant) and `mul` per vector on ARM64 (on x64 `psrld`, `pand` and `pmulld`; native SSE2 code shifts, masks, shifts left and subtracts). Native AArch64 code is one `cmlt` per vector: LLVM's AArch64 backend folds the shape (`performMulVectorCmpZeroCombine`).
@@ -115,3 +131,37 @@ The rule is generic: in lanes of 2h bits, `mul(and(lshr(x, h - 1), 1 | 1 << h), 
 x264 takes 9.60 s against SV-37's 9.81 on the M6 in the same rounds (native 5.81), 2.1% faster. On x64 the four functions with the shape (`satd_8x4`, `satd_4x4`, `sa8d_8x8`, `pixel_hadamard_ac`) are shorter, each `psrld`, `pand` and `pmulld` one `psraw`, and `pixel_hadamard_ac` has 58 fewer register moves; two other functions differ only in alignment padding.
 
 **Correctness.** [tests/ir/vector-sign-halves.ll](../../tests/ir/vector-sign-halves.ll) computes the shape in 16-, 32- and 64-bit lanes, with the and's operands either way round, and three look-alikes (another factor, another shift, the factor first), and compares each with the halves' arithmetic shift computed directly; `ir.sh` runs it natively and in both modes, `vector-lowering.sh` without hardware intrinsics and at 256 bits and checks that only the look-alikes multiply. It passes on the M6 and on Linux ARM64 with and without hardware intrinsics, at 128 and 256 bits, and `vector-pixels.c`'s `hadamard` prints native's output there.
+
+## The result
+
+| Step | x264 on the M6 (s) | native NEON in the same rounds (s) |
+| --- | ---: | ---: |
+| base (`22a0f55`) | 11.18 | 5.76 |
+| SV-34 | 10.38 | 5.76 |
+| SV-35 | 10.32 | 5.88 |
+| SV-36 | 10.16 | 5.81 |
+| SV-37 | 9.79 | 5.80 |
+| SV-39 | 9.60 | 5.81 |
+| SV-38 | 9.60 | 5.83 |
+
+Base and final in one batch: 11.23 s and 9.58 s against native's 5.83, 1.93 times native before and 1.64 after (14.7% faster). The final build's profile (the Mac sampler on an `--aot-debug` publish, scaled to the timed medians) against native's:
+
+| Function | native (s) | base (s) | final (s) |
+| --- | ---: | ---: | ---: |
+| `frame_init_lowres_core` | 0.03 | 1.59 | 1.60 |
+| `x264_pixel_satd_8x4` | 0.80 | 2.08 | 1.28 |
+| `get_ref` | 0.62 | 0.93 | 0.77 |
+| `hpel_filter` | 0.28 | 0.58 | 0.39 |
+| `x264_me_search_ref` | 0.30 | 0.51 | 0.49 |
+| `refine_subpel` | 0.25 | 0.41 | 0.39 |
+| `x264_pixel_sad_x4_8x8` | 0.13 | 0.34 | 0.16 |
+| `quant_4x4` | 0.08 | 0.28 | 0.21 |
+| `x264_slicetype_mb_cost` | 0.14 | 0.29 | 0.25 |
+| `x264_pixel_sad_16x16` | 0.07 | 0.20 | 0.13 |
+
+The remaining gap is 3.75 s, 42% of it `frame_init_lowres_core`'s strided byte gathers (SV-40). Of the rest, `satd_8x4` is 127 ARM64 instructions against native's 79: the x86 IR computes on four 32-bit lanes holding pairs of 16-bit differences, as the C code writes them, with its shuffles and adds per pair of rows, where native AArch64 code works on eight halfwords. The SADs reduce each row on its own as the x86 IR does, where native AArch64 code accumulates and reduces once, and SV-21's accumulator loops still compose psadbw's two sums as `uabd` and three `uaddlp`, where `udot` with ones would take two steps.
+
+On x64 the same NativeAOT relink (pinned to one core, fresh copies, median of three on the shared host) takes 18.21 s after the series against 18.85 s before, both with native's output: SV-39's shifts and SV-36's dropped zero are the main code differences.
+
+The cross-platform bundle built from the final tree (70 fixtures, `vector-pixels` among them) passes on the M6 under the JIT and as NativeAOT (91 runs, 4 skipped for want of GLES and Vulkan libraries) and on Linux ARM64 under the JIT in the arm64 container (68 runs, 2 skipped).
+
