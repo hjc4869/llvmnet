@@ -148,7 +148,10 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
     {
         if (offset == 0)
             return;
-        Il.Emit(OpCodes.Ldc_I8, offset);
+        if (offset is >= int.MinValue and <= int.MaxValue)
+            Il.Emit(OpCodes.Ldc_I4, (int)offset);
+        else
+            Il.Emit(OpCodes.Ldc_I8, offset);
         Il.Emit(OpCodes.Conv_I);
         Il.Emit(OpCodes.Add);
     }
@@ -496,6 +499,8 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
     {
         Load(Llvm.LLVMGetOperand(value, 0));
         nint type = Llvm.LLVMGetGEPSourceElementType(value);
+        // Constant indices and fields add up to one offset, added last (GEPs are computed at each use, PF-23).
+        long offset = 0;
         for (uint index = 1; index < Llvm.LLVMGetNumOperands(value); index++)
         {
             nint operand = Llvm.LLVMGetOperand(value, index);
@@ -503,13 +508,18 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
             {
                 uint fieldIndex = checked((uint)Llvm.LLVMConstIntGetSExtValue(operand));
                 (nint fieldType, long fieldOffset) = Types.Element(type, fieldIndex);
-                Offset(fieldOffset);
+                offset = unchecked(offset + fieldOffset);
                 type = fieldType;
             }
             else
             {
                 if (index > 1)
                     type = Llvm.LLVMGetElementType(type);
+                if (Llvm.LLVMIsAConstantInt(operand) != 0 && TypeSystem.Width(Llvm.LLVMTypeOf(operand)) <= 64)
+                {
+                    offset = unchecked(offset + Llvm.LLVMConstIntGetSExtValue(operand) * Types.Size(type));
+                    continue;
+                }
                 Load(operand);
                 if (TypeSystem.Width(Llvm.LLVMTypeOf(operand)) > 64)
                     Il.Emit(OpCodes.Call, typeof(WideInteger).GetMethod(nameof(WideInteger.Low))!);
@@ -522,5 +532,6 @@ internal class ValueEmitter(CilCompiler compiler, ILGenerator il)
                 Il.Emit(OpCodes.Add);
             }
         }
+        Offset(offset);
     }
 }
