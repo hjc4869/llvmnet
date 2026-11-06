@@ -137,6 +137,8 @@ diff -u <(portable_column headers-v3-native-O1.txt) <(portable_column headers-v3
 printf 'PASS: the %d intrinsics of the x86-64-v3 headers match native code\n' "$(wc -l <headers-v3-native-O0.txt)"
 
 # --isa: the macros of each level, the level recorded in objects and images, and objects of both levels linked together.
+# A pipe from macros ends in grep without -q, which reads all of it: grep -q exits at the first match, and the
+# preprocessor's next write then fails with a broken pipe, which pipefail turns into a failure under load.
 macros() { "$llvmnet" "$@" -dM -E -x c /dev/null; }
 macros --isa=x86-64-v2 >v2-macros.txt
 grep -q '^#define __SSE4_2__ 1' v2-macros.txt
@@ -145,13 +147,13 @@ grep -q '^#define __POPCNT__ 1' v2-macros.txt
 absent 'GCC_HAVE_SYNC_COMPARE_AND_SWAP_16' v2-macros.txt
 macros >baseline-macros.txt
 absent '__SSE2__|__x86_64__|__MMX__' baseline-macros.txt
-macros --runtime=system | grep -q '^#define __SSE2__ 1'
-macros --runtime=system --isa=x86-64-v2 | grep -q '^#define __SSE4_1__ 1'
+macros --runtime=system | grep '^#define __SSE2__ 1' >/dev/null
+macros --runtime=system --isa=x86-64-v2 | grep '^#define __SSE4_1__ 1' >/dev/null
 # Portable mode takes the x86 SIMD feature flags up to SSE4.2 as aliases of --isa=x86-64-v2, passed on to Clang (so
 # -mpclmul adds PCLMULQDQ); the negations above SSE2 change nothing else, and AVX's flags and -mno-sse2 stay rejected.
 macros -msse4.1 >alias-macros.txt
 grep -q '^#define __SSE4_2__ 1' alias-macros.txt
-macros -mpclmul | grep -q '^#define __PCLMUL__ 1'
+macros -mpclmul | grep '^#define __PCLMUL__ 1' >/dev/null
 macros -mno-sse4.1 >negation-macros.txt
 absent '__SSE2__' negation-macros.txt
 for flag in -mavx512f -mno-sse2; do
@@ -164,9 +166,9 @@ grep -q 'selects AVX-512, whose intrinsics the runtime does not implement' avx51
 macros --isa=x86-64-v3 >v3-macros.txt
 for macro in __AVX2__ __AVX__ __FMA__ __F16C__ __BMI__ __BMI2__ __LZCNT__ __SSE4_2__; do grep -q "^#define $macro 1" v3-macros.txt; done
 absent 'GCC_HAVE_SYNC_COMPARE_AND_SWAP_16|__AVX512' v3-macros.txt
-macros -mavx2 | grep -q '^#define __AVX2__ 1'
-macros -mavx2 -msse4.2 | grep -q '^#define __AVX2__ 1'
-macros -mfma | grep -q '^#define __FMA__ 1'
+macros -mavx2 | grep '^#define __AVX2__ 1' >/dev/null
+macros -mavx2 -msse4.2 | grep '^#define __AVX2__ 1' >/dev/null
+macros -mfma | grep '^#define __FMA__ 1' >/dev/null
 printf '#include <nmmintrin.h>\nunsigned crc(unsigned c, unsigned d) { return _mm_crc32_u32(c, d); }\n' >crc.c
 printf '#include <stdio.h>\nunsigned crc(unsigned, unsigned);\nint main(void) { printf("%%u\\n", crc(1, 2)); return 0; }\n' >main.c
 "$llvmnet" -msse4.2 -O1 -c crc.c -o crc.o
