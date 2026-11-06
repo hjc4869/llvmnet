@@ -55,5 +55,13 @@ diff -u "$test_output/vector-loops-vectorize-native.txt" "$test_output/vector-lo
 "$llvmnet" --runtime=portable -O3 -fvectorize -fslp-vectorize --nativeaot "$root/tests/c/vector-pixels.c" -o "$test_output/vector-pixels-aot" >"$test_output/pixels-aot.log"
 "$test_output/vector-pixels-aot" | diff -u "$test_output/vector-pixels-vectorize-native.txt" -
 DOTNET_EnableHWIntrinsic=0 dotnet "$test_output/vector-pixels-vectorize-portable.dll" | diff -u "$test_output/vector-pixels-vectorize-native.txt" -
+# The kernels' ARM64 forms are helpers that --report-simd names.
+"$llvmnet" --runtime=portable -O3 --report-simd "$root/tests/c/vector-pixels.c" -o "$test_output/vector-pixels-report.dll" 2>"$test_output/pixels-report.log"
+for helper in SumAbsoluteDifferences NarrowLower AddWidening16 SubtractWidening16 SubtractWidening32; do
+    if ! grep -Eq "^llvmnet: simd: .* Vectors\.${helper}[ :]" "$test_output/pixels-report.log"; then
+        printf 'FAIL: vector-pixels does not call Vectors.%s\n' "$helper" >&2
+        exit 1
+    fi
+done
 printf '%s\n' "${rejected[@]}" >"$test_output/rejected.txt"
 printf 'PASS: %d vectorized builds match native; %d rejected with diagnostics (listed in %s); Vector128 calls: %s\n' "$matched" "${#rejected[@]}" "$test_output/rejected.txt" "$(IFS=,; echo "${vector_calls[*]}")"

@@ -292,6 +292,92 @@ public static unsafe class Vectors
     public static Vector256<long> WidenLowest64(Vector256<short> value) =>
         Avx2.IsSupported ? Avx2.ConvertToVector256Int64(value.GetLower()) : Vector256.WidenLower(Vector256.WidenLower(value));
 
+    // Adds and subtracts of two extensions of one narrow vector type (VectorEmitter.Widening): AdvSimd computes the lanes
+    // of a half at twice the width in one instruction (uaddl, usubl, saddl, ssubl and their upper forms), where each
+    // extension was an uxtl or sxtl before the add (SV-37). Four times the width extends that result once more, with its
+    // sign for a difference, which fits twice the width as a signed value, and as the operands for a sum. part is the
+    // result fragment's place in its source fragment: its half (0, 1) or quarter (0 to 3). Other hosts add the extensions
+    // the lowering computed where they were (wideLeft, wideRight), as before: on x64 a narrow load folds into its pmovzx
+    // only there, and the extensions are dead code on ARM64.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ushort> AddWidening16(Vector128<byte> left, Vector128<byte> right, int part, Vector128<ushort> wideLeft, Vector128<ushort> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.AddWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.AddWideningUpper(left, right) : wideLeft + wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<short> AddWidening16(Vector128<sbyte> left, Vector128<sbyte> right, int part, Vector128<short> wideLeft, Vector128<short> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.AddWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.AddWideningUpper(left, right) : wideLeft + wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> AddWidening32(Vector128<ushort> left, Vector128<ushort> right, int part, Vector128<uint> wideLeft, Vector128<uint> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.AddWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.AddWideningUpper(left, right) : wideLeft + wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<int> AddWidening32(Vector128<short> left, Vector128<short> right, int part, Vector128<int> wideLeft, Vector128<int> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.AddWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.AddWideningUpper(left, right) : wideLeft + wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ulong> AddWidening64(Vector128<uint> left, Vector128<uint> right, int part, Vector128<ulong> wideLeft, Vector128<ulong> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.AddWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.AddWideningUpper(left, right) : wideLeft + wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<long> AddWidening64(Vector128<int> left, Vector128<int> right, int part, Vector128<long> wideLeft, Vector128<long> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.AddWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.AddWideningUpper(left, right) : wideLeft + wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ushort> SubtractWidening16(Vector128<byte> left, Vector128<byte> right, int part, Vector128<ushort> wideLeft, Vector128<ushort> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.SubtractWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.SubtractWideningUpper(left, right) : wideLeft - wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<short> SubtractWidening16(Vector128<sbyte> left, Vector128<sbyte> right, int part, Vector128<short> wideLeft, Vector128<short> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.SubtractWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.SubtractWideningUpper(left, right) : wideLeft - wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> SubtractWidening32(Vector128<ushort> left, Vector128<ushort> right, int part, Vector128<uint> wideLeft, Vector128<uint> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.SubtractWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.SubtractWideningUpper(left, right) : wideLeft - wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<int> SubtractWidening32(Vector128<short> left, Vector128<short> right, int part, Vector128<int> wideLeft, Vector128<int> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.SubtractWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.SubtractWideningUpper(left, right) : wideLeft - wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<ulong> SubtractWidening64(Vector128<uint> left, Vector128<uint> right, int part, Vector128<ulong> wideLeft, Vector128<ulong> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.SubtractWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.SubtractWideningUpper(left, right) : wideLeft - wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<long> SubtractWidening64(Vector128<int> left, Vector128<int> right, int part, Vector128<long> wideLeft, Vector128<long> wideRight) =>
+        AdvSimd.IsSupported ? part == 0 ? AdvSimd.SubtractWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.SubtractWideningUpper(left, right) : wideLeft - wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> AddWidening32(Vector128<byte> left, Vector128<byte> right, int part, Vector128<uint> wideLeft, Vector128<uint> wideRight) =>
+        AdvSimd.IsSupported ? Widen(part < 2 ? AdvSimd.AddWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.AddWideningUpper(left, right), part % 2)
+            : wideLeft + wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<int> AddWidening32(Vector128<sbyte> left, Vector128<sbyte> right, int part, Vector128<int> wideLeft, Vector128<int> wideRight) =>
+        AdvSimd.IsSupported ? Widen(part < 2 ? AdvSimd.AddWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.AddWideningUpper(left, right), part % 2)
+            : wideLeft + wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<uint> SubtractWidening32(Vector128<byte> left, Vector128<byte> right, int part, Vector128<uint> wideLeft, Vector128<uint> wideRight) =>
+        AdvSimd.IsSupported
+            ? Widen((part < 2 ? AdvSimd.SubtractWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.SubtractWideningUpper(left, right)).AsInt16(), part % 2).AsUInt32()
+            : wideLeft - wideRight;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector128<int> SubtractWidening32(Vector128<sbyte> left, Vector128<sbyte> right, int part, Vector128<int> wideLeft, Vector128<int> wideRight) =>
+        AdvSimd.IsSupported ? Widen(part < 2 ? AdvSimd.SubtractWideningLower(left.GetLower(), right.GetLower()) : AdvSimd.SubtractWideningUpper(left, right), part % 2)
+            : wideLeft - wideRight;
+
+    // A half of halfwords extended to words, by the lanes' sign: uxtl, sxtl and their upper forms.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<uint> Widen(Vector128<ushort> value, int half) =>
+        half == 0 ? AdvSimd.ZeroExtendWideningLower(value.GetLower()) : AdvSimd.ZeroExtendWideningUpper(value);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> Widen(Vector128<short> value, int half) =>
+        half == 0 ? AdvSimd.SignExtendWideningLower(value.GetLower()) : AdvSimd.SignExtendWideningUpper(value);
+
     // Narrowings of one fragment whose upper half is zero (VectorEmitter.Resize: a vector of half a fragment or less, as
     // the x86 cost model's 64-bit vectors): xtn alone on ARM64, which zeroes the upper half, where Vector128.Narrow with a
     // zero vector is xtn, movi and xtn2 (SV-36); sqxtn and uqxtn for the saturating forms, fcvtn for doubles.

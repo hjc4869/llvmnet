@@ -78,3 +78,23 @@ A vector of half a fragment or less, as the x86 cost model's 64-bit vectors are 
 x264 takes 10.16 s against SV-35's 10.22 in the same rounds (native 5.81), within the noise. On x64, 12 functions change: the spilled zero of two-step narrowings is gone and the narrowing's zero is one `xorps` at its use; the other differences are register allocation (`get_ref` 1,181 instructions instead of 1,193, `mc_luma` 1,250 instead of 1,278, `hpel_filter` 1,030 instead of 1,014, where one loop holds one more vector on the stack).
 
 **Correctness.** The vector forms of the IR semantics probes (22,377 lines, every trunc, fptrunc and `fptosi.sat` shape) print native's output on the M6 and on Linux ARM64 under the JIT with and without hardware intrinsics, as do `vector-pixels.c` (its quantization), `vector-extensions.c` and `vector-loops.c`; `vector-lowering`, `vector-semantics` and `vector-sweep` pass on x64.
+
+## SV-37: widening subtracts and adds as usubl and uaddl
+
+`sub(zext a, zext b)` of bytes, every pixel difference in x264 (`satd`, `sa8d` and `hadamard_ac`'s rows as `<4 x i8>` to `<4 x i32>`, the SSDs' `<8 x i8>` and `<16 x i8>` to 32 bits, `sub8x8_dct8`'s to 16 bits), was an `uxtl` per operand and step and a `sub`: `<4 x i8>` to `<4 x i32>` is four `uxtl` and a `sub`. AdvSimd computes the difference of a half of two vectors at twice the width in one instruction, `usubl` or `usubl2`, and `uaddl`, `saddl` and `ssubl` likewise; native `satd_8x4` uses `usubl.8h`.
+
+`VectorEmitter.Binary` now recognizes an add or subtract of two extensions of one narrow type, both `zext` or both `sext`, to twice the lane width (8 to 32 bits) or four times (bytes), and calls `Vectors.AddWidening16` (`32`, `64`) or `SubtractWidening16` (`32`, `64`) per result fragment with its place in the source fragment. On ARM64 that is one `uaddl`/`usubl`/`saddl`/`ssubl` (or the upper form) for twice the width, and one more `uxtl` or `sxtl` for four times: a difference of bytes fits 16 bits as a signed value and widens with its sign, a sum as unsigned. Elsewhere the helper adds the extensions the lowering computed as before, which it also passes: with the extensions left out and computed in the helper, both loads of a row came before it, and RyuJIT no longer folded each 4-byte load into its `pmovzxbd` (`satd_8x4` grew from 176 to 192 x64 instructions under the JIT). The extensions stay where they are on every host and are dead code on ARM64.
+
+The absolute difference of widened bytes (`uabdl`) is not matched: in x264 it occurs only as the leaves of SAD reductions, which psadbw and SV-35's operation take.
+
+The helper reads the narrow operands where the add is, after their last use in the IR, so `FunctionEmitter.ShareFunctionLocals` now counts them as used there (`VectorEmitter.Reads`). Without that, in functions of more than 512 values, whose locals are shared by liveness, a row's second load could take the first's local: x264's output on the M6 differed (three frames under the JIT), as does the new `tall_differences` of `vector-pixels.c` on ARM64.
+
+| Function (ARM64 instructions) | SV-36 | SV-37 |
+| --- | ---: | ---: |
+| `x264_pixel_satd_8x4` | 169 | 145 |
+| `x264_pixel_ssd_8x8` | 177 | 115 |
+| `hpel_filter` | 761 | 685 |
+
+x264 takes 9.79 s against SV-36's 10.17 in the same rounds (native 5.80), 3.7% faster. x64's code is the same in every function but `x264_me_search_ref`, where the longer live ranges change which registers 42 instructions use.
+
+**Correctness.** `vector-pixels.c` has differences and squares of rows of 4, 8 and 16 bytes (twice and four times the width), sums of bytes and halfwords and `tall_differences`, one function of 600 values in the order that exposed the shared local; it and the semantics probes print native's output on the M6 and on Linux ARM64 under the JIT with and without hardware intrinsics, and `vector-sweep.sh` checks that `--report-simd` names the widening helpers.

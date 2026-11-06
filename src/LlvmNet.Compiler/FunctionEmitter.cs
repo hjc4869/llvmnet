@@ -1273,7 +1273,8 @@ internal sealed class FunctionEmitter : ValueEmitter
     /// operands, as an instruction may store part of its result before it has read all of them. The emitter reads the
     /// operands of a comparison, a shuffle or an insertelement where those are used (Order, LoadMask, SplatScalar, a
     /// chain of insertelements built at its end), so they count as used there too, as do the operands of a value
-    /// computed where it is used (ChooseUseSiteValues), which gets no local. Only functions of more than 512
+    /// computed where it is used (ChooseUseSiteValues), which gets no local, and the values a vector lowering reads
+    /// besides its operands (VectorEmitter.Reads: a widening add's narrow operands). Only functions of more than 512
     /// values share: RyuJIT allocates registers per local, so values sharing one share an allocation, which added
     /// moves to small hot loops (heapsort and lpbench 10 to 15% slower). A function with setjmp keeps a local for
     /// each value, as the jump dispatch re-enters the body at its call sites.
@@ -1355,6 +1356,8 @@ internal sealed class FunctionEmitter : ValueEmitter
                     seen.Clear();
                     for (int index = 0; index < Llvm.LLVMGetNumOperands(instruction); index++)
                         Use(Llvm.LLVMGetOperand(instruction, (uint)index), block, at);
+                    if (Types.Vector(Llvm.LLVMTypeOf(instruction)) is not null)
+                        foreach (nint read in Vectors.Reads(instruction)) Use(read, block, at);
                 }
                 at++;
             }

@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define NOINLINE __attribute__((noinline))
 #define STRIDE 40
@@ -74,6 +75,26 @@ NOINLINE static void differences(int16_t *restrict d, const uint8_t *a, const ui
 SQUARES(4)
 SQUARES(8)
 SQUARES(16)
+
+typedef uint8_t u8x8 __attribute__((vector_size(8)));
+typedef int16_t i16x8v __attribute__((vector_size(16)));
+
+/* Differences of 120 rows of 8 bytes unrolled into one function of more than 512 values, whose locals the lowering
+ * shares by liveness: each row loads and widens one operand, then the other, so a row's first load must keep its local
+ * past its widening until the subtract that reads it. */
+NOINLINE static void tall_differences(int16_t *restrict d, const uint8_t *a, const uint8_t *b)
+{
+#pragma clang loop unroll(full)
+    for (int y = 0; y < 120; y++) {
+        u8x8 x, z;
+        memcpy(&x, a + 3 * y, 8);
+        i16x8v wide_x = __builtin_convertvector(x, i16x8v);
+        memcpy(&z, b + 2 * y, 8);
+        i16x8v wide_z = __builtin_convertvector(z, i16x8v);
+        i16x8v v = wide_x - wide_z;
+        memcpy(d + 8 * y, &v, 16);
+    }
+}
 
 /* Sums of bytes and halfwords widened to 32 bits, and halfword and byte differences. */
 NOINLINE static void sums(int32_t *restrict d, const uint8_t *a, const uint8_t *b, const int16_t *x, const int16_t *y)
@@ -241,6 +262,9 @@ int main(void)
         sums(s, pa + 9 * k, pb + 4 * k, ha + k, hb + 2 * k);
         for (int i = 0; i < 36; i++) h = mix(h, (uint32_t)s[i]);
     }
+    static int16_t tall[960];
+    tall_differences(tall, pa, pb + 9);
+    for (int i = 0; i < 960; i++) h = mix(h, (uint16_t)tall[i]);
     printf("widened differences and sums: %016llx\n", (unsigned long long)h);
     h = 1469598103934665603ull;
     for (int k = 0; k < 4; k++) {

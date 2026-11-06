@@ -845,6 +845,30 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             });
             return;
         }
+        if (Widening(value) is var (narrowLeft, narrowRight, signed))
+        {
+            // Both extensions and the operation in one AdvSimd instruction on ARM64 (SV-37); other hosts add the extensions
+            // as before, which stay where they are, so that x64 folds each narrow load into its pmovzx.
+            VectorShape narrow = Shape(narrowLeft);
+            int ratio = shape.LaneBits / narrow.LaneBits;
+            Type lane = signed ? Signed(narrow.LaneBits) : Unsigned(Signed(narrow.LaneBits)), wide = signed ? Signed(shape.LaneBits) : Unsigned(Signed(shape.LaneBits));
+            MethodInfo helper = Helper((opcode == 8 ? "AddWidening" : "SubtractWidening") + shape.LaneBits, null, V(lane), V(lane), typeof(int), V(wide), V(wide));
+            Build(shape, index =>
+            {
+                Fragment(narrowLeft, index / ratio);
+                As(narrow.Lane, lane);
+                Fragment(narrowRight, index / ratio);
+                As(narrow.Lane, lane);
+                il.Emit(OpCodes.Ldc_I4, index % ratio);
+                Fragment(left, index);
+                As(shape.Lane, wide);
+                Fragment(right, index);
+                As(shape.Lane, wide);
+                il.Emit(OpCodes.Call, helper);
+                As(wide, shape.Lane);
+            });
+            return;
+        }
         string operation = opcode switch
         {
             8 or 9 => "Add",
@@ -862,6 +886,36 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             Fragment(right, index);
             Call(operation, shape.Lane, 2);
         });
+    }
+
+    /// <summary>
+    /// An add or subtract of two extensions of one narrow vector type, both zext or both sext, to twice its lane width (8
+    /// to 32 bits) or four times (bytes): the narrow operands and whether they are signed, or null. AdvSimd computes it in
+    /// one instruction (uaddl, usubl, saddl, ssubl and the upper forms), where each extension was an uxtl or sxtl (SV-37).
+    /// </summary>
+    private (nint Left, nint Right, bool Signed)? Widening(nint binary)
+    {
+        if (Wide || Llvm.LLVMGetInstructionOpcode(binary) is not (8 or 10)) return null;
+        nint left = Llvm.LLVMGetOperand(binary, 0), right = Llvm.LLVMGetOperand(binary, 1);
+        if (Llvm.LLVMIsAInstruction(left) == 0 || Llvm.LLVMIsAInstruction(right) == 0) return null;
+        int opcode = Llvm.LLVMGetInstructionOpcode(left);
+        if (opcode is not (31 or 32) || Llvm.LLVMGetInstructionOpcode(right) != opcode) return null;
+        nint narrowLeft = Llvm.LLVMGetOperand(left, 0), narrowRight = Llvm.LLVMGetOperand(right, 0);
+        if (Llvm.LLVMTypeOf(narrowLeft) != Llvm.LLVMTypeOf(narrowRight) || types.Vector(Llvm.LLVMTypeOf(narrowLeft)) is not { Mask: false } from ||
+            types.Vector(Llvm.LLVMTypeOf(binary)) is not { Mask: false } to)
+            return null;
+        return to.LaneBits == 2 * from.LaneBits || to.LaneBits == 4 * from.LaneBits && from.LaneBits == 8 ? (narrowLeft, narrowRight, opcode == 32) : null;
+    }
+
+    /// <summary>The values an instruction's lowering reads besides its operands, which must stay in their locals until
+    /// it (FunctionEmitter.ShareFunctionLocals): a widening add's narrow operands.</summary>
+    internal IEnumerable<nint> Reads(nint instruction)
+    {
+        if (Widening(instruction) is var (left, right, _))
+        {
+            yield return left;
+            yield return right;
+        }
     }
 
     /// <summary>The scalar every lane of a splat holds: a constant vector with equal lanes, or the insertelement and
