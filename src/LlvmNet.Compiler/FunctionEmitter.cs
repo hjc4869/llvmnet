@@ -25,6 +25,8 @@ internal sealed class FunctionEmitter : ValueEmitter
     private LocalBuilder? stackReturn;
     private Label stackExit;
     private bool tailCalled;
+    // The IL locals once the values have theirs (for ManagedCalli).
+    private int localCount;
     private readonly List<(Label Site, nint Call)> tailSites = [];
     private readonly Dictionary<Type, LocalBuilder> scratch = [];
     // Static allocas in frame slots (FrameSlots): the slot and the alignment its address is rounded to.
@@ -121,6 +123,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         if (jumpSites.Count == 0 && valueCount <= 32768) ChooseUseSiteValues();
         if (jumpSites.Count == 0 && valueCount is > 512 and <= 32768) ShareFunctionLocals();
         else AllocateFunctionLocals(valueCount > 32768 && jumpSites.Count == 0);
+        localCount = locals.Values.Concat(storedScalars.Values.Select(storage => storage.Array)).Select(local => local.LocalIndex + 1).DefaultIfEmpty(0).Max();
         if (scopedStack || hasAllocations && jumpSites.Count != 0 || arenaFrame)
         {
             // The thread's alloca arena top on entry, restored on every exit (BE-17).
@@ -2090,9 +2093,13 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
     }
 
+    /// <summary>The IL locals past which a stub of an indirect call is not used (CilCompiler.ManagedCalli): RyuJIT stops
+    /// inlining into a method of about 920 locals, its temporaries included, and a stub it does not inline is a call more.</summary>
+    private const int StubLocals = 512;
+
     private void ManagedCalli(Type returnType, Type[] parameters, bool tail = false)
     {
-        Compiler.ManagedCalli(Il, method, returnType, parameters, tail);
+        Compiler.ManagedCalli(Il, method, returnType, parameters, tail, stub: localCount <= StubLocals);
     }
 
     private bool SystemIntegerArgumentCompatible(nint instruction, nint target, uint index)

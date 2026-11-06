@@ -50,6 +50,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         $"{returnType.Name}({string.Join(",", parameters.Select(parameter => parameter.Name))})";
     private readonly Dictionary<nint, FieldBuilder> constants = [];
     private readonly List<(MethodBuilder Method, int Offset, Type ReturnType, Type[] Parameters)> indirectCalls = [];
+    private TypeBuilder? calliHelper;
+    private readonly Dictionary<string, MethodBuilder> calliStubs = [];
     private readonly HashSet<string> managedImports = new(StringComparer.Ordinal);
     private readonly Dictionary<string, MethodInfo> runtimeExports = typeof(Memory).Assembly.GetTypes()
         .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
@@ -147,14 +149,49 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal static bool IsSetJump(nint function) => Llvm.LLVMIsAFunction(function) != 0 && Llvm.LLVMIsDeclaration(function) != 0 &&
         Llvm.Name(function) is "setjmp" or "_setjmp" or "sigsetjmp" or "__sigsetjmp";
 
-    internal void ManagedCalli(ILGenerator il, MethodBuilder method, Type returnType, Type[] parameters, bool tail = false)
+    /// <summary>
+    /// An indirect call to a translated function's managed entry point, with the arguments and then the target on the
+    /// stack. As NativeAOT, a calli tests its target for a fat function pointer (a shared generic method with its
+    /// instantiation argument) before the call, `test reg, 2` and a branch, unless the method holding the calli is of a
+    /// class named RawCalliHelper, the class library's way of calling targets that cannot be fat (ILC's
+    /// Compilation.IsFatPointerCandidate). Translated code only calls ldftn addresses of methods that are not generic, so
+    /// with <paramref name="stub"/> a NativeAOT image calls the target through an inlined method of such a class instead
+    /// (PF-27). A later ILC without that exception would test the target again, which costs only the test.
+    /// </summary>
+    internal void ManagedCalli(ILGenerator il, MethodBuilder method, Type returnType, Type[] parameters, bool tail = false, bool stub = false)
     {
         if (options.CheckIndirectCalls)
         {
             il.Emit(OpCodes.Ldstr, CilSignature(returnType, parameters));
             il.Emit(OpCodes.Call, typeof(IndirectCalls).GetMethod(nameof(IndirectCalls.Check))!);
         }
+        if (stub && !tail && options.NativeAot)
+        {
+            il.Emit(OpCodes.Call, CalliStub(returnType, parameters));
+            return;
+        }
         if (tail) il.Emit(OpCodes.Tailcall);
+        Calli(il, method, returnType, parameters);
+    }
+
+    /// <summary>The RawCalliHelper method that calls its last argument with the others (ManagedCalli), one per signature.</summary>
+    private MethodBuilder CalliStub(Type returnType, Type[] parameters)
+    {
+        string key = $"{returnType.FullName}({string.Join(",", parameters.Select(parameter => parameter.FullName))})";
+        if (calliStubs.TryGetValue(key, out MethodBuilder? stub)) return stub;
+        calliHelper ??= ((ModuleBuilder)Program.Module).DefineType("LlvmNet.RawCalliHelper", TypeAttributes.NotPublic | TypeAttributes.Abstract | TypeAttributes.Sealed);
+        stub = calliHelper.DefineMethod($"Call{calliStubs.Count}", MethodAttributes.Assembly | MethodAttributes.Static, returnType, [.. parameters, typeof(nint)]);
+        stub.SetImplementationFlags(MethodImplAttributes.AggressiveInlining);
+        ILGenerator il = stub.GetILGenerator();
+        for (int index = 0; index <= parameters.Length; index++) il.Emit(OpCodes.Ldarg, checked((short)index));
+        Calli(il, stub, returnType, parameters);
+        il.Emit(OpCodes.Ret);
+        calliStubs[key] = stub;
+        return stub;
+    }
+
+    private void Calli(ILGenerator il, MethodBuilder method, Type returnType, Type[] parameters)
+    {
         if (NativeScalar(returnType) && parameters.All(NativeScalar))
         {
             il.EmitCalli(OpCodes.Calli, CallingConventions.Standard, returnType, parameters, null);
@@ -430,6 +467,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         MethodBuilder? entry = options.Library ? null : EmitStartup(cilModule, EmitEntry(main!));
         foreach (TypeBuilder holder in fieldHolders.Concat(methodHolders).Distinct())
             holder.CreateType();
+        calliHelper?.CreateType();
         MetadataBuilder metadata = assembly.GenerateMetadata(out BlobBuilder ilStream, out BlobBuilder fieldData);
         var indirectFixups = FinalizeIndirectSignatures(metadata);
         var pe = new ManagedPEBuilder(new PEHeaderBuilder(imageCharacteristics: Characteristics.ExecutableImage | Characteristics.LargeAddressAware | (options.Library ? Characteristics.Dll : 0)),
