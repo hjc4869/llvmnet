@@ -17,6 +17,15 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-11-06, SPECrate 2017 integer against native)
+
+The owner asked for SPECrate 2017 integer (refrate, one copy, three iterations) with llvmnet's Vector128 lowering against native Clang 22 at SSE2. Measurements are in [evidence/2026-11-06-spec-intrate.md](../evidence/2026-11-06-spec-intrate.md). All ten benchmarks validate after the three fixes below; llvmnet portable as NativeAOT takes 1.31 times native's time (geometric mean; estimated SPECrate2017_int_base 6.92 against 9.10), from 0.97 (523.xalancbmk_r) to 2.37 (500.perlbench_r).
+
+- **SV-31 (done).** Early-exit loops of LLVM 22's loop vectorizer (`cttz.elts`) become a `umin` reduction of lane indices; 502.gcc_r failed to link without it.
+- **SV-32 (done).** Masks of more than 64 lanes in scalarized functions keep all their lanes; 548.exchange2_r read wrong cells.
+- **SV-33 (done).** Function addresses in vector lanes stay relocatable as NativeAOT; 502.gcc_r's `gimplify_expr` never matched a function pointer.
+- **PF-22 to PF-25 (open).** From the profiles of the two largest gaps: phi copies between stack slots in functions that share locals (half of perlbench's gap, in `S_regmatch`), constant-offset addresses stored in locals at a loop head, the variadic call area's `localloc` in a third of omnetpp's hot methods, and musl's allocator (82 s of omnetpp's 389; whether to replace it is the owner's decision).
+
 ## Progress (2026-11-06, x264 against native)
 
 The owner asked for SPEC CPU2017 525.x264_r's first refrate workload against native Clang 22 at three levels and for the generic fixes the profiles point to, committed one by one. Measurements are in [evidence/2026-11-06-x264.md](../evidence/2026-11-06-x264.md). At `adfdc44` llvmnet took 1.19 times native's time scalar, 1.31 at Vector128 against SSE2 and 2.02 at `x86-64-v3`; after the seven items below it takes 1.18, 1.20 and 1.38 (13.55 s against native's 9.81 at `x86-64-v3`, from 19.92), with native's output. The benchmark set is level (0.990 under the JIT, 0.998 as NativeAOT). What remains is listed in the evidence: strided byte gathers at SSE2, frame and call overhead in the motion search, and 256-bit fragments for 128-bit vectors.
