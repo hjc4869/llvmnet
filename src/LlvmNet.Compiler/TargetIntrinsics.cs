@@ -5,12 +5,14 @@ namespace LlvmNet;
 
 /// <summary>
 /// The target intrinsics the runtime implements (ADR-16 Level 2), by LLVM name: the methods of <see cref="X86"/> marked
-/// with <see cref="LlvmIntrinsicAttribute"/>. A call of one becomes a call of its method (FunctionEmitter), which the JIT
-/// and ILC inline.
+/// with <see cref="LlvmIntrinsicAttribute"/>, and of <see cref="Vectors"/> for llvmnet's own operations the vector idioms
+/// write (llvm.llvmnet.*, SV-35). A call of one becomes a call of its method (FunctionEmitter), which the JIT and ILC
+/// inline.
 /// </summary>
 internal static class TargetIntrinsics
 {
-    private static readonly Dictionary<string, MethodInfo> Helpers = typeof(X86).GetMethods(BindingFlags.Public | BindingFlags.Static)
+    private static readonly Dictionary<string, MethodInfo> Helpers = new[] { typeof(X86), typeof(Vectors) }
+        .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
         .SelectMany(method => method.GetCustomAttributes<LlvmIntrinsicAttribute>().Select(attribute => (attribute.Name, Method: method)))
         .ToDictionary(pair => pair.Name, pair => pair.Method, StringComparer.Ordinal);
 

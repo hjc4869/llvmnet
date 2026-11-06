@@ -751,6 +751,13 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 }
                 Type lane = Lane(from.LaneBits >> (level - 1));
                 Narrow(level - 1, 2 * fragment);
+                if (bits == 128 && from.Bits == 128 && (2 * fragment + 1) << (level - 1) >= from.Fragments)
+                {
+                    // Zeros above the source's fragments: the lower half alone, xtn on ARM64, where Narrow with a zero
+                    // vector is xtn, movi and xtn2 (SV-36).
+                    il.Emit(OpCodes.Call, Helper(saturate ? nameof(Vectors.NarrowWithSaturationLower) : nameof(Vectors.NarrowLower), null, V(lane, 128)));
+                    return;
+                }
                 Narrow(level - 1, 2 * fragment + 1);
                 il.Emit(OpCodes.Call, Api(bits, saturate ? "NarrowWithSaturation" : "Narrow", null, V(lane, bits), V(lane, bits)));
             }
@@ -872,6 +879,54 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             });
             return;
         }
+        if (opcode == 12 && HalfSigns(value) is nint signs)
+        {
+            // The sign of each half of the lanes spread over it (SV-39): one arithmetic shift of the halves, sshr on ARM64
+            // as native AArch64's cmlt, psraw or psrad on x64, and a comparison with zero for bytes, where it was a shift, an
+            // and and a multiplication. The and and the shift emit nothing (Fused).
+            Type half = Signed(shape.LaneBits / 2);
+            Build(shape, index =>
+            {
+                Fragment(signs, index);
+                As(shape.Lane, half, shape.Bits);
+                if (half == typeof(sbyte))
+                {
+                    Zero(half, shape.Bits);
+                    Call("LessThan", half, 2, shape.Bits);
+                }
+                else
+                {
+                    il.Emit(OpCodes.Ldc_I4, shape.LaneBits / 2 - 1);
+                    il.Emit(OpCodes.Call, Api(shape.Bits, "ShiftRightArithmetic", null, V(half, shape.Bits), typeof(int)));
+                }
+                As(half, shape.Lane, shape.Bits);
+            });
+            return;
+        }
+        if (Widening(value) is var (narrowLeft, narrowRight, signed))
+        {
+            // Both extensions and the operation in one AdvSimd instruction on ARM64 (SV-37); other hosts add the extensions
+            // as before, which stay where they are, so that x64 folds each narrow load into its pmovzx.
+            VectorShape narrow = Shape(narrowLeft);
+            int ratio = shape.LaneBits / narrow.LaneBits;
+            Type lane = signed ? Signed(narrow.LaneBits) : Unsigned(Signed(narrow.LaneBits)), wide = signed ? Signed(shape.LaneBits) : Unsigned(Signed(shape.LaneBits));
+            MethodInfo helper = Helper((opcode == 8 ? "AddWidening" : "SubtractWidening") + shape.LaneBits, null, V(lane, 128), V(lane, 128), typeof(int), V(wide, 128), V(wide, 128));
+            Build(shape, index =>
+            {
+                Fragment(narrowLeft, index / ratio);
+                As(narrow.Lane, lane, 128);
+                Fragment(narrowRight, index / ratio);
+                As(narrow.Lane, lane, 128);
+                il.Emit(OpCodes.Ldc_I4, index % ratio);
+                Fragment(left, index);
+                As(shape.Lane, wide, 128);
+                Fragment(right, index);
+                As(shape.Lane, wide, 128);
+                il.Emit(OpCodes.Call, helper);
+                As(wide, shape.Lane, 128);
+            });
+            return;
+        }
         string operation = opcode switch
         {
             8 or 9 => "Add",
@@ -889,6 +944,81 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             Fragment(right, index);
             Call(operation, shape.Lane, 2, shape.Bits);
         });
+    }
+
+    /// <summary>
+    /// An add or subtract of two extensions of one narrow vector type, both zext or both sext, to twice its lane width (8
+    /// to 32 bits) or four times (bytes): the narrow operands and whether they are signed, or null. AdvSimd computes it in
+    /// one instruction (uaddl, usubl, saddl, ssubl and the upper forms), where each extension was an uxtl or sxtl (SV-37).
+    /// </summary>
+    private (nint Left, nint Right, bool Signed)? Widening(nint binary)
+    {
+        if (Llvm.LLVMGetInstructionOpcode(binary) is not (8 or 10)) return null;
+        nint left = Llvm.LLVMGetOperand(binary, 0), right = Llvm.LLVMGetOperand(binary, 1);
+        if (Llvm.LLVMIsAInstruction(left) == 0 || Llvm.LLVMIsAInstruction(right) == 0) return null;
+        int opcode = Llvm.LLVMGetInstructionOpcode(left);
+        if (opcode is not (31 or 32) || Llvm.LLVMGetInstructionOpcode(right) != opcode) return null;
+        nint narrowLeft = Llvm.LLVMGetOperand(left, 0), narrowRight = Llvm.LLVMGetOperand(right, 0);
+        if (Llvm.LLVMTypeOf(narrowLeft) != Llvm.LLVMTypeOf(narrowRight) || types.Vector(Llvm.LLVMTypeOf(narrowLeft)) is not { Mask: false } from ||
+            types.Vector(Llvm.LLVMTypeOf(binary)) is not { Mask: false } to || from.Bits != 128 || to.Bits != 128)
+            return null;
+        return to.LaneBits == 2 * from.LaneBits || to.LaneBits == 4 * from.LaneBits && from.LaneBits == 8 ? (narrowLeft, narrowRight, opcode == 32) : null;
+    }
+
+    /// <summary>
+    /// The x of mul(and(lshr(x, h - 1), 1 | 1 &lt;&lt; h), (1 &lt;&lt; h) - 1) in lanes of 2h bits, or null. The shift
+    /// and the and leave the sign bit of each h-bit half of x in its lowest bit, and the multiplication spreads it over
+    /// the half, so each half of the product is all ones where that half of x is negative (x264's abs2), which native
+    /// AArch64 code computes as one cmlt (SV-39).
+    /// </summary>
+    private nint? HalfSigns(nint multiply)
+    {
+        if (Llvm.LLVMGetInstructionOpcode(multiply) != 12 || types.Vector(Llvm.LLVMTypeOf(multiply)) is not { Mask: false } shape || shape.LaneBits < 16)
+            return null;
+        int half = shape.LaneBits / 2;
+        nint and = Llvm.LLVMGetOperand(multiply, 0);
+        if (!SplatOf(Llvm.LLVMGetOperand(multiply, 1), (1UL << half) - 1) || Llvm.LLVMIsAInstruction(and) == 0 || Llvm.LLVMGetInstructionOpcode(and) != 23)
+            return null;
+        for (uint operand = 0; operand < 2; operand++)
+        {
+            nint shift = Llvm.LLVMGetOperand(and, operand);
+            if (SplatOf(Llvm.LLVMGetOperand(and, 1 - operand), 1UL | 1UL << half) && Llvm.LLVMIsAInstruction(shift) != 0 &&
+                Llvm.LLVMGetInstructionOpcode(shift) == 21 && SplatOf(Llvm.LLVMGetOperand(shift, 1), (ulong)half - 1))
+                return Llvm.LLVMGetOperand(shift, 0);
+        }
+        return null;
+    }
+
+    /// <summary>Whether a vector is a splat of the constant, its undefined lanes aside; the constants asked for are
+    /// positive in their lanes.</summary>
+    private static bool SplatOf(nint vector, ulong value) =>
+        SplatScalar(vector) is nint scalar && Llvm.LLVMIsAConstantInt(scalar) != 0 && (ulong)Llvm.LLVMConstIntGetSExtValue(scalar) == value;
+
+    /// <summary>The values an instruction's lowering reads besides its operands, which must stay in their locals until
+    /// it (FunctionEmitter.ShareFunctionLocals): a widening add's narrow operands, the x of <see cref="HalfSigns"/>.</summary>
+    internal IEnumerable<nint> Reads(nint instruction)
+    {
+        if (Widening(instruction) is var (left, right, _))
+        {
+            yield return left;
+            yield return right;
+        }
+        if (HalfSigns(instruction) is nint signs) yield return signs;
+    }
+
+    /// <summary>Whether an instruction is computed in its one user's lowering from its own operands, and so emits nothing
+    /// itself, as a chained insertelement does: the and and the shift of <see cref="HalfSigns"/>.</summary>
+    internal bool Fused(nint value)
+    {
+        nint use = Llvm.LLVMGetFirstUse(value);
+        if (use == 0 || Llvm.LLVMGetNextUse(use) != 0) return false;
+        nint user = Llvm.LLVMGetUser(use);
+        return Llvm.LLVMGetInstructionOpcode(value) switch
+        {
+            23 => HalfSigns(user) is not null,
+            21 => Llvm.LLVMGetInstructionOpcode(user) == 23 && Fused(user),
+            _ => false
+        };
     }
 
     /// <summary>The scalar every lane of a splat holds: a constant vector with equal lanes, or the insertelement and
@@ -1473,11 +1603,12 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 }
                 else
                 {
-                    // The halves of a Vector128 as the lanes of a Vector128<double>: unpcklpd and unpckhpd, or ins on
-                    // ARM64. Vector64 has no hardware acceleration on x64, where Create of two goes through memory.
+                    // The halves of a Vector128 as the lanes of a Vector128<double>: unpcklpd and unpckhpd on x64, one ins or
+                    // ext on ARM64 (Vectors.Halves, SV-38). Vector64 has no hardware acceleration on x64, where Create of two
+                    // goes through memory.
                     SourceElement(lower);
                     SourceElement(upper);
-                    il.Emit(OpCodes.Call, Api(128, "Create", null, typeof(double), typeof(double)));
+                    il.Emit(OpCodes.Call, Helper(nameof(Vectors.Halves), null, V(typeof(double), 128), typeof(int), V(typeof(double), 128), typeof(int)));
                     As(typeof(double), result.Lane, 128);
                 }
                 return;
@@ -1509,7 +1640,6 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             Source(half.Operand, half.Fragment, 128);
             As(result.Lane, typeof(double), 128);
             il.Emit(half.Upper ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
-            il.Emit(OpCodes.Call, Api(128, "GetElement", typeof(double), V(typeof(double), 128), typeof(int)));
         }
 
         void Permute(int operand, int fragment, int[] pattern, int bits)
@@ -1521,6 +1651,14 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             Type indices = IntegerLane(result.Lane);
             for (int lane = 0; lane < pattern.Length; lane++) Scalar(indices, pattern[lane] >= 0 ? pattern[lane] : pattern.All(element => element < 0 || element == fill) ? fill : lane);
             il.Emit(OpCodes.Call, Api(bits, "Create", null, Enumerable.Repeat(indices, pattern.Length).ToArray()));
+            if (bits == 128 && PermuteForm(pattern, result.LaneBits / 8) is int form and not 0)
+            {
+                // One permute instruction on ARM64 where the indices are one, the constant Shuffle elsewhere (SV-38).
+                As(indices, result.Lane, 128);
+                il.Emit(OpCodes.Ldc_I4, form);
+                il.Emit(OpCodes.Call, Helper(nameof(Vectors.Shuffle), result.Lane, V(result.Lane, 128), V(result.Lane, 128), typeof(int)));
+                return;
+            }
             il.Emit(OpCodes.Call, Api(bits, "Shuffle", null, V(result.Lane, bits), V(indices, bits)));
         }
 
@@ -1550,6 +1688,30 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             }
             return lower is { } low && upper is { } high ? (low, high) : null;
         }
+    }
+
+    /// <summary>
+    /// The AdvSimd permute (<see cref="Vectors.Shuffle{T}"/>'s form) that gives a shuffle of one fragment, pattern[i] the
+    /// source lane of result lane i or -1 where it is free, or 0 for none (SV-38): zip1, zip2, uzp1, uzp2, trn1 or trn2 of
+    /// the fragment with itself, a rotation (ext) or the reversal of lanes within 16-, 32- or 64-bit groups (rev16, rev32,
+    /// rev64). A broadcast is left to RyuJIT, which makes it a dup.
+    /// </summary>
+    private static int PermuteForm(int[] pattern, int laneBytes)
+    {
+        int per = pattern.Length;
+        if (per < 2 || pattern.Where(element => element >= 0).Distinct().Count() <= 1) return 0;
+        bool Matches(Func<int, int> lane) => Enumerable.Range(0, per).All(index => pattern[index] < 0 || pattern[index] == lane(index) % per);
+        if (Matches(index => index / 2)) return Vectors.PermuteZip1;
+        if (Matches(index => per / 2 + index / 2)) return Vectors.PermuteZip2;
+        if (Matches(index => 2 * index)) return Vectors.PermuteUnzip1;
+        if (Matches(index => 2 * index + 1)) return Vectors.PermuteUnzip2;
+        if (Matches(index => index & ~1)) return Vectors.PermuteTranspose1;
+        if (Matches(index => index | 1)) return Vectors.PermuteTranspose2;
+        for (int count = 1; count < per; count++)
+            if (Matches(index => index + count)) return Vectors.PermuteRotate | count << 5;
+        for (int group = 2; group * laneBytes <= 8; group *= 2)
+            if (Matches(index => index / group * group + group - 1 - index % group)) return Vectors.PermuteReverse | group * laneBytes << 5;
+        return 0;
     }
 
     // ---- Reductions ----
@@ -1697,7 +1859,10 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             il.Emit(OpCodes.Ldloc, folded);
             for (int element = 0; element < per; element++) Scalar(indices, element < width ? element + width : element);
             il.Emit(OpCodes.Call, Lookup(owner, "Create", null, Enumerable.Repeat(indices, per).ToArray()));
-            il.Emit(OpCodes.Call, Lookup(owner, "Shuffle", null, [fragment, Fragment(indices)]));
+            // The upper lanes to the lower ones: an ext on ARM64, where the other lanes are free (SV-38).
+            Reinterpret(Fragment(indices), fragment);
+            il.Emit(OpCodes.Ldc_I4, Vectors.PermuteRotate | width << 5);
+            il.Emit(OpCodes.Call, Lookup(typeof(Vectors), nameof(Vectors.Shuffle), lane, [fragment, fragment, typeof(int)]));
             il.Emit(OpCodes.Call, Lookup(owner, operation, lane, [fragment, fragment]));
             il.Emit(OpCodes.Stloc, folded);
         }

@@ -2,7 +2,7 @@
 # tags: core aot
 # The widening reductions (SV-21): tests/c/vector-reductions.c sums absolute differences of bytes and products of 16-bit
 # values in the shapes the loop and SLP vectorizers give them, which the backend runs as psadbw and pmaddwd through the
-# x86 helpers, and averages bytes and halfwords with rounding (SV-28, pavgb and pavgw), and has look-alikes it must leave
+# x86 helpers (a row reduced on its own as llvmnet's llvm.llvmnet.sad, SV-35), and averages bytes and halfwords with rounding (SV-28, pavgb and pavgw), and has look-alikes it must leave
 # alone. Every build must print what native clang prints: both modes at
 # -O2 and -O3, without hardware intrinsics (the helpers' compositions), with 256-bit fragments with and without AVX,
 # at --isa=x86-64-v3 (AVX2's forms), as NativeAOT, and with the recognition off (--vector-idioms=off). -v names the
@@ -62,6 +62,8 @@ dotnet "$test_output/literal.dll" | diff -u "$test_output/native.txt" -
 "$llvmnet" -O2 --report-simd "$source_file" -o "$test_output/report.dll" 2>"$test_output/report.log"
 grep -q '^llvmnet: simd: reductions of pix_abs16: 1 sum of absolute differences as psadbw$' "$test_output/report.log"
 grep -Eq '^llvmnet: simd: +[0-9]+ Sse2 +AdvSimd +X86\.Psadbw \(llvm\.x86\.sse2\.psad\.bw\): ' "$test_output/report.log"
+# A row reduced on its own needs only its total (SV-35): llvmnet's llvm.llvmnet.sad, uabd and uaddlv on ARM64.
+grep -Eq '^llvmnet: simd: +[0-9]+ Sse2 +AdvSimd/AdvSimd\.Arm64 +Vectors\.SumAbsoluteDifferences \(llvm\.llvmnet\.sad\): pix_abs16, pix_abs8$' "$test_output/report.log"
 grep -q '^llvmnet: simd: averages of lowres: 3 rounding averages of bytes or halfwords as pavgb or pavgw$' "$test_output/report.log"
 grep -Eq '^llvmnet: simd: +[0-9]+ Sse2 +AdvSimd +X86\.Pavgb \(llvm\.x86\.sse2\.pavg\.b\): ' "$test_output/report.log"
 grep -Eq '^llvmnet: simd: +[0-9]+ Sse2 +AdvSimd\.Arm64 +X86\.Pmaddwd \(llvm\.x86\.sse2\.pmadd\.wd\): ' "$test_output/report.log"
