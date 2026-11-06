@@ -185,4 +185,36 @@ public sealed unsafe class HostMemoryTests
         Assert.Equal(-EINVAL, Unmap((byte*)Page, 0));
         Assert.Equal(0, Unmap((byte*)Page, Page));
     }
+
+    // The C library allocator's blocks (__llvmnet_memory_allocate and __llvmnet_memory_free, PF-25).
+    [Theory]
+    [InlineData(1, 16)]
+    [InlineData(100_000, 4096)]
+    [InlineData(64L << 20, 65536)]
+    [InlineData(1L << 20, 256L << 20)]
+    public void AllocatorBlocksAreZeroedAlignedAndFreedWhole(long size, long alignment)
+    {
+        nint block = HostSyscalls.AllocateMemory(size, alignment);
+        Assert.NotEqual(0, block);
+        Assert.Equal(0, block % alignment);
+        long checkedBytes = Math.Min(size, 1L << 20);
+        AssertZero((byte*)block, checkedBytes);
+        AssertZero((byte*)block + size - Math.Min(size, Page), Math.Min(size, Page));
+        new Span<byte>((byte*)block, (int)checkedBytes).Fill(0xa5);
+        Assert.Equal(0, HostSyscalls.FreeMemory(block));
+        Assert.Equal(EINVAL, HostSyscalls.FreeMemory(block));
+    }
+
+    [Fact]
+    public void AllocatorRefusesInvalidRequests()
+    {
+        Assert.Equal(0, HostSyscalls.AllocateMemory(0, 16));
+        Assert.Equal(0, HostSyscalls.AllocateMemory(Page, 0));
+        Assert.Equal(0, HostSyscalls.AllocateMemory(Page, 48));
+        Assert.Equal(0, HostSyscalls.AllocateMemory(1L << 48, 16));
+        Assert.Equal(EINVAL, HostSyscalls.FreeMemory(0));
+        nint block = HostSyscalls.AllocateMemory(Page, Page);
+        Assert.Equal(EINVAL, HostSyscalls.FreeMemory(block + 16));
+        Assert.Equal(0, HostSyscalls.FreeMemory(block));
+    }
 }

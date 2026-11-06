@@ -1,0 +1,32 @@
+llvmnet port of mimalloc 3.6.1 for the dotnet64-v2 ABI; applied by scripts/build-portable-mimalloc.sh with
+patch -p1. Portable programs select a primitive layer of their own, src/prim/llvmnet/prim.c (copied from
+ports/mimalloc), which takes memory from the .NET host instead of mmap. The allocation fast path leaves out an empty
+asm statement that only steers GCC's code generation: llvmnet translates an asm without instructions to a full
+memory barrier, which cost every malloc a fence.
+
+diff -ruN a/src/alloc/alloc.c b/src/alloc/alloc.c
+--- a/src/alloc/alloc.c	2026-11-07 00:00:00.000000000 +1100
++++ b/src/alloc/alloc.c	2026-11-07 00:00:00.000000000 +1100
+@@ -86,7 +86,7 @@
+   // check the free list
+   mi_block_t* const block = page->free;
+   mi_used_t xused = page->xused;
+-  #if defined(__GNUC__)
++  #if defined(__GNUC__) && !defined(__LLVMNET_PORTABLE__)  // llvmnet: an empty asm is a full memory barrier
+   __asm("" : : "r"(xused) : );     // load the `xused` field before the test
+   #endif
+   xused.used_alloc += 0x10001;
+
+diff -ruN a/src/prim/prim.c b/src/prim/prim.c
+--- a/src/prim/prim.c	2026-11-07 00:00:00.000000000 +1100
++++ b/src/prim/prim.c	2026-11-07 00:00:00.000000000 +1100
+@@ -18,6 +18,9 @@
+ #elif defined(__APPLE__)
+ #include "osx/prim.c"      // macOSX (actually defers to mmap in unix/prim.c)
+ 
++#elif defined(__LLVMNET_PORTABLE__)
++#include "llvmnet/prim.c"  // .NET memory through llvmnet's host (portable programs of llvmnet)
++
+ #elif defined(__EMSCRIPTEN__)
+ #include "emscripten/prim.c" // emmalloc_*, + pthread support
+ 

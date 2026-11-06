@@ -2,8 +2,9 @@
 # Build musl 1.2.5 for the dotnet64-v2 ABI as LLVM bitcode; the first step of scripts/build-sysroot.sh, which
 # installs the result as the toolchain's portable sysroot.
 #   scripts/build-portable-libc.sh [prefix]     default artifacts/sysroot-build/dotnet64-v2
-# Produces <prefix>/include (musl headers), <prefix>/lib/libc.a (bitcode archive), <prefix>/lib/crt1.o and
-# <prefix>/build/failures.tsv (one row per source file llvmnet could not compile, with the first error).
+# Produces <prefix>/include (musl headers), <prefix>/lib/libc.a (bitcode archive, without an allocator until
+# scripts/build-portable-mimalloc.sh adds mimalloc), <prefix>/lib/crt1.o and <prefix>/build/failures.tsv (one row
+# per source file llvmnet could not compile, with the first error).
 # The build works on a copy of upstream: arch/x86_64 is copied to arch/llvmnet and ports/musl is overlaid.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,12 +32,16 @@ cp arch/generic/bits/*.h "$prefix/include/bits/"
 cp arch/llvmnet/bits/*.h "$prefix/include/bits/"
 cp obj/include/bits/alltypes.h obj/include/bits/syscall.h "$prefix/include/bits/"
 cp -a "$root/ports/musl/include/." "$prefix/include/"
-# Source selection as in musl's Makefile with ARCH=llvmnet: generic C in src/*/ and src/malloc/mallocng/,
-# where a src/<dir>/llvmnet/<name>.c from ports/musl replaces src/<dir>/<name>.c. The membership test is a
-# statement of its own: mawk, Debian's default awk, creates chosen[key] before it evaluates the right-hand side of
-# an assignment to it, so "chosen[key] = (key in chosen) ? ..." sees every key as present and keeps only the ports.
+# Source selection as in musl's Makefile with ARCH=llvmnet: generic C in src/*/, where a src/<dir>/llvmnet/<name>.c
+# from ports/musl replaces src/<dir>/<name>.c. musl's allocator is left out: mallocng (src/malloc/mallocng/) and
+# the files of src/malloc that define malloc, calloc, realloc, free and their internal names, which mimalloc defines
+# instead (scripts/build-portable-mimalloc.sh adds it to libc.a). memalign, posix_memalign and reallocarray stay.
+# The membership test is a statement of its own: mawk, Debian's default awk, creates chosen[key] before it evaluates
+# the right-hand side of an assignment to it, so "chosen[key] = (key in chosen) ? ..." sees every key as present and
+# keeps only the ports.
 mapfile -t sources < <(
-    { ls src/*/*.c src/malloc/mallocng/*.c; ls src/*/llvmnet/*.c 2>/dev/null || true; } | sort |
+    { ls src/*/*.c; ls src/*/llvmnet/*.c 2>/dev/null || true; } |
+    grep -Ev '^src/malloc/(calloc|free|libc_calloc|lite_malloc|realloc|replaced)\.c$' | sort |
     awk '{ key = $0; sub("/llvmnet/", "/", key); if (index($0, "/llvmnet/") || !(key in chosen)) chosen[key] = $0 } END { for (k in chosen) print chosen[k] }' | sort)
 for source in "${sources[@]}"; do
     [[ -f "$source" ]] || { printf 'FAIL: the musl source selection produced "%s", which is not a file\n' "$source" >&2; exit 1; }
