@@ -2,7 +2,7 @@
 
 Host: AMD Ryzen AI MAX+ 395 (Zen 5), Linux 6.12.113, .NET 10.0.14 (ILCompiler 10.0.14), Debian clang 22.1.8. Branch `x264-perf` at `22a0f55`. The disassembly comes from `--aot-debug` builds (`objdump -d -M intel` of `__managedcode`), the profiles from the x264 evaluation's sampler (`artifacts/x264-perf/tools/libsampler.so`), and the RyuJIT and ILC sources quoted are the `dotnet/runtime` checkout in `artifacts/coreclr/runtime`. SPEC 520.omnetpp_r is relinked from the SPEC run's bitcode objects (`build_base_llvmnet_portable_O3_v1_c14_t1.0000`, the link line of its `make.out` with another `-o`) and runs its refrate workload (`-c General -r 0`); x264 is 525.x264_r's refrate workload 1 built by `artifacts/x264-perf/build.sh` at scalar and Vector128. Both toolchains of every comparison are packaged from this worktree (`scripts/package-toolchain.sh`), so their `LlvmNet.Runtime.dll` is byte-identical.
 
-**Timing on a shared host.** Five other sessions ran gates, SPEC runs and benchmarks on the same 32 threads throughout (load average 10 to 75). The comparisons therefore run the two executables at the same time, each pinned to its own core of the two CCDs (`taskset`), swapping the cores every round, each run from a fresh copy of the executable in a fresh copy of the run directory (`pair.py`). Under that load an unchanged kernel (x264's `x264_pixel_satd_8x4`) differs by 5 to 8% between two simultaneous profiles, so differences under about 5% are not significant here, and the coordinator re-measures every item on a quiet host.
+**Timing on a shared host.** Five other sessions ran gates, SPEC runs and benchmarks on the same 32 threads throughout (load average 10 to 75). The comparisons therefore run the executables being compared at the same time, each pinned to its own core, half on each CCD (`taskset`), rotating the cores every round, each run from a fresh copy of the executable in a fresh copy of the run directory (`pair.py` in the session's scratch space), and report user CPU time, since wall time there mostly measures how long a process waited for its core. Under that load an unchanged kernel (x264's `x264_pixel_satd_8x4`) differs by 5 to 8% between two simultaneous profiles, so differences under about 5% are not significant here, and the coordinator re-measures every item on a quiet host.
 
 ## PF-24: the variadic call area, static allocas and byval copies in frame slots
 
@@ -20,7 +20,7 @@ What changed:
 
 **Correctness.** [tests/c/frame-slots.c](../../tests/c/frame-slots.c) (`tests/frame-slots.sh`) checks allocas of every alignment from 1 to 64 bytes, a zero-size alloca's address, an array per recursion level, an inlined callee's array in a loop, an address kept across `setjmp` and `longjmp`, a 100,000-byte array past the limit, a `byval` struct changed by each recursion level and a variadic call with a `long double` on an error path, against native under the JIT at `-O0` and `-O2` and as NativeAOT; [tests/c/varargs-aggregates.c](../../tests/c/varargs-aggregates.c) adds a variadic call in a loop (`localloc` under the JIT, a slot as NativeAOT) whose `long double` follows fifteen integers in the overflow area, so its 16-byte alignment holds only from an aligned area. Both, `varargs-callbacks`, `native-varargs-pointers`, `musttail`, `nonlocal-jumps`, `stack`, `thread-stack`, `fortran-stack` and `optimization-levels` pass, and so does the core gate.
 
-**Speed.** x264, three rounds each, base against PF-24 (median wall and user seconds): scalar 43.96 and 45.97 s wall, 43.39 and 44.93 s user; Vector128 30.87 and 32.18 s wall, 26.37 and 25.20 s user, with single runs from 27.8 to 46.2 s; every run wrote the expected `BuckBunny_New.264`. The differences, in both directions, are within this host's noise: the functions that changed (`x264_me_search_ref`, `refine_subpel`, `x264_slicetype_mb_cost`) hold 3 to 4% of x264's time. omnetpp's first round took 1,198 s (base) and 1,246 s (PF-24) of wall time, three times its unloaded 388 s, with 907 and 816 s of user time; both outputs match SPEC's `General-0.sca` (`specdiff`, the run's tolerances). The cumulative measurement of all four items is in [Measurements](#measurements).
+**Speed.** User CPU seconds, medians of three rounds, base against PF-24 (wall times on this host mostly measure descheduling): x264 scalar 43.39 and 44.93 s, Vector128 26.37 and 25.20 s, with single runs from 21.97 to 47.46 s, every run writing the expected `BuckBunny_New.264`; omnetpp 909 and 877 s, three times its unloaded 388 s, with single runs from 816 to 1,131 s, and outputs that match SPEC's `General-0.sca` (`specdiff` with the run's tolerances). The differences, in both directions, are within the noise; the x264 functions that changed (`x264_me_search_ref`, `refine_subpel`, `x264_slicetype_mb_cost`) hold 3 to 4% of its time. The cumulative measurement of all four items is in [Measurements](#measurements).
 
 ## PF-26: no type initializer on `Program` as NativeAOT
 
@@ -42,6 +42,74 @@ An unmanaged `calli` would need a GC transition, or with `SuppressGCTransition` 
 
 **Correctness.** [tests/c/indirect-signatures.c](../../tests/c/indirect-signatures.c) (`tests/indirect-signatures.sh`) calls through pointers that `volatile` keeps indirect at `-O2`: no arguments, two `int`s through a table in a loop, a `{ long, double }` and a 40-byte struct returned, a 16-byte vector, a `long double` and an `__int128` with an `int` (signatures the compiler patches into the `calli` after emission), nine `long`s (three on the stack) and a pointer result, and `qsort`'s callback from musl; it matches native in both modes under the JIT and as NativeAOT, and as NativeAOT with `--check-indirect-calls`. The core gate passes. The timing is in [Measurements](#measurements).
 
+## PF-28: x264's motion search
+
+The four functions, profiled with the sampler over workload 1 (`--aot-debug` builds; each llvmnet profile taken at the same time as a native one, on another core), in seconds:
+
+| Function | native | base | ratio | native | PF-24 to PF-27 | ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Vector128 `get_ref` | 2.03 | 2.87 | 1.41 | 2.26 | 2.73 | 1.21 |
+| Vector128 `refine_subpel` | 0.36 | 0.65 | 1.81 | 0.39 | 0.56 | 1.44 |
+| Vector128 `x264_me_search_ref` | 0.49 | 0.83 | 1.69 | 0.53 | 0.79 | 1.49 |
+| Vector128 `x264_slicetype_mb_cost` | 0.66 | 0.97 | 1.47 | 0.70 | 0.79 | 1.13 |
+| Vector128, whole program | 22.17 | 26.80 | 1.21 | 23.88 | 26.04 | 1.09 |
+| scalar `get_ref` | 4.41 | 5.10 | 1.16 | 4.67 | 5.05 | 1.08 |
+| scalar `refine_subpel` | 0.47 | 0.91 | 1.94 | 0.50 | 0.69 | 1.38 |
+| scalar `x264_me_search_ref` | 0.65 | 0.97 | 1.49 | 0.66 | 0.97 | 1.47 |
+| scalar `x264_slicetype_mb_cost` | 0.76 | 1.13 | 1.49 | 0.81 | 0.95 | 1.17 |
+| scalar, whole program | 41.84 | 47.36 | 1.13 | 43.38 | 47.43 | 1.09 |
+
+(The host's load slows both sides alike within a pair, but not between pairs; the whole program took 22 to 24 s natively at Vector128 against 12.4 s on a quiet host.)
+
+What the annotations showed, and where it went:
+
+- **Prologs (PF-24).** `x264_me_search_ref` began with the stack cookie, three `localloc`s each with a probe (`test [rsp],esp; sub rsp; lea; add; and`), and stored each alloca's address in the frame (`mov [rbp-0x80],r9` ... seven of them); `refine_subpel` (a 1,152-byte buffer and nine small arrays) and `x264_slicetype_mb_cost` had cookies. All are frame slots addressed from the frame now.
+- **The static base (PF-26).** Each began with the check, and `x264_me_search_ref` kept the static base's address in two frame slots (`mov [rbp-0x550],rax; mov rax,[rbp-0x550]; mov [rbp-0x558],rax`) to reload it after calls. NativeAOT now addresses the statics at their fixed place.
+- **Indirect calls (PF-27).** x264 calls its pixel functions through tables (`h->pixf.fpelcmp[i_pixel]`, `h->mc.get_ref`): `refine_subpel` has 49 indirect call sites at Vector128, each a `test r12b,2; je` and two copies of the argument setup, one for each path. They are plain `call r12` now.
+- **Register allocation (left).** `x264_me_search_ref` is 3,304 LLVM instructions in 440 blocks (the diamond, hexagon and exhaustive searches inlined); after BE-33's sharing it has 125 IL locals, all of which RyuJIT tracks, and 6,611 local references. A third of its 7,445 instructions address the frame, and a fifth of its samples are on stack loads and stores. In `get_ref`'s averaging loop (`pixel_avg_wxh`, one 8-byte `pavgb` per row) RyuJIT reloads a value and stores it back unchanged (`mov r14d,[rbp-0xa0]; mov [rbp-0xa0],r14d`) and stores unchanged stack-passed arguments back into their incoming slots (`mov [rbp+0x18],r14d`, `i_height`) on every row: PF-20's pattern, which this adds a second program to. `refine_subpel`'s calls load their targets through field addresses that LLVM hoisted to the entry block (`getelementptr i8, ptr %0, i64 C`) and llvmnet keeps in locals, which RyuJIT spills (`mov r12,[rbp-0x1a0]; mov r12,[r12]`, then `call r12`, where native code calls through the field, `call [r13+0x7f70]`): PF-23's pattern.
+
 ## Measurements
 
-The items measured together, each against the one before it, follow the last item.
+The four stages, base (`22a0f55`), PF-24 (`e73b2d6`), PF-26 (`dc7575a`) and PF-27 (`2cda422`; PF-28 changes no code), packaged from this worktree with `SourceRevisionId=ladder`, so all four carry the same version and byte-identical `LlvmNet.Runtime.dll`, and measured together: every round runs the four executables at once on cores 2, 10, 6 and 14 (x264) or 4, 12, 7 and 15 (omnetpp), two per CCD, rotating them, four rounds, user CPU seconds.
+
+**Per call.** A probe that calls each pattern 200 million times from a loop, as NativeAOT at `-O2` (native: clang-22 `-O2`); the five builds run one after another on one core, nine rounds, median user time per call:
+
+```c
+__attribute__((noinline)) int checked(struct S *s, int x) { if (__builtin_expect(s->a < 0, 0)) fail("bad %d\n", x); return s->b + x; }
+__attribute__((noinline)) int global(struct S *s, int x) { return s->b + table_global[x & 7]; }
+__attribute__((noinline)) int local(struct S *s, int x) { int v[2] = { s->b, x }; return sum2(v); }
+int (*volatile ops[2])(int, int) = { add, sub };   /* t += ops[i & 1](i, argc) */
+```
+
+| ns per call | native | base | PF-24 | PF-26 | PF-27 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `checked` (variadic call on an error path) | 0.92 | 1.93 | 1.83 | 1.60 | 1.59 |
+| `global` (reads a global) | 0.93 | 0.94 | 0.95 | 0.92 | 0.90 |
+| `local` (an 8-byte local array) | 3.60 | 1.87 | 1.83 | 1.83 | 1.82 |
+| indirect call through a table | 1.36 | 1.62 | 1.59 | 1.59 | 1.37 |
+
+PF-24 and PF-26 take `checked` from 2.1 to 1.7 times native; what is left is the frame RyuJIT sets up on the fast path (`push rbp; sub rsp,0x170; lea rbp`), which native code does only on the throwing path. PF-27 makes the indirect call as cheap as native code's. `global`'s loop hides the check (its branch predicts, and the loop is the cost), and `local`'s 8-byte array was already one of the small `localloc`s RyuJIT turns into a local; native code's 3.60 is clang's stores of the array followed at once by `sum2`'s loads of it.
+
+Under the JIT, where only PF-24 applies, the same probe as a JIT image (seven rounds, user seconds for the 200 million calls with start-up) takes 0.543 s at the base and 0.462 s with PF-24 for `checked`, and 0.732 and 0.628 s for `local`: neither function has a loop, so both lose `localloc` there too.
+
+**x264** (workload 1, all 32 runs wrote the expected `BuckBunny_New.264`):
+
+| User seconds | base | PF-24 | PF-26 | PF-27 |
+| --- | ---: | ---: | ---: | ---: |
+| scalar, median | 45.13 | 46.28 | 45.23 | 46.36 |
+| scalar, runs | 41.3 to 49.6 | 41.1 to 48.0 | 43.4 to 48.2 | 42.1 to 48.4 |
+| Vector128, median | 23.41 | 23.87 | 23.75 | 23.34 |
+| Vector128, runs | 21.9 to 25.5 | 23.1 to 24.3 | 19.3 to 24.8 | 18.7 to 24.9 |
+
+The single runs spread by 15 to 25%, and the medians differ by less than 3%: the host cannot resolve what the four changes are worth to x264. The profiles in PF-28 put it at about 3%: the four functions, a fifth of x264's time, went from 1.50 to 1.26 times native at Vector128 together and from 1.29 to 1.15 scalar.
+
+**omnetpp** (refrate `-c General -r 0`, all 16 runs match SPEC's `General-0.sca`):
+
+| User seconds | base | PF-24 | PF-26 | PF-27 |
+| --- | ---: | ---: | ---: | ---: |
+| median | 740 | 736 | 701 | 720 |
+| runs | 634 to 852 | 649 to 840 | 595 to 830 | 619 to 814 |
+| against base in the same round | | 0.986, 0.971, 0.973, 1.079 | 0.974, 0.943, 0.953, 0.939 | 0.955, 1.001, 0.927, 0.987 |
+| median of those | | 0.979 | 0.948 | 0.971 |
+
+The host got quieter during the run (the rounds took 852, 812, 668 and 634 s of base's time), so each stage is compared with the base of its own round. With PF-24 and PF-26 omnetpp takes about 5% less time, in all four rounds, against the profile's 31% of samples in methods that paid for the variadic area and every method's static-base check; PF-27 is not distinguishable from PF-26 here (0.97 to 1.06 of it by round), although each indirect call costs native code's time in the probe. The unloaded measurement of the merged branch is the coordinator's.
