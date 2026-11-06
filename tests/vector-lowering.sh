@@ -52,6 +52,26 @@ vector_code "$test_output/portable-256.dll"
 "$test_output/portable-aot" | diff -u "$test_output/native-O2.txt" -
 "$llvmnet" --runtime=system -O0 --vector-lowering=typed -w --nativeaot "$source_file" -o "$test_output/system-aot" >"$test_output/system-aot.log" 2>&1
 "$test_output/system-aot" | diff -u "$test_output/native-O0.txt" -
+# Per-lane shifts (SV-24, tests/ir/vector-shifts.ll): the 12 shifts by variable counts call the lane helpers, which run
+# as AVX2's or AdvSimd's shifts or lane by lane; the partial splats are shifts by one count and the constant counts per
+# lane multiplications. With and without AVX2 and hardware intrinsics, at 256 bits and as NativeAOT at x86-64-v3.
+tag_ir portable "$root/tests/ir/vector-shifts.ll" "$test_output/shifts.bc"
+"$llvmnet" --runtime=portable "$test_output/shifts.bc" -o "$test_output/shifts.dll"
+dotnet "$test_output/shifts.dll"
+DOTNET_EnableAVX2=0 dotnet "$test_output/shifts.dll"
+DOTNET_EnableHWIntrinsic=0 dotnet "$test_output/shifts.dll"
+calls="$(dotnet "$checks" vector-calls "$test_output/shifts.dll")"
+for expected in "Vectors.ShiftLeft 4," "Vectors.ShiftRightArithmetic 4," "Vectors.ShiftRightLogical 4," "op_Multiply 2,"; do
+    if [[ "$calls" != *"$expected"* ]]; then
+        printf 'FAIL: tests/ir/vector-shifts.ll: expected %s in %s\n' "$expected" "$calls" >&2
+        exit 1
+    fi
+done
+"$llvmnet" --runtime=portable --vector-width=256 "$test_output/shifts.bc" -o "$test_output/shifts-256.dll"
+dotnet "$test_output/shifts-256.dll"
+DOTNET_EnableAVX2=0 dotnet "$test_output/shifts-256.dll"
+"$llvmnet" --runtime=portable --nativeaot --aot-instruction-set x86-64-v3 "$test_output/shifts.bc" -o "$test_output/shifts-aot" >"$test_output/shifts-aot.log" 2>&1
+"$test_output/shifts-aot"
 # tests/ir/vector-lowering.ll (which ir.sh runs with the default lowering) with every translatable function typed.
 for runtime in portable system; do
     tag_ir "$runtime" "$root/tests/ir/vector-lowering.ll" "$test_output/ir-$runtime.bc"

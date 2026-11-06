@@ -1,6 +1,8 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
+using System.Runtime.Intrinsics.X86;
 
 namespace LlvmNet.Runtime;
 
@@ -113,31 +115,107 @@ public static unsafe class Vectors
         return result;
     }
 
-    /// <summary>A shift of each lane by the count in the same lane. A count at or above the lane width is poison in LLVM;
-    /// it is taken modulo the width here, as C# shifts do.</summary>
+    // Shifts of each lane by the count in the same lane. A count at or above the lane width is poison in LLVM; it is taken
+    // modulo the width, as C# shifts do, on every path. AVX2 shifts 32- and 64-bit lanes by vector counts (vpsllvd,
+    // vpsrlvq, vpsravd; 16-bit lanes through 32), AdvSimd every width (ushl, sshl, with negative counts shifting right);
+    // elsewhere the lanes go one by one through memory, out of line, where an inlined WithElement chain makes every lane
+    // wait for the store before it (sub4x4_dct ran 14 times native that way).
+
+    /// <summary>A shift left of each lane by the count in the same lane.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector128<T> ShiftLeft<T>(Vector128<T> value, Vector128<T> count) where T : unmanaged, IBinaryInteger<T>
     {
-        Vector128<T> result = Vector128<T>.Zero;
-        for (int lane = 0; lane < Vector128<T>.Count; lane++)
-            result = result.WithElement(lane, value.GetElement(lane) << int.CreateTruncating(count.GetElement(lane)));
-        return result;
+        if (Avx2.IsSupported)
+        {
+            if (sizeof(T) == 4) return Avx2.ShiftLeftLogicalVariable(value.AsUInt32(), count.AsUInt32() & Vector128.Create(31u)).As<uint, T>();
+            if (sizeof(T) == 8) return Avx2.ShiftLeftLogicalVariable(value.AsUInt64(), count.AsUInt64() & Vector128.Create(63ul)).As<ulong, T>();
+            if (sizeof(T) == 2) return Narrow(Avx2.ShiftLeftLogicalVariable(Avx2.ConvertToVector256Int32(value.AsUInt16()).AsUInt32(), Counts16(count))).As<ushort, T>();
+        }
+        if (AdvSimd.IsSupported) return ShiftLogical(value, Modulo(count));
+        return ShiftLeftLanes(value, count);
     }
 
-    /// <summary>A shift right of each lane by the count in the same lane: arithmetic for signed lanes, logical for unsigned.</summary>
+    /// <summary>A shift right of each lane by the count in the same lane, arithmetic: the lanes are signed.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector128<T> ShiftRightArithmetic<T>(Vector128<T> value, Vector128<T> count) where T : unmanaged, IBinaryInteger<T>
     {
-        Vector128<T> result = Vector128<T>.Zero;
-        for (int lane = 0; lane < Vector128<T>.Count; lane++)
-            result = result.WithElement(lane, value.GetElement(lane) >> int.CreateTruncating(count.GetElement(lane)));
-        return result;
+        if (Avx2.IsSupported)
+        {
+            if (sizeof(T) == 4) return Avx2.ShiftRightArithmeticVariable(value.AsInt32(), count.AsUInt32() & Vector128.Create(31u)).As<int, T>();
+            if (sizeof(T) == 2) return Narrow(Avx2.ShiftRightArithmeticVariable(Avx2.ConvertToVector256Int32(value.AsInt16()), Counts16(count)).AsUInt32()).As<ushort, T>();
+        }
+        if (AdvSimd.IsSupported) return ShiftArithmetic(value, Vector128<T>.Zero - Modulo(count));
+        return ShiftRightArithmeticLanes(value, count);
     }
 
+    /// <summary>A shift right of each lane by the count in the same lane, logical: the lanes are unsigned.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector128<T> ShiftRightLogical<T>(Vector128<T> value, Vector128<T> count) where T : unmanaged, IBinaryInteger<T>
     {
-        Vector128<T> result = Vector128<T>.Zero;
-        for (int lane = 0; lane < Vector128<T>.Count; lane++)
-            result = result.WithElement(lane, value.GetElement(lane) >>> int.CreateTruncating(count.GetElement(lane)));
-        return result;
+        if (Avx2.IsSupported)
+        {
+            if (sizeof(T) == 4) return Avx2.ShiftRightLogicalVariable(value.AsUInt32(), count.AsUInt32() & Vector128.Create(31u)).As<uint, T>();
+            if (sizeof(T) == 8) return Avx2.ShiftRightLogicalVariable(value.AsUInt64(), count.AsUInt64() & Vector128.Create(63ul)).As<ulong, T>();
+            if (sizeof(T) == 2) return Narrow(Avx2.ShiftRightLogicalVariable(Avx2.ConvertToVector256Int32(value.AsUInt16()).AsUInt32(), Counts16(count))).As<ushort, T>();
+        }
+        if (AdvSimd.IsSupported) return ShiftLogical(value, Vector128<T>.Zero - Modulo(count));
+        return ShiftRightLogicalLanes(value, count);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<T> Modulo<T>(Vector128<T> count) where T : unmanaged, IBinaryInteger<T> =>
+        count & Vector128.Create(T.CreateTruncating(sizeof(T) * 8 - 1));
+
+    /// <summary>The 16-bit counts as 32-bit lanes, modulo 16.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector256<uint> Counts16<T>(Vector128<T> count) where T : unmanaged =>
+        Avx2.ConvertToVector256Int32(count.AsUInt16()).AsUInt32() & Vector256.Create(15u);
+
+    /// <summary>The low 16 bits of each 32-bit lane.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<ushort> Narrow(Vector256<uint> lanes) => Vector128.Narrow(lanes.GetLower(), lanes.GetUpper());
+
+    // AdvSimd's ushl and sshl, which take a signed count per lane, at the lane width of T.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<T> ShiftLogical<T>(Vector128<T> value, Vector128<T> count) where T : unmanaged => sizeof(T) switch
+    {
+        1 => AdvSimd.ShiftLogical(value.AsSByte(), count.AsSByte()).As<sbyte, T>(),
+        2 => AdvSimd.ShiftLogical(value.AsInt16(), count.AsInt16()).As<short, T>(),
+        4 => AdvSimd.ShiftLogical(value.AsInt32(), count.AsInt32()).As<int, T>(),
+        _ => AdvSimd.ShiftLogical(value.AsInt64(), count.AsInt64()).As<long, T>(),
+    };
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<T> ShiftArithmetic<T>(Vector128<T> value, Vector128<T> count) where T : unmanaged => sizeof(T) switch
+    {
+        1 => AdvSimd.ShiftArithmetic(value.AsSByte(), count.AsSByte()).As<sbyte, T>(),
+        2 => AdvSimd.ShiftArithmetic(value.AsInt16(), count.AsInt16()).As<short, T>(),
+        4 => AdvSimd.ShiftArithmetic(value.AsInt32(), count.AsInt32()).As<int, T>(),
+        _ => AdvSimd.ShiftArithmetic(value.AsInt64(), count.AsInt64()).As<long, T>(),
+    };
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static Vector128<T> ShiftLeftLanes<T>(Vector128<T> value, Vector128<T> count) where T : unmanaged, IBinaryInteger<T>
+    {
+        T* lanes = (T*)&value, counts = (T*)&count;
+        for (int lane = 0; lane < Vector128<T>.Count; lane++) lanes[lane] <<= int.CreateTruncating(counts[lane]);
+        return value;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static Vector128<T> ShiftRightArithmeticLanes<T>(Vector128<T> value, Vector128<T> count) where T : unmanaged, IBinaryInteger<T>
+    {
+        T* lanes = (T*)&value, counts = (T*)&count;
+        for (int lane = 0; lane < Vector128<T>.Count; lane++) lanes[lane] >>= int.CreateTruncating(counts[lane]);
+        return value;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static Vector128<T> ShiftRightLogicalLanes<T>(Vector128<T> value, Vector128<T> count) where T : unmanaged, IBinaryInteger<T>
+    {
+        T* lanes = (T*)&value, counts = (T*)&count;
+        for (int lane = 0; lane < Vector128<T>.Count; lane++) lanes[lane] >>>= int.CreateTruncating(counts[lane]);
+        return value;
     }
 
     // Bit counts and reversals per lane, composed from shifts, masks and adds that every host executes as vector
@@ -315,14 +393,28 @@ public static unsafe class Vectors
         Vector256.Create(Remainder(left.GetLower(), right.GetLower(), Math.Min(lanes, Vector128<T>.Count)),
             Remainder(left.GetUpper(), right.GetUpper(), Math.Max(0, lanes - Vector128<T>.Count)));
 
-    public static Vector256<T> ShiftLeft<T>(Vector256<T> value, Vector256<T> count) where T : unmanaged, IBinaryInteger<T> =>
-        Vector256.Create(ShiftLeft(value.GetLower(), count.GetLower()), ShiftLeft(value.GetUpper(), count.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<T> ShiftLeft<T>(Vector256<T> value, Vector256<T> count) where T : unmanaged, IBinaryInteger<T>
+    {
+        if (Avx2.IsSupported && sizeof(T) == 4) return Avx2.ShiftLeftLogicalVariable(value.AsUInt32(), count.AsUInt32() & Vector256.Create(31u)).As<uint, T>();
+        if (Avx2.IsSupported && sizeof(T) == 8) return Avx2.ShiftLeftLogicalVariable(value.AsUInt64(), count.AsUInt64() & Vector256.Create(63ul)).As<ulong, T>();
+        return Vector256.Create(ShiftLeft(value.GetLower(), count.GetLower()), ShiftLeft(value.GetUpper(), count.GetUpper()));
+    }
 
-    public static Vector256<T> ShiftRightArithmetic<T>(Vector256<T> value, Vector256<T> count) where T : unmanaged, IBinaryInteger<T> =>
-        Vector256.Create(ShiftRightArithmetic(value.GetLower(), count.GetLower()), ShiftRightArithmetic(value.GetUpper(), count.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<T> ShiftRightArithmetic<T>(Vector256<T> value, Vector256<T> count) where T : unmanaged, IBinaryInteger<T>
+    {
+        if (Avx2.IsSupported && sizeof(T) == 4) return Avx2.ShiftRightArithmeticVariable(value.AsInt32(), count.AsUInt32() & Vector256.Create(31u)).As<int, T>();
+        return Vector256.Create(ShiftRightArithmetic(value.GetLower(), count.GetLower()), ShiftRightArithmetic(value.GetUpper(), count.GetUpper()));
+    }
 
-    public static Vector256<T> ShiftRightLogical<T>(Vector256<T> value, Vector256<T> count) where T : unmanaged, IBinaryInteger<T> =>
-        Vector256.Create(ShiftRightLogical(value.GetLower(), count.GetLower()), ShiftRightLogical(value.GetUpper(), count.GetUpper()));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<T> ShiftRightLogical<T>(Vector256<T> value, Vector256<T> count) where T : unmanaged, IBinaryInteger<T>
+    {
+        if (Avx2.IsSupported && sizeof(T) == 4) return Avx2.ShiftRightLogicalVariable(value.AsUInt32(), count.AsUInt32() & Vector256.Create(31u)).As<uint, T>();
+        if (Avx2.IsSupported && sizeof(T) == 8) return Avx2.ShiftRightLogicalVariable(value.AsUInt64(), count.AsUInt64() & Vector256.Create(63ul)).As<ulong, T>();
+        return Vector256.Create(ShiftRightLogical(value.GetLower(), count.GetLower()), ShiftRightLogical(value.GetUpper(), count.GetUpper()));
+    }
 
     public static Vector256<T> FunnelShift<T>(Vector256<T> high, Vector256<T> low, Vector256<T> count, bool right) where T : unmanaged, IBinaryInteger<T>, IUnsignedNumber<T> =>
         Vector256.Create(FunnelShift(high.GetLower(), low.GetLower(), count.GetLower(), right), FunnelShift(high.GetUpper(), low.GetUpper(), count.GetUpper(), right));

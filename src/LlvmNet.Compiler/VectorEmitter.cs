@@ -772,6 +772,20 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 Release(amount);
                 return;
             }
+            if (opcode == 20 && shape.LaneBits is 16 or 32 && Multipliers(right, shape.LaneBits) is long[] multipliers)
+            {
+                // A shift left by a constant count per lane multiplies by that power of two, as LLVM's x86 backend
+                // computes it (pmullw, pmulld): one instruction on every host, where the counts would go lane by lane.
+                Build(shape, index =>
+                {
+                    Fragment(left, index);
+                    for (int lane = 0; lane < shape.PerFragment; lane++)
+                        Scalar(shape.Lane, index * shape.PerFragment + lane < multipliers.Length ? multipliers[index * shape.PerFragment + lane] : 0);
+                    il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(shape.Lane, shape.PerFragment).ToArray()));
+                    Call("Multiply", shape.Lane, 2);
+                });
+                return;
+            }
             MethodInfo helper = Helper(name, lane, V(lane), V(lane));
             Build(shape, index =>
             {
@@ -811,26 +825,56 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         {
             // A zero vector stands for its own zero lane, which LoadLaneScalar loads as 0.
             if (Llvm.LLVMIsNull(vector) != 0) return vector;
+            // A poison or undef lane may take the value of the others, as the SLP vectorizer's partial splats need
+            // (<poison, poison, 1, 1>).
             uint lanes = Llvm.LLVMGetVectorSize(Llvm.LLVMTypeOf(vector));
-            nint first = Llvm.LLVMGetAggregateElement(vector, 0);
-            if (first == 0 || Llvm.LLVMIsAConstantInt(first) == 0) return null;
-            for (uint lane = 1; lane < lanes; lane++)
+            nint first = 0;
+            for (uint lane = 0; lane < lanes; lane++)
             {
                 nint element = Llvm.LLVMGetAggregateElement(vector, lane);
-                if (element == 0 || Llvm.LLVMIsAConstantInt(element) == 0 || Llvm.LLVMConstIntGetSExtValue(element) != Llvm.LLVMConstIntGetSExtValue(first))
-                    return null;
+                if (element != 0 && (Llvm.LLVMIsUndef(element) != 0 || Llvm.LLVMIsPoison(element) != 0)) continue;
+                if (element == 0 || Llvm.LLVMIsAConstantInt(element) == 0) return null;
+                if (first == 0) first = element;
+                else if (Llvm.LLVMConstIntGetSExtValue(element) != Llvm.LLVMConstIntGetSExtValue(first)) return null;
             }
-            return first;
+            return first == 0 ? null : first;
         }
         if (Llvm.LLVMIsAInstruction(vector) == 0 || Llvm.LLVMGetInstructionOpcode(vector) != 52) return null;
         uint count = Llvm.LLVMGetNumMaskElements(vector);
-        int selected = Llvm.LLVMGetMaskValue(vector, 0);
+        int selected = -1;
         for (uint lane = 0; lane < count; lane++)
-            if (Llvm.LLVMGetMaskValue(vector, lane) != selected) return null;
+        {
+            int element = Llvm.LLVMGetMaskValue(vector, lane);
+            if (element < 0) continue;
+            if (selected < 0) selected = element;
+            else if (element != selected) return null;
+        }
         nint source = Llvm.LLVMGetOperand(vector, 0);
         if (selected < 0 || Llvm.LLVMIsAInstruction(source) == 0 || Llvm.LLVMGetInstructionOpcode(source) != 51) return null;
         nint position = Llvm.LLVMGetOperand(source, 2);
         return Llvm.LLVMIsAConstantInt(position) != 0 && Llvm.LLVMConstIntGetSExtValue(position) == selected ? Llvm.LLVMGetOperand(source, 1) : null;
+    }
+
+    /// <summary>The powers of two of a constant vector of shift counts below the lane width (1 for an undefined lane), or
+    /// null for another count.</summary>
+    private static long[]? Multipliers(nint counts, int width)
+    {
+        if (!IsConstant(counts) || Llvm.LLVMIsNull(counts) != 0) return null;
+        long[] multipliers = new long[Llvm.LLVMGetVectorSize(Llvm.LLVMTypeOf(counts))];
+        for (int lane = 0; lane < multipliers.Length; lane++)
+        {
+            nint element = Llvm.LLVMGetAggregateElement(counts, (uint)lane);
+            if (element != 0 && (Llvm.LLVMIsUndef(element) != 0 || Llvm.LLVMIsPoison(element) != 0))
+            {
+                multipliers[lane] = 1;
+                continue;
+            }
+            if (element == 0 || Llvm.LLVMIsAConstantInt(element) == 0) return null;
+            long count = Llvm.LLVMConstIntGetSExtValue(element);
+            if (count < 0 || count >= width) return null;
+            multipliers[lane] = 1L << (int)count;
+        }
+        return multipliers;
     }
 
     /// <summary>Pushes a lane scalar (a constant vector's element or a splatted variable) as its CIL value.</summary>
