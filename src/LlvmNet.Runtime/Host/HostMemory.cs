@@ -477,6 +477,51 @@ public static unsafe partial class HostSyscalls
         return true;
     }
 
+    /// <summary>The C library allocator's blocks (ports/mimalloc), by the address handed out: the calloc block and its size.</summary>
+    private static readonly Dictionary<nint, (nint Allocation, long Size)> allocatorBlocks = [];
+
+    /// <summary>
+    /// __llvmnet_memory_allocate: <paramref name="size"/> zeroed bytes aligned to <paramref name="alignment"/> (a power of
+    /// two) for musl's malloc, mimalloc, or null. The block comes from calloc, which leaves large blocks to the system's
+    /// lazily zeroed pages, over-allocated to align it; it counts against the same limits as mappings, so malloc fails
+    /// with ENOMEM where mmap would.
+    /// </summary>
+    [CExport("__llvmnet_memory_allocate")]
+    public static nint AllocateMemory(long size, long alignment)
+    {
+        if (size <= 0 || alignment <= 0 || (alignment & (alignment - 1)) != 0 || size > LargestRange || alignment > LargestRange) return 0;
+        long total = size + (alignment > 16 ? alignment : 0);
+        if (!Reserve(total)) return 0;
+        nint allocation = 0;
+        try
+        {
+            allocation = (nint)NativeMemory.AllocZeroed((nuint)total);
+            nint address = (allocation + (nint)alignment - 1) & ~((nint)alignment - 1);
+            lock (mappingGate) allocatorBlocks.Add(address, (allocation, total));
+            return address;
+        }
+        catch (OutOfMemoryException)
+        {
+            if (allocation != 0) NativeMemory.Free((void*)allocation);
+            lock (mappingGate) mappedBytes -= total;
+            return 0;
+        }
+    }
+
+    /// <summary>__llvmnet_memory_free: releases a whole block from __llvmnet_memory_allocate; EINVAL for any other address.</summary>
+    [CExport("__llvmnet_memory_free")]
+    public static int FreeMemory(nint address)
+    {
+        (nint Allocation, long Size) block;
+        lock (mappingGate)
+        {
+            if (!allocatorBlocks.Remove(address, out block)) return EINVAL;
+            mappedBytes -= block.Size;
+        }
+        NativeMemory.Free((void*)block.Allocation);
+        return 0;
+    }
+
     /// <summary>MADV_DONTNEED gives private pages their initial contents back, as Linux does; other advice is accepted and ignored.</summary>
     private static long Advise(nint address, long length, int advice)
     {

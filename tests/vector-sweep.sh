@@ -5,11 +5,13 @@
 # profile runs both modes at -march=x86-64-v3 (portable mode's alias of --isa=x86-64-v3), where llvm.fmuladd is fused
 # as natively (SV-09).
 # vector-loops, whose loops the vectorizers transform, must run as vector code (ADR-16 Level 1): its
-# images call Vector128.
+# images call Vector128. vector-pixels has the encoder kernels whose ARM64 forms differ from x64's (SV-34 to SV-39); it
+# also runs as NativeAOT and without hardware intrinsics, the helpers' portable paths. strided-gathers reads its
+# sources against unmapped pages (SV-40).
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"
-fixtures=(vector-loops core math intrinsics int128 unaligned)
+fixtures=(vector-loops vector-pixels core math intrinsics int128 unaligned strided-gathers)
 profiles=("vectorize:-O3 -fvectorize -fslp-vectorize" "fast-math:-O3 -ffast-math -fvectorize -fslp-vectorize" "avx2:-O3 -march=x86-64-v3 -fvectorize -fslp-vectorize")
 matched=0 rejected=() vector_calls=()
 for profile in "${profiles[@]}"; do
@@ -51,5 +53,16 @@ done
 "$llvmnet" --runtime=portable -O3 -fvectorize -fslp-vectorize --nativeaot "$root/tests/c/vector-loops.c" -o "$test_output/vector-loops-aot" >"$test_output/aot.log"
 "$test_output/vector-loops-aot" >"$test_output/vector-loops-aot.txt"
 diff -u "$test_output/vector-loops-vectorize-native.txt" "$test_output/vector-loops-aot.txt"
+"$llvmnet" --runtime=portable -O3 -fvectorize -fslp-vectorize --nativeaot "$root/tests/c/vector-pixels.c" -o "$test_output/vector-pixels-aot" >"$test_output/pixels-aot.log"
+"$test_output/vector-pixels-aot" | diff -u "$test_output/vector-pixels-vectorize-native.txt" -
+DOTNET_EnableHWIntrinsic=0 dotnet "$test_output/vector-pixels-vectorize-portable.dll" | diff -u "$test_output/vector-pixels-vectorize-native.txt" -
+# The kernels' ARM64 forms are helpers that --report-simd names.
+"$llvmnet" --runtime=portable -O3 --report-simd "$root/tests/c/vector-pixels.c" -o "$test_output/vector-pixels-report.dll" 2>"$test_output/pixels-report.log"
+for helper in SumAbsoluteDifferences NarrowLower AddWidening16 SubtractWidening16 SubtractWidening32 Shuffle Halves; do
+    if ! grep -Eq "^llvmnet: simd: .* Vectors\.${helper}[ :]" "$test_output/pixels-report.log"; then
+        printf 'FAIL: vector-pixels does not call Vectors.%s\n' "$helper" >&2
+        exit 1
+    fi
+done
 printf '%s\n' "${rejected[@]}" >"$test_output/rejected.txt"
 printf 'PASS: %d vectorized builds match native; %d rejected with diagnostics (listed in %s); Vector128 calls: %s\n' "$matched" "${#rejected[@]}" "$test_output/rejected.txt" "$(IFS=,; echo "${vector_calls[*]}")"

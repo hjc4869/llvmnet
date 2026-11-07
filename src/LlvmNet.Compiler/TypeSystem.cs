@@ -7,11 +7,13 @@ namespace LlvmNet;
 
 /// <summary>
 /// How a fixed-length vector of 8- to 64-bit integers, pointers, float, double or i1 is held in CIL by the typed
-/// vector lowering (ADR-16 Level 1): as fragments of <see cref="Vector128{T}"/> (or <see cref="Vector256{T}"/> with
-/// --vector-width=256), one value when the vector fits one fragment (the unused upper lanes of a shorter one are
-/// undefined) and otherwise a struct with one field per fragment. Integer lanes are signed and pointers are 64-bit integers; operations reinterpret them where they need
-/// another view. An i1 vector is a mask: each lane all ones or zero, as wide as its lane count gives (the fragment's
-/// bits over the lane count rounded up to a power of two, from 8 to 64 bits), whatever comparison produced it.
+/// vector lowering (ADR-16 Level 1): as fragments of <see cref="Vector128{T}"/>, or with --vector-width=256 of
+/// <see cref="Vector256{T}"/> for a vector of more than 128 bits (a shorter one stays a Vector128, SV-41), one value
+/// when the vector fits one fragment (the unused upper lanes of a shorter one are undefined) and otherwise a struct
+/// with one field per fragment. Integer lanes are signed and pointers are 64-bit integers; operations reinterpret them
+/// where they need another view. An i1 vector is a mask: each lane all ones or zero, as wide as its lane count gives
+/// (the module's widest fragment bits over the lane count rounded up to a power of two, from 8 to 64 bits), whatever
+/// comparison produced it. <see cref="Bits"/> is the width of the vector's own fragments.
 /// </summary>
 internal sealed record VectorShape(int Lanes, Type Lane, int LaneBits, bool Mask, Type Fragment, Type Cil, FieldInfo[] Fields, int Bits)
 {
@@ -27,7 +29,8 @@ internal sealed class TypeSystem : IDisposable
     private readonly Dictionary<nint, Type> types = [];
     private readonly Dictionary<nint, VectorShape?> vectors = [];
     private readonly Dictionary<nint, Type> returns = [];
-    private readonly Dictionary<(Type Lane, int Fragments), (Type Cil, FieldInfo[] Fields)> containers = [];
+    private readonly Dictionary<(Type Lane, int Fragments, int Bits), (Type Cil, FieldInfo[] Fields)> containers = [];
+    private readonly Dictionary<int, Type> blocks = [];
 
     internal TypeSystem(nint llvmModule, ModuleBuilder module, bool typedVectors, int vectorBits = 128)
     {
@@ -39,7 +42,8 @@ internal sealed class TypeSystem : IDisposable
             throw new NotSupportedException("Only little-endian 64-bit LLVM modules and .NET hosts are supported.");
     }
 
-    /// <summary>The bits of a vector fragment: 128, or 256 with --vector-width=256.</summary>
+    /// <summary>The bits of the widest vector fragment: 128, or 256 with --vector-width=256, where a vector of at most
+    /// 128 bits still has a 128-bit fragment (<see cref="Shape"/>).</summary>
     internal int FragmentBits { get; }
     internal long Size(nint type) => checked((long)Llvm.LLVMABISizeOfType(layout, type));
     /// <summary>The bytes a load or store of the type touches, which for a vector of three lanes is less than its size.</summary>
@@ -97,7 +101,10 @@ internal sealed class TypeSystem : IDisposable
         return Llvm.LLVMIsFunctionVarArg(functionType) != 0 ? [.. result, typeof(nint)] : result;
     }
 
-    /// <summary>The typed representation of a vector type, or null when the lowering is off or no CIL vector has its lanes.</summary>
+    /// <summary>The typed representation of a vector type, or null when the lowering is off or no CIL vector has its lanes.
+    /// A mask of more than 64 lanes has none (masks are bits in one ulong): the functions with one are scalarized
+    /// (VectorEmitter.Legalize), whose remaining vectors of it, such as the insertelement chain of a bitcast to i80, are
+    /// then aggregates as without the lowering, not typed masks that would lose their lanes past 64.</summary>
     internal VectorShape? Vector(nint type)
     {
         if (!typedVectors || Kind(type) != 13) return null;
@@ -109,7 +116,7 @@ internal sealed class TypeSystem : IDisposable
             2 => typeof(float),
             3 => typeof(double),
             12 => typeof(long),
-            8 => Width(element) switch { 1 => MaskLane(lanes, FragmentBits), 8 => typeof(sbyte), 16 => typeof(short), 32 => typeof(int), 64 => typeof(long), _ => null },
+            8 => Width(element) switch { 1 => lanes <= 64 ? MaskLane(lanes, FragmentBits) : null, 8 => typeof(sbyte), 16 => typeof(short), 32 => typeof(int), 64 => typeof(long), _ => null },
             _ => null
         };
         shape = lane is null ? null : Shape(lanes, lane, Kind(element) == 8 && Width(element) == 1);
@@ -117,22 +124,28 @@ internal sealed class TypeSystem : IDisposable
         return shape;
     }
 
-    /// <summary>The shape of <paramref name="lanes"/> lanes of <paramref name="lane"/>, for values of no LLVM type of their own.</summary>
+    /// <summary>
+    /// The shape of <paramref name="lanes"/> lanes of <paramref name="lane"/>, for values of no LLVM type of their own.
+    /// With 256-bit fragments, a vector of at most 128 bits (the SLP vectorizer's &lt;4 x i32&gt; and &lt;8 x i8&gt;)
+    /// is one Vector128, so that its operations do not compute upper halves it never uses (SV-41); the lowering converts
+    /// where values of the two widths meet.
+    /// </summary>
     internal VectorShape Shape(int lanes, Type lane, bool mask)
     {
         int bits = LaneBits(lane);
-        int fragments = (lanes * bits + FragmentBits - 1) / FragmentBits;
-        Type fragment = (FragmentBits == 256 ? typeof(Vector256<>) : typeof(Vector128<>)).MakeGenericType(lane);
+        int width = FragmentBits == 256 && lanes * bits > 128 ? 256 : 128;
+        int fragments = (lanes * bits + width - 1) / width;
+        Type fragment = (width == 256 ? typeof(Vector256<>) : typeof(Vector128<>)).MakeGenericType(lane);
         if (fragments == 1)
-            return new VectorShape(lanes, lane, bits, mask, fragment, fragment, [], FragmentBits);
-        if (!containers.TryGetValue((lane, fragments), out var container))
+            return new VectorShape(lanes, lane, bits, mask, fragment, fragment, [], width);
+        if (!containers.TryGetValue((lane, fragments, width), out var container))
         {
-            TypeBuilder builder = module.DefineType(FragmentBits == 256 ? $"__Vector256x{fragments}x{lane.Name}" : $"__Vector{fragments}x{lane.Name}",
+            TypeBuilder builder = module.DefineType(width == 256 ? $"__Vector256x{fragments}x{lane.Name}" : $"__Vector{fragments}x{lane.Name}",
                 TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.SequentialLayout, typeof(ValueType));
             FieldInfo[] fields = Enumerable.Range(0, fragments).Select(index => (FieldInfo)builder.DefineField($"F{index}", fragment, FieldAttributes.Public)).ToArray();
-            containers[(lane, fragments)] = container = (builder.CreateType()!, fields);
+            containers[(lane, fragments, width)] = container = (builder.CreateType()!, fields);
         }
-        return new VectorShape(lanes, lane, bits, mask, fragment, container.Cil, container.Fields, FragmentBits);
+        return new VectorShape(lanes, lane, bits, mask, fragment, container.Cil, container.Fields, width);
     }
 
     /// <summary>The lane of a mask of this many lanes: as wide as a fragment's bits shared among them, from 8 to 64 bits.</summary>
@@ -169,6 +182,21 @@ internal sealed class TypeSystem : IDisposable
             typeof(ValueType), PackingSize.Size1, checked((int)Math.Max(Size(type), 1)));
         aggregate.DefineField("Data", typeof(byte), FieldAttributes.Public).SetOffset(0);
         return aggregate.CreateType()!;
+    }
+
+    /// <summary>A value type of <paramref name="size"/> bytes, rounded up to 16, for a block of memory in a method's frame:
+    /// a local whose address the method takes (PF-24).</summary>
+    internal Type Block(int size)
+    {
+        size = checked((size + 15) & -16);
+        if (!blocks.TryGetValue(size, out Type? block))
+        {
+            TypeBuilder builder = module.DefineType($"__Block{size}", TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.ExplicitLayout,
+                typeof(ValueType), PackingSize.Size1, size);
+            builder.DefineField("Data", typeof(byte), FieldAttributes.Public).SetOffset(0);
+            blocks[size] = block = builder.CreateType()!;
+        }
+        return block;
     }
 
     public void Dispose() => Llvm.LLVMDisposeTargetData(layout);

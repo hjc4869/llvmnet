@@ -17,6 +17,46 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-11-07, the performance items and mimalloc)
+
+The owner asked for every known performance item to be worked on in parallel and merged into `x264-perf` one at a time, for mimalloc as the default allocator over .NET memory alone, and for SPECrate 2017 integer and x264 again, against a native baseline linked with the same mimalloc. Measurements are in [evidence/2026-11-07-merged-intrate.md](../evidence/2026-11-07-merged-intrate.md). Six branches were merged, each passing the core gate; every SPEC benchmark builds and validates. llvmnet takes 1.12 times native's time (geometric mean; estimated SPECrate2017_int_base 8.68 against 9.76), from 1.31; mimalloc made native 7% faster and llvmnet 20%, perlbench and omnetpp twice as fast. x264 takes 1.15 times native scalar, 1.03 at Vector128 and 1.22 at `x86-64-v3`, from 1.18, 1.20 and 1.38.
+
+- **PF-25 (done).** mimalloc 3.6.1 replaces musl's mallocng in the portable C library, taking memory from two host entry points over `NativeMemory` and nothing of the OS; decided by the owner on 2026-11-07 ([decisions.md](decisions.md#decided-by-the-owner-2026-11-07-pf-25)).
+- **PF-22 and PF-23 (done).** Phis share their incoming values' local where they do not interfere, and constant-offset GEPs are computed at each use, also of frame slots (`df9a396`).
+- **PF-24, PF-26, PF-27 and PF-28 (done).** Static allocas, `byval` copies and the variadic call area are frame slots instead of `localloc`; NativeAOT images initialize from the entry point, so methods do not check a type initializer; indirect calls go through inlined `RawCalliHelper` stubs without the fat-pointer test; x264's motion search measured after them.
+- **SV-41 and PF-18 (done).** At 256 bits each value gets the fragment width it needs, so 128-bit values stay `Vector128`; loop-carried selects and min/max keep their branch.
+- **SV-34 to SV-40 (done).** ARM64 forms of narrow loads and stores, row sums of absolute differences, narrowing, widening arithmetic, constant shuffles and sign spreads; strided gathers as wide loads and a shuffle.
+- **Open.** exchange2 (1.44) did not move and is not profiled; SV-40 is still off for 256-bit fragments; PF-23 made fftbench and richards 8% slower as NativeAOT; an empty `asm` without a memory clobber is still a full barrier.
+
+## Progress (2026-11-06, SPECrate 2017 integer against native)
+
+The owner asked for SPECrate 2017 integer (refrate, one copy, three iterations) with llvmnet's Vector128 lowering against native Clang 22 at SSE2. Measurements are in [evidence/2026-11-06-spec-intrate.md](../evidence/2026-11-06-spec-intrate.md). All ten benchmarks validate after the three fixes below; llvmnet portable as NativeAOT takes 1.31 times native's time (geometric mean; estimated SPECrate2017_int_base 6.92 against 9.10), from 0.97 (523.xalancbmk_r) to 2.37 (500.perlbench_r).
+
+- **SV-31 (done).** Early-exit loops of LLVM 22's loop vectorizer (`cttz.elts`) become a `umin` reduction of lane indices; 502.gcc_r failed to link without it.
+- **SV-32 (done).** Masks of more than 64 lanes in scalarized functions keep all their lanes; 548.exchange2_r read wrong cells.
+- **SV-33 (done).** Function addresses in vector lanes stay relocatable as NativeAOT; 502.gcc_r's `gimplify_expr` never matched a function pointer.
+- **PF-22 to PF-25 (open).** From the profiles of the two largest gaps: phi copies between stack slots in functions that share locals (half of perlbench's gap, in `S_regmatch`), constant-offset addresses stored in locals at a loop head, the variadic call area's `localloc` in a third of omnetpp's hot methods, and musl's allocator (82 s of omnetpp's 389; whether to replace it is the owner's decision).
+
+## Progress (2026-11-06, x264 against native)
+
+The owner asked for SPEC CPU2017 525.x264_r's first refrate workload against native Clang 22 at three levels and for the generic fixes the profiles point to, committed one by one. Measurements are in [evidence/2026-11-06-x264.md](../evidence/2026-11-06-x264.md). At `adfdc44` llvmnet took 1.19 times native's time scalar, 1.31 at Vector128 against SSE2 and 2.02 at `x86-64-v3`; after the seven items below it takes 1.18, 1.20 and 1.38 (13.55 s against native's 9.81 at `x86-64-v3`, from 19.92), with native's output. The benchmark set is level (0.990 under the JIT, 0.998 as NativeAOT). What remains is listed in the evidence: strided byte gathers at SSE2, frame and call overhead in the motion search, and 256-bit fragments for 128-bit vectors.
+
+- **SV-24 (done).** Per-lane vector shifts: the SLP vectorizer's partial splats run as one shift, constant counts per lane as a multiplication, and counts per lane as AVX2's or AdvSimd's shifts instead of a lane loop that stalled on every lane. x264 at `x86-64-v3` takes 16.10 s instead of 19.92 (native 9.84).
+
+- **SV-25 (done).** Vector `getelementptr`s, which the loop vectorizer's alias checks make, are expanded into address arithmetic before the lowering instead of scalarizing their whole function: x264's `frame_init_lowres_core` runs vectorized at `x86-64-v3` again, 15.25 s for the workload.
+
+- **SV-26 (done).** A row's sum of absolute differences is `psadbw` and one extract, as natively, instead of folding psadbw's zero lanes and clearing the padding of a load that is zero already; narrow loads in 256-bit fragments no longer clear their upper half with `vinserti128`. x264: 15.82 s at Vector128, 14.65 s at `x86-64-v3`.
+
+- **PF-21 (done).** 8- and 16-bit sign extensions are `conv.i1` and `conv.i2`, which RyuJIT folds into the load as `movsx`, instead of a shift pair after a `movzx`. Every program's scalar code; x264 takes 26.75 s scalar, 15.71 at Vector128 and 14.47 at `x86-64-v3`.
+
+- **SV-27 (done).** Vector shifts by a constant count are immediates (`pslld xmm, 16`) instead of counts loaded from memory: x264's image has 248 immediate shifts and 51 by a register at Vector128, against 31 and 268.
+
+- **SV-28 (done).** Rounding averages of bytes and 16-bit values run as `pavgb` and `pavgw` (`urhadd` on ARM64), as LLVM's x86 backend compiles them, instead of widened arithmetic: x264's lowres filter and half-pel averages, 15.51 s at Vector128.
+
+- **SV-29 (done).** Integer widenings by two or three steps (bytes to 32-bit lanes) are one `pmovzx`/`pmovsx` with the load folded, as natively, instead of a step at a time: x264's `satd` rows, 14.96 s at Vector128 and 14.03 at `x86-64-v3`.
+
+- **SV-30 (done).** Two-source shuffles blend with `pblendvb` instead of the three logic operations RyuJIT makes of a `ConditionalSelect` whose mask it hoisted into a register: x264 takes 14.83 s at Vector128 and 13.58 at `x86-64-v3`.
+
 ## Progress (2026-11-05 and 06, JP-02 to JP-07 and JP-09)
 
 The owner asked to start [13-jit-patterns.md](13-jit-patterns.md) in the order decided on 2026-11-05. Measurements are in [evidence/2026-11-05-jit-shapes.md](../evidence/2026-11-05-jit-shapes.md).

@@ -34,6 +34,7 @@ time	-	c/time.c	-O1	-	-
 vector-loops	aot	c/vector-loops.c	-O3 -fvectorize -fslp-vectorize	-	-
 vector-reductions	aot	c/vector-reductions.c	-O2	-	-
 vector-reductions-v3	aot	c/vector-reductions.c	-O3 --isa=x86-64-v3	-	-
+vector-pixels	aot	c/vector-pixels.c	-O3	-	-
 x86-sse-conformance	aot	c/x86-sse-conformance.c	-O0 --isa=x86-64-v2	portable	-
 x86-avx-conformance	aot	c/x86-avx-conformance.c	-O0 -w --isa=x86-64-v3	portable	-
 cpu-detection	aot	c/cpu-detection.c	-O2 --isa=x86-64-v2	consistency	-

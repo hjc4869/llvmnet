@@ -41,6 +41,8 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal HostInterop? Host { get; private set; }
     internal bool TrapMissingArguments => options.TrapMissingArguments;
     internal bool CheckIndirectCalls => options.CheckIndirectCalls;
+    /// <summary>Whether the image is compiled by NativeAOT (--nativeaot or --aot-project) rather than run by the JIT.</summary>
+    internal bool NativeAot => options.NativeAot;
     internal void Warning(string message) => options.Warnings?.Warning(null, message);
 
     /// <summary>CIL-level signature text used by --check-indirect-calls; calli compatibility is decided at this level.</summary>
@@ -48,6 +50,8 @@ internal sealed class CilCompiler(CompilerOptions options)
         $"{returnType.Name}({string.Join(",", parameters.Select(parameter => parameter.Name))})";
     private readonly Dictionary<nint, FieldBuilder> constants = [];
     private readonly List<(MethodBuilder Method, int Offset, Type ReturnType, Type[] Parameters)> indirectCalls = [];
+    private TypeBuilder? calliHelper;
+    private readonly Dictionary<string, MethodBuilder> calliStubs = [];
     private readonly HashSet<string> managedImports = new(StringComparer.Ordinal);
     private readonly Dictionary<string, MethodInfo> runtimeExports = typeof(Memory).Assembly.GetTypes()
         .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
@@ -58,6 +62,8 @@ internal sealed class CilCompiler(CompilerOptions options)
     /// <summary>The NativeExtension subclass of each linked extension, which the image initializer registers.</summary>
     private readonly List<ConstructorInfo> extensionProviders = [];
     private MethodBuilder constructors = null!;
+    // A NativeAOT image's initializer, which its entry point calls (EmitInitializer); null where Program's type initializer runs it.
+    private MethodBuilder? initializer;
     private nint libcMain;
     private nint libcFinalizer;
 
@@ -143,14 +149,49 @@ internal sealed class CilCompiler(CompilerOptions options)
     internal static bool IsSetJump(nint function) => Llvm.LLVMIsAFunction(function) != 0 && Llvm.LLVMIsDeclaration(function) != 0 &&
         Llvm.Name(function) is "setjmp" or "_setjmp" or "sigsetjmp" or "__sigsetjmp";
 
-    internal void ManagedCalli(ILGenerator il, MethodBuilder method, Type returnType, Type[] parameters, bool tail = false)
+    /// <summary>
+    /// An indirect call to a translated function's managed entry point, with the arguments and then the target on the
+    /// stack. As NativeAOT, a calli tests its target for a fat function pointer (a shared generic method with its
+    /// instantiation argument) before the call, `test reg, 2` and a branch, unless the method holding the calli is of a
+    /// class named RawCalliHelper, the class library's way of calling targets that cannot be fat (ILC's
+    /// Compilation.IsFatPointerCandidate). Translated code only calls ldftn addresses of methods that are not generic, so
+    /// with <paramref name="stub"/> a NativeAOT image calls the target through an inlined method of such a class instead
+    /// (PF-27). A later ILC without that exception would test the target again, which costs only the test.
+    /// </summary>
+    internal void ManagedCalli(ILGenerator il, MethodBuilder method, Type returnType, Type[] parameters, bool tail = false, bool stub = false)
     {
         if (options.CheckIndirectCalls)
         {
             il.Emit(OpCodes.Ldstr, CilSignature(returnType, parameters));
             il.Emit(OpCodes.Call, typeof(IndirectCalls).GetMethod(nameof(IndirectCalls.Check))!);
         }
+        if (stub && !tail && options.NativeAot)
+        {
+            il.Emit(OpCodes.Call, CalliStub(returnType, parameters));
+            return;
+        }
         if (tail) il.Emit(OpCodes.Tailcall);
+        Calli(il, method, returnType, parameters);
+    }
+
+    /// <summary>The RawCalliHelper method that calls its last argument with the others (ManagedCalli), one per signature.</summary>
+    private MethodBuilder CalliStub(Type returnType, Type[] parameters)
+    {
+        string key = $"{returnType.FullName}({string.Join(",", parameters.Select(parameter => parameter.FullName))})";
+        if (calliStubs.TryGetValue(key, out MethodBuilder? stub)) return stub;
+        calliHelper ??= ((ModuleBuilder)Program.Module).DefineType("LlvmNet.RawCalliHelper", TypeAttributes.NotPublic | TypeAttributes.Abstract | TypeAttributes.Sealed);
+        stub = calliHelper.DefineMethod($"Call{calliStubs.Count}", MethodAttributes.Assembly | MethodAttributes.Static, returnType, [.. parameters, typeof(nint)]);
+        stub.SetImplementationFlags(MethodImplAttributes.AggressiveInlining);
+        ILGenerator il = stub.GetILGenerator();
+        for (int index = 0; index <= parameters.Length; index++) il.Emit(OpCodes.Ldarg, checked((short)index));
+        Calli(il, stub, returnType, parameters);
+        il.Emit(OpCodes.Ret);
+        calliStubs[key] = stub;
+        return stub;
+    }
+
+    private void Calli(ILGenerator il, MethodBuilder method, Type returnType, Type[] parameters)
+    {
         if (NativeScalar(returnType) && parameters.All(NativeScalar))
         {
             il.EmitCalli(OpCodes.Calli, CallingConventions.Standard, returnType, parameters, null);
@@ -305,20 +346,24 @@ internal sealed class CilCompiler(CompilerOptions options)
         using var types = new TypeSystem(module, cilModule, options.TypedVectors, options.VectorWidth);
         Types = types;
         List<(string Function, string? Reason)> scalarized = [];
-        List<(string Function, uint Differences, uint Products)> reductions = [];
+        List<(string Function, uint Differences, uint Products, uint Averages)> reductions = [];
+        List<(string Function, uint Gathers, uint Loads)> gathered = [];
         if (options.TypedVectors)
         {
-            scalarized = VectorEmitter.Legalize(types, module, options.VectorLowering == "auto", out bool computes);
+            scalarized = VectorEmitter.Legalize(types, module, options.VectorLowering == "auto", options.VectorIdioms, out bool computes, out gathered);
             HasVectorCode = computes;
             foreach ((string function, string? reason) in scalarized)
                 if (options.Verbose)
                     Console.Error.WriteLine(reason is null ? $"llvmnet: scalarized {function}, whose vector code moves more lanes than it computes on"
                         : $"llvmnet: scalarized the vector code of {function} ({reason})");
+            foreach ((string function, uint count, uint loads) in gathered)
+                if (options.Verbose)
+                    Console.Error.WriteLine($"llvmnet: {function}: {VectorEmitter.DescribeGathers(count, loads)}");
             if (options.VectorIdioms)
                 reductions = VectorEmitter.Idioms(types, module);
-            foreach ((string function, uint differences, uint products) in reductions)
+            foreach ((string function, uint differences, uint products, uint averages) in reductions)
                 if (options.Verbose)
-                    Console.Error.WriteLine($"llvmnet: {function}: {VectorEmitter.Describe(differences, products)}");
+                    Console.Error.WriteLine($"llvmnet: {function}: {VectorEmitter.Describe(differences, products, averages)}");
         }
         constructors = Program.DefineMethod("__llvmnet_run_constructors", MethodAttributes.Public | MethodAttributes.Static, typeof(void), Type.EmptyTypes);
         // In portable mode musl's start object calls main and exit and runs constructors after __init_libc.
@@ -426,6 +471,7 @@ internal sealed class CilCompiler(CompilerOptions options)
         MethodBuilder? entry = options.Library ? null : EmitStartup(cilModule, EmitEntry(main!));
         foreach (TypeBuilder holder in fieldHolders.Concat(methodHolders).Distinct())
             holder.CreateType();
+        calliHelper?.CreateType();
         MetadataBuilder metadata = assembly.GenerateMetadata(out BlobBuilder ilStream, out BlobBuilder fieldData);
         var indirectFixups = FinalizeIndirectSignatures(metadata);
         var pe = new ManagedPEBuilder(new PEHeaderBuilder(imageCharacteristics: Characteristics.ExecutableImage | Characteristics.LargeAddressAware | (options.Library ? Characteristics.Dll : 0)),
@@ -440,7 +486,7 @@ internal sealed class CilCompiler(CompilerOptions options)
             CompileOnce(executable, [.. Methods.Values.OfType<MethodBuilder>().Select(method => method.Name)]);
         MakeDeterministic(executable);
         if (options.ReportSimd)
-            SimdReport.Write(executable, scalarized, reductions, types.FragmentBits, Console.Error);
+            SimdReport.Write(executable, scalarized, reductions, gathered, types.FragmentBits, Console.Error);
         if (options.DiagnoseLimits)
             LimitsReport.Write(executable, Methods.Where(pair => pair.Value is MethodBuilder).ToDictionary(pair => pair.Value.Name, pair =>
                 Llvm.Blocks(pair.Key).Sum(block => Llvm.Instructions(block).Count())), Console.Error);
@@ -541,12 +587,15 @@ internal sealed class CilCompiler(CompilerOptions options)
     /// initialized (impImportStaticReadOnlyField), as PF-17's reloads need (JP-04). A holder class past Program has no
     /// type initializer, and the runtime counts such a class as initialized from the start (IsInitedIfStaticDataAllocated),
     /// so code compiled before Program's initializer has written those fields would read them as zero: they stay
-    /// writable, as do thread-local globals, whose getters write each thread's address.
+    /// writable, as do thread-local globals, whose getters write each thread's address. In a NativeAOT image Program has
+    /// no type initializer either (EmitInitializer) and its fields stay writable too: ILC reads an initonly field as a
+    /// constant only for a class whose type initializer it ran at build time, and these are written outside one.
     /// </summary>
     private FieldBuilder AddressField(string name, bool threadLocal)
     {
         TypeBuilder holder = FieldHolder();
-        return holder.DefineField(name, typeof(nint), FieldAttributes.Assembly | FieldAttributes.Static | (holder == Program && !threadLocal ? FieldAttributes.InitOnly : 0));
+        return holder.DefineField(name, typeof(nint), FieldAttributes.Assembly | FieldAttributes.Static |
+            (holder == Program && !threadLocal && !options.NativeAot ? FieldAttributes.InitOnly : 0));
     }
 
     internal FieldBuilder Constant(nint value)
@@ -574,6 +623,8 @@ internal sealed class CilCompiler(CompilerOptions options)
             throw new NotSupportedException("The entry point must be int main(void), int main(int[, char **[, char **]]), or a Fortran main.");
         MethodBuilder entry = Program.DefineMethod("__Entry", MethodAttributes.Public | MethodAttributes.Static, typeof(int), [typeof(string[])]);
         ILGenerator il = entry.GetILGenerator();
+        // Where Program's type initializer would have run: before the entry point's body.
+        if (initializer is not null) il.Emit(OpCodes.Call, initializer);
         if (libcMain != 0)
         {
             // musl: __llvmnet_libc_main(argc, argv, envp, main) initializes libc, runs constructors, calls main and exit.
@@ -694,7 +745,13 @@ internal sealed class CilCompiler(CompilerOptions options)
             getter.Emit(OpCodes.Ldsfld, field);
             getter.Emit(OpCodes.Ret);
         }
-        ILGenerator il = Program.DefineTypeInitializer().GetILGenerator();
+        // NativeAOT cannot run Program's type initializer at build time (it calls the runtime and allocates native memory),
+        // so a type initializer would make every method of Program check on entry that it has run, and every method that
+        // reads a global check before the read (`cmp [static base - 8], 0`, PF-26). An executable's entry point calls this
+        // method first instead, before any translated code runs; NativeAOT builds no libraries, whose first call would.
+        if (options.NativeAot && !options.Library)
+            initializer = Program.DefineMethod("__llvmnet_initialize", MethodAttributes.Assembly | MethodAttributes.Static, typeof(void), Type.EmptyTypes);
+        ILGenerator il = initializer?.GetILGenerator() ?? Program.DefineTypeInitializer().GetILGenerator();
         il.Emit(OpCodes.Ldstr, options.AbiTag);
         il.Emit(OpCodes.Ldstr, BuildInfo.Version);
         il.Emit(OpCodes.Call, typeof(AbiContract).GetMethod(nameof(AbiContract.Require), [typeof(string), typeof(string)])!);

@@ -1,7 +1,9 @@
 /* Widening reductions (SV-21): sums of absolute differences of bytes and sums of products of 16-bit values in the
  * shapes the loop and SLP vectorizers give them, which llvmnet runs as psadbw and pmaddwd, and look-alikes it must
- * leave alone (products of unsigned 16-bit values, accumulators whose lanes the program reads). Prints one line per
- * function and length; tests/vector-reductions.sh compares it with native clang's output. */
+ * leave alone (products of unsigned 16-bit values, accumulators whose lanes the program reads). Rounding averages of
+ * bytes and halfwords (SV-28), which run as pavgb and pavgw, among them the nested average of x264's lowres filter,
+ * and look-alikes: the average without rounding, signed bytes, a rounding constant of 2. Prints one line per function
+ * and length; tests/vector-reductions.sh compares it with native clang's output. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -195,6 +197,47 @@ NOINLINE static uint32_t dot_vector_sum(const int16_t *a, const int16_t *b, int 
     return __builtin_reduce_add(acc);
 }
 
+NOINLINE static void avg_u8(uint8_t *d, const uint8_t *a, const uint8_t *b, int n)
+{
+    for (int i = 0; i < n; i++) d[i] = (uint8_t)((a[i] + b[i] + 1) >> 1);
+}
+
+NOINLINE static void avg_u16(uint16_t *d, const uint16_t *a, const uint16_t *b, int n)
+{
+    for (int i = 0; i < n; i++) d[i] = (uint16_t)((a[i] + b[i] + 1) >> 1);
+}
+
+/* x264's frame_init_lowres_core: an average of two averages, of pairs of bytes two apart. */
+NOINLINE static void lowres(uint8_t *d, const uint8_t *s0, const uint8_t *s1, int n)
+{
+#define FILTER(a, b, c, e) ((((a + b + 1) >> 1) + ((c + e + 1) >> 1) + 1) >> 1)
+    for (int x = 0; x < n; x++) d[x] = (uint8_t)FILTER(s0[2 * x], s1[2 * x], s0[2 * x + 1], s1[2 * x + 1]);
+#undef FILTER
+}
+
+NOINLINE static void avg_floor(uint8_t *d, const uint8_t *a, const uint8_t *b, int n)
+{
+    for (int i = 0; i < n; i++) d[i] = (uint8_t)((a[i] + b[i]) >> 1);
+}
+
+NOINLINE static void avg_s8(int8_t *d, const int8_t *a, const int8_t *b, int n)
+{
+    for (int i = 0; i < n; i++) d[i] = (int8_t)((a[i] + b[i] + 1) >> 1);
+}
+
+NOINLINE static void avg_plus2(uint8_t *d, const uint8_t *a, const uint8_t *b, int n)
+{
+    for (int i = 0; i < n; i++) d[i] = (uint8_t)((a[i] + b[i] + 2) >> 1);
+}
+
+static uint32_t checksum(const void *data, size_t bytes)
+{
+    const uint8_t *p = data;
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < bytes; i++) h = (h ^ p[i]) * 16777619u;
+    return h;
+}
+
 int main(void)
 {
     for (int i = 0; i < N + 64; i++) {
@@ -223,6 +266,28 @@ int main(void)
         printf("n=%d dot_i16=%u dot_u8_i16=%u dot_i8=%d dot_const=%u sum_squares=%u dot_u16=%u\n", n, dot_i16(ha, hb, n), dot_u8_i16(ua, hb, n),
                dot_i8(sa, sb, n), dot_const(ha, n), sum_squares(ha, n), dot_u16(wa, hb, n));
         printf("n=%d sad_vector=%d dot_vector=%u\n", n, sad_vector_sum(ua, ub, n), dot_vector_sum(ha, hb, n));
+    }
+    static uint8_t d8[N];
+    static int8_t s8[N];
+    static uint16_t d16[N], w2[N];
+    for (int i = 0; i < N; i++) w2[i] = (uint16_t)(wa[i] ^ (uint16_t)hash((uint32_t)i + 0x40000u));
+    for (size_t k = 0; k < sizeof lengths / sizeof lengths[0]; k++) {
+        int n = lengths[k];
+        uint32_t averages[6];
+        avg_u8(d8, ua, ub + 1, n);
+        averages[0] = checksum(d8, (size_t)n);
+        avg_u16(d16, wa, w2, n);
+        averages[1] = checksum(d16, (size_t)n * 2);
+        lowres(d8, ua, ub, n / 2);
+        averages[2] = checksum(d8, (size_t)(n / 2));
+        avg_floor(d8, ua, ub, n);
+        averages[3] = checksum(d8, (size_t)n);
+        avg_s8(s8, sa, sb, n);
+        averages[4] = checksum(s8, (size_t)n);
+        avg_plus2(d8, ua, ub, n);
+        averages[5] = checksum(d8, (size_t)n);
+        printf("n=%d avg_u8=%08x avg_u16=%08x lowres=%08x avg_floor=%08x avg_s8=%08x avg_plus2=%08x\n", n, averages[0], averages[1], averages[2],
+               averages[3], averages[4], averages[5]);
     }
     for (int h = 1; h <= 16; h *= 2)
         printf("h=%d pix_abs16=%d pix_abs8=%d\n", h, pix_abs16(ua, ub, 61, h), pix_abs8(ua + 7, ub + 1, 37, h));

@@ -25,8 +25,12 @@ internal sealed class FunctionEmitter : ValueEmitter
     private LocalBuilder? stackReturn;
     private Label stackExit;
     private bool tailCalled;
+    // The IL locals once the values have theirs (for ManagedCalli).
+    private int localCount;
     private readonly List<(Label Site, nint Call)> tailSites = [];
     private readonly Dictionary<Type, LocalBuilder> scratch = [];
+    // Static allocas in frame slots (FrameSlots): the slot and the alignment its address is rounded to.
+    private readonly Dictionary<nint, (LocalBuilder Slot, int Alignment)> frameSlots = [];
     // Values computed where their one use loads them (ChooseUseSiteValues), and the one being computed there.
     private readonly HashSet<nint> atUse = [];
     private nint computing;
@@ -72,8 +76,16 @@ internal sealed class FunctionEmitter : ValueEmitter
         // A function with a musttail call takes its stack memory from the arena, never from localloc (MustTailCall). It
         // has no byval parameters: those would be byval arguments of its musttail calls, which are rejected.
         bool arenaFrame = mustTail && (hasAllocations || variadicCalls);
+        bool byValueParameters = Enumerable.Range(0, (int)Llvm.LLVMCountParams(function)).Any(index => Llvm.ParameterAttribute(function, (uint)index, "byval") != 0);
+        // The variadic call area, static allocas and byval copies take frame slots instead of localloc, except under the
+        // JIT in a method with a loop: localloc keeps such a method out of on-stack replacement (the JIT compiles it
+        // optimized at once), whose code runs slower in a method without localsinit (lpbench, PF-04); NativeAOT has no
+        // on-stack replacement.
+        bool slots = !arenaFrame && (hasAllocations || variadicCalls || byValueParameters) && (Compiler.NativeAot || !HasLoop());
         if (!arenaFrame)
-            varargs.Allocate(function, arena: false);
+            varargs.Allocate(function, arena: false, slot: slots);
+        if (slots && hasAllocations)
+            FrameSlots();
         for (uint index = 0; index < Llvm.LLVMCountParams(function); index++)
         {
             nint byValue = Llvm.ParameterAttribute(function, index, "byval");
@@ -81,26 +93,37 @@ internal sealed class FunctionEmitter : ValueEmitter
             nint type = Llvm.LLVMGetTypeAttributeValue(byValue);
             nint explicitAlignment = Llvm.ParameterAttribute(function, index, "align");
             int alignment = Math.Max(Types.Alignment(type), explicitAlignment == 0 ? 1 : checked((int)Llvm.LLVMGetEnumAttributeValue(explicitAlignment)));
-            LocalBuilder copy = Il.DeclareLocal(typeof(nint));
-            Il.Emit(OpCodes.Ldc_I8, checked(Types.Size(type) + alignment - 1));
-            Il.Emit(OpCodes.Conv_U);
-            Il.Emit(OpCodes.Localloc);
-            usesLocalloc = true;
-            Offset(alignment - 1);
-            Il.Emit(OpCodes.Ldc_I8, -(long)alignment);
-            Il.Emit(OpCodes.Conv_I);
-            Il.Emit(OpCodes.And);
-            Il.Emit(OpCodes.Stloc, copy);
-            Il.Emit(OpCodes.Ldloc, copy);
+            if (slots && Types.Size(type) <= FrameSlotLimit)
+            {
+                // The copy in a frame slot, whose address each use takes, as for a static alloca.
+                var frame = (Il.DeclareLocal(Types.Block(checked((int)Math.Max(1, Types.Size(type)) + (alignment > 8 ? alignment - 1 : 0)))), alignment);
+                frameSlots[Llvm.LLVMGetParam(function, index)] = frame;
+                SlotAddress(frame);
+            }
+            else
+            {
+                LocalBuilder copy = Il.DeclareLocal(typeof(nint));
+                Il.Emit(OpCodes.Ldc_I8, checked(Types.Size(type) + alignment - 1));
+                Il.Emit(OpCodes.Conv_U);
+                Il.Emit(OpCodes.Localloc);
+                usesLocalloc = true;
+                Offset(alignment - 1);
+                Il.Emit(OpCodes.Ldc_I8, -(long)alignment);
+                Il.Emit(OpCodes.Conv_I);
+                Il.Emit(OpCodes.And);
+                Il.Emit(OpCodes.Stloc, copy);
+                Il.Emit(OpCodes.Ldloc, copy);
+                locals[Llvm.LLVMGetParam(function, index)] = copy;
+            }
             Il.Emit(OpCodes.Ldarg, checked((short)index));
             Il.Emit(OpCodes.Ldc_I8, Types.Size(type));
             Il.Emit(OpCodes.Call, typeof(Memory).GetMethod(nameof(Memory.Copy))!);
             Il.Emit(OpCodes.Pop);
-            locals[Llvm.LLVMGetParam(function, index)] = copy;
         }
         if (jumpSites.Count == 0 && valueCount <= 32768) ChooseUseSiteValues();
         if (jumpSites.Count == 0 && valueCount is > 512 and <= 32768) ShareFunctionLocals();
         else AllocateFunctionLocals(valueCount > 32768 && jumpSites.Count == 0);
+        localCount = locals.Values.Concat(storedScalars.Values.Select(storage => storage.Array)).Select(local => local.LocalIndex + 1).DefaultIfEmpty(0).Max();
         if (scopedStack || hasAllocations && jumpSites.Count != 0 || arenaFrame)
         {
             // The thread's alloca arena top on entry, restored on every exit (BE-17).
@@ -112,7 +135,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.BeginExceptionBlock();
         }
         if (arenaFrame)
-            varargs.Allocate(function, arena: true);
+            varargs.Allocate(function, arena: true, slot: false);
         if (jumpSites.Count != 0)
         {
             jumpFrame = Il.DeclareLocal(typeof(long));
@@ -214,7 +237,65 @@ internal sealed class FunctionEmitter : ValueEmitter
         // buffers on every call cost H.264 decoding 30% (PF-04). The JIT cannot replace such a method on the stack
         // anyway. Other methods keep the flag: without it, the JIT's on-stack replacement code for a long-running loop
         // ran 2.6 times slower (lpbench). Locals whose first value matters are initialized explicitly.
-        method.InitLocals = !(usesLocalloc || varargs.Allocated);
+        method.InitLocals = !(usesLocalloc || varargs.Allocated || frameSlots.Count != 0);
+    }
+
+    /// <summary>The address of a frame slot, rounded up to its alignment where that is above RyuJIT's 8 bytes.</summary>
+    private void SlotAddress((LocalBuilder Slot, int Alignment) frame)
+    {
+        Il.Emit(OpCodes.Ldloca, frame.Slot);
+        Il.Emit(OpCodes.Conv_U);
+        if (frame.Alignment <= 8) return;
+        Offset(frame.Alignment - 1);
+        Il.Emit(OpCodes.Ldc_I8, -(long)frame.Alignment);
+        Il.Emit(OpCodes.Conv_I);
+        Il.Emit(OpCodes.And);
+    }
+
+    /// <summary>The bytes a frame slot of a static alloca or byval copy holds at most; a larger one keeps localloc.</summary>
+    private const long FrameSlotLimit = 65536;
+
+    /// <summary>
+    /// Gives each static alloca (in the entry block, of a constant size) a frame slot: a local of a value type of its
+    /// size, whose address each use takes (ldloca), as LLVM gives static allocas a fixed place in the frame. With localloc,
+    /// RyuJIT gives the method a frame pointer, a stack probe and NativeAOT's stack cookie, and turns a constant block of
+    /// up to 32 bytes into a local that keeps the cookie (an unsafe buffer); the address also took a register for the
+    /// whole method (PF-24). A slot needs no zeroing: an alloca's contents are undefined.
+    /// </summary>
+    private void FrameSlots()
+    {
+        foreach (nint instruction in Llvm.Instructions(Llvm.Blocks(function).First()))
+        {
+            if (Llvm.LLVMGetInstructionOpcode(instruction) != 26) continue;
+            nint count = Llvm.LLVMGetOperand(instruction, 0);
+            if (Llvm.LLVMIsAConstantInt(count) == 0 || TypeSystem.Width(Llvm.LLVMTypeOf(count)) > 64) continue;
+            nint allocated = Llvm.LLVMGetAllocatedType(instruction);
+            long elements = Llvm.LLVMConstIntGetSExtValue(count), size = Types.Size(allocated);
+            if (elements < 0 || size != 0 && elements > FrameSlotLimit / size || elements * size > FrameSlotLimit) continue;
+            int alignment = Math.Max(Types.Alignment(allocated), checked((int)Llvm.LLVMGetAlignment(instruction)));
+            // RyuJIT aligns a local of 8 bytes or more to 8 on 64-bit targets; a stricter alignment rounds the address up
+            // (SlotAddress).
+            int spare = alignment > 8 ? alignment - 1 : 0;
+            frameSlots[instruction] = (Il.DeclareLocal(Types.Block(checked((int)Math.Max(1, elements * size) + spare))), alignment);
+            atUse.Add(instruction);
+        }
+    }
+
+    /// <summary>Whether a branch of the function goes back to its own block or an earlier one: a loop in the IL, whose
+    /// blocks are in the function's order.</summary>
+    private bool HasLoop()
+    {
+        var order = new Dictionary<nint, int>();
+        foreach (nint block in Llvm.Blocks(function))
+            order[block] = order.Count;
+        foreach ((nint block, int index) in order)
+        {
+            nint terminator = Llvm.Instructions(block).Last();
+            for (uint successor = 0; successor < Llvm.LLVMGetNumSuccessors(terminator); successor++)
+                if (order[Llvm.LLVMGetSuccessor(terminator, successor)] <= index)
+                    return true;
+        }
+        return false;
     }
 
     internal override void Load(nint value)
@@ -227,7 +308,9 @@ internal sealed class FunctionEmitter : ValueEmitter
             computing = outer;
             return;
         }
-        if (locals.TryGetValue(value, out LocalBuilder? local))
+        if (frameSlots.TryGetValue(value, out var frame))
+            SlotAddress(frame);
+        else if (locals.TryGetValue(value, out LocalBuilder? local))
             Il.Emit(OpCodes.Ldloc, local);
         else if (storedScalars.TryGetValue(value, out var storage))
         {
@@ -309,10 +392,18 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Il.Emit(OpCodes.Ldnull);
                 Il.Emit(OpCodes.Throw);
                 return;
+            // The shift and the and that a multiplication's lowering computes from their operand (VectorEmitter.HalfSigns).
+            case 21 or 23 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null && Vectors.Fused(value):
+                return;
             case >= 8 and <= 25:
                 Binary(value, opcode);
                 break;
             case 26:
+                if (frameSlots.TryGetValue(value, out var frame))
+                {
+                    SlotAddress(frame);
+                    break;
+                }
                 nint allocated = Llvm.LLVMGetAllocatedType(value);
                 if (TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0))) > 64)
                     throw new NotSupportedException("Alloca element counts wider than the address space are not supported.");
@@ -390,7 +481,9 @@ internal sealed class FunctionEmitter : ValueEmitter
             case 50 when Types.Vector(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(value, 0))) is not null:
                 Vectors.Extract(value);
                 break;
-            case 51 when VectorEmitter.Chained(value):
+            // A chain of insertelements is built at its last insert, by the typed lowering only: without typed vectors
+            // (--vector-lowering=scalar) each insert writes its lane.
+            case 51 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null && VectorEmitter.Chained(value):
                 return;
             case 51 when Types.Vector(Llvm.LLVMTypeOf(value)) is not null:
                 Vectors.Insert(value);
@@ -455,7 +548,8 @@ internal sealed class FunctionEmitter : ValueEmitter
     /// turns a branch into cmov only outside loops (ifconversion.cpp), and an unpredictable branch in a loop costs far
     /// more than these four operations (PNG's Paeth filter ran 3.4-5.7 times native time). A boolean select is the and
     /// or the or it stands for. Floating-point, 128-bit and aggregate selects keep the branch, which is exact for every
-    /// value. Integer min/max against a constant keep theirs too (Intrinsic explains why).
+    /// value, and so does a select on a loop-carried chain (<see cref="LoopCarried"/>). Integer min/max against a
+    /// constant keep theirs too (Intrinsic explains why).
     /// </summary>
     private void Select(nint value)
     {
@@ -479,6 +573,11 @@ internal sealed class FunctionEmitter : ValueEmitter
                 Il.Emit(and ? OpCodes.And : OpCodes.Or);
                 return;
             }
+            if (LoopCarried(value) && Running(condition))
+            {
+                Carry(() => Load(condition), whenTrue, whenFalse, managed);
+                return;
+            }
             (nint Less, nint Greater, bool Signed, bool Inverted)? order = Order(condition);
             if (order is { Inverted: true })
                 (whenTrue, whenFalse) = (whenFalse, whenTrue);
@@ -497,15 +596,97 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Xor);
             return;
         }
+        Branch(() => Load(condition), whenTrue, whenFalse);
+    }
+
+    /// <summary>A select as a branch on the condition <paramref name="condition"/> pushes (nonzero for <paramref name="whenTrue"/>).</summary>
+    private void Branch(Action condition, nint whenTrue, nint whenFalse)
+    {
         Label otherwise = Il.DefineLabel();
         Label end = Il.DefineLabel();
-        Load(condition);
+        condition();
         Il.Emit(OpCodes.Brfalse, otherwise);
         Load(whenTrue);
         Il.Emit(OpCodes.Br, end);
         Il.MarkLabel(otherwise);
         Load(whenFalse);
         Il.MarkLabel(end);
+    }
+
+    /// <summary>
+    /// A select on a loop-carried chain (<see cref="LoopCarried"/>) as a branch around its running value, which it almost
+    /// always keeps: the other value is stored first, and the running one replaces it unless the condition chose the
+    /// other. The usual case is then a branch not taken and a move, as native code lays out a running maximum (cmp, ja,
+    /// mov), where a branch to either arm made RyuJIT jump over the empty arm of the running value at every element.
+    /// With both or neither arm running it is <see cref="Branch"/>.
+    /// </summary>
+    private void Carry(Action condition, nint whenTrue, nint whenFalse, Type managed)
+    {
+        bool trueRuns = LoopCarried(whenTrue);
+        if (trueRuns == LoopCarried(whenFalse))
+        {
+            Branch(condition, whenTrue, whenFalse);
+            return;
+        }
+        LocalBuilder result = Scratch(managed);
+        Label kept = Il.DefineLabel();
+        Load(trueRuns ? whenFalse : whenTrue);
+        Il.Emit(OpCodes.Stloc, result);
+        condition();
+        Il.Emit(trueRuns ? OpCodes.Brfalse : OpCodes.Brtrue, kept);
+        Load(trueRuns ? whenTrue : whenFalse);
+        Il.Emit(OpCodes.Stloc, result);
+        Il.MarkLabel(kept);
+        Il.Emit(OpCodes.Ldloc, result);
+    }
+
+    /// <summary>
+    /// Whether a scalar select or integer minimum or maximum is on a loop-carried chain: its value comes back to it
+    /// through selects, minimums, maximums and phis alone, as a running maximum does (m = a[i] &gt; m ? a[i] : m, which
+    /// LLVM writes as llvm.umax, a chain of them in an unrolled loop). Without a branch each iteration waits for the
+    /// previous one's comparison and mask, about five cycles, where native code's branch, which a running minimum or
+    /// maximum almost always takes the same way, lets iterations overlap (PF-18: a byte maximum ran 7.2 times native);
+    /// LLVM's x86 backend turns a cmov on a loop-carried dependency into a branch for the same reason
+    /// (X86CmovConversion). A select keeps the branch only when its condition compares such a running value
+    /// (<see cref="Running"/>), as the index of a running minimum does; selects whose values come from arithmetic, as
+    /// Paeth's, are not on such a chain.
+    /// </summary>
+    private static bool LoopCarried(nint instruction)
+    {
+        HashSet<nint> seen = [];
+        Stack<nint> work = new(Carried(instruction));
+        while (work.TryPop(out nint value))
+        {
+            if (value == instruction) return true;
+            if (seen.Count < 64 && seen.Add(value))
+                foreach (nint operand in Carried(value)) work.Push(operand);
+        }
+        return false;
+    }
+
+    /// <summary>Whether a select's condition is an integer comparison of a running value: a phi, select, minimum or
+    /// maximum on a loop-carried chain (<see cref="LoopCarried"/>). A running extreme changes rarely, so the comparison
+    /// almost always goes the same way; a condition on the loop's data, as in x = c ? f(x) : x, may not.</summary>
+    private static bool Running(nint condition) =>
+        Llvm.LLVMIsAInstruction(condition) != 0 && Llvm.LLVMGetInstructionOpcode(condition) == 42 &&
+        (LoopCarried(Llvm.LLVMGetOperand(condition, 0)) || LoopCarried(Llvm.LLVMGetOperand(condition, 1)));
+
+    /// <summary>The values a phi, a select or an integer minimum or maximum passes on: the phi's incoming values, the
+    /// select's arms, the others' operands; none for any other value.</summary>
+    private static nint[] Carried(nint value)
+    {
+        if (Llvm.LLVMIsAInstruction(value) == 0 || TypeSystem.Kind(Llvm.LLVMTypeOf(value)) == 13) return [];
+        switch (Llvm.LLVMGetInstructionOpcode(value))
+        {
+            case 44:
+                return [.. Enumerable.Range(0, (int)Llvm.LLVMCountIncoming(value)).Select(index => Llvm.LLVMGetIncomingValue(value, (uint)index))];
+            case 46:
+                return [Llvm.LLVMGetOperand(value, 1), Llvm.LLVMGetOperand(value, 2)];
+            case 45 when Llvm.LLVMGetCalledValue(value) is nint target && Llvm.LLVMIsAFunction(target) != 0 &&
+                Llvm.Name(target).Split('.') is ["llvm", "smin" or "smax" or "umin" or "umax", ..]:
+                return [Llvm.LLVMGetOperand(value, 0), Llvm.LLVMGetOperand(value, 1)];
+        }
+        return [];
     }
 
     /// <summary>Whether the value is the integer constant <paramref name="number"/>, sign-extended (an i1 true is -1).</summary>
@@ -812,9 +993,13 @@ internal sealed class FunctionEmitter : ValueEmitter
             {
                 if (Llvm.LLVMGetIncomingBlock(phi, index) != source)
                     continue;
-                Load(Llvm.LLVMGetIncomingValue(phi, index));
-                copies.Add(phi);
                 found = true;
+                nint incoming = Llvm.LLVMGetIncomingValue(phi, index);
+                // A phi that shares the copied value's local (ShareFunctionLocals) already holds it.
+                if (locals.TryGetValue(phi, out LocalBuilder? destination) && locals.TryGetValue(incoming, out LocalBuilder? copied) && destination == copied)
+                    break;
+                Load(incoming);
+                copies.Add(phi);
                 break;
             }
             if (!found)
@@ -1216,12 +1401,39 @@ internal sealed class FunctionEmitter : ValueEmitter
                 depth[value] = depth[user] + 1;
             }
         }
+        // A GEP of constant offsets from an argument or a value with a local is computed at each of its uses (PF-23),
+        // where RyuJIT folds it into the address of a load or store as native code does: LLVM hoists a structure's
+        // field addresses into a loop head for the blocks below it, and a local for each was stored on every pass. The
+        // base is then live where the GEP is used (ShareFunctionLocals counts a value computed where it is used as a
+        // use of its operands there). A GEP whose base is such a GEP keeps its local. One of a static alloca's frame slot
+        // (FrameSlots, PF-24) is the slot's address plus the offset at each use, a stack address RyuJIT folds, unless the
+        // alignment rounds the slot's address.
+        var offsets = new HashSet<nint>();
+        foreach (nint block in Llvm.Blocks(function))
+            foreach (nint value in Llvm.Instructions(block))
+                if (Llvm.LLVMGetInstructionOpcode(value) == 29 && !atUse.Contains(value) && ConstantOffsets(value))
+                    offsets.Add(value);
+        foreach (nint value in offsets)
+        {
+            nint pointer = Llvm.LLVMGetOperand(value, 0);
+            if (arguments.ContainsKey(pointer) || Llvm.LLVMIsAInstruction(pointer) != 0 && !atUse.Contains(pointer) && !offsets.Contains(pointer) ||
+                frameSlots.TryGetValue(pointer, out var frame) && frame.Alignment <= 8)
+                atUse.Add(value);
+        }
 
         static bool Scalar(nint type) => TypeSystem.Kind(type) is 2 or 3 or 12 || TypeSystem.Kind(type) == 8 && TypeSystem.Width(type) <= 64;
         bool Operands(nint instruction)
         {
             for (uint index = 0; index < Llvm.LLVMGetNumOperands(instruction); index++)
                 if (!Scalar(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, index)))) return false;
+            return true;
+        }
+        static bool ConstantOffsets(nint gep)
+        {
+            if (TypeSystem.Kind(Llvm.LLVMTypeOf(gep)) != 12 || TypeSystem.Kind(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(gep, 0))) != 12) return false;
+            for (uint index = 1; index < Llvm.LLVMGetNumOperands(gep); index++)
+                if (Llvm.LLVMIsAConstantInt(Llvm.LLVMGetOperand(gep, index)) == 0 || TypeSystem.Width(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(gep, index))) > 64)
+                    return false;
             return true;
         }
         bool PlainMemory(nint instruction, nint type) => Llvm.LLVMGetOrdering(instruction) == 0 && Scalar(type) &&
@@ -1271,7 +1483,8 @@ internal sealed class FunctionEmitter : ValueEmitter
     /// operands, as an instruction may store part of its result before it has read all of them. The emitter reads the
     /// operands of a comparison, a shuffle or an insertelement where those are used (Order, LoadMask, SplatScalar, a
     /// chain of insertelements built at its end), so they count as used there too, as do the operands of a value
-    /// computed where it is used (ChooseUseSiteValues), which gets no local. Only functions of more than 512
+    /// computed where it is used (ChooseUseSiteValues), which gets no local, and the values a vector lowering reads
+    /// besides its operands (VectorEmitter.Reads: a widening add's narrow operands). Only functions of more than 512
     /// values share: RyuJIT allocates registers per local, so values sharing one share an allocation, which added
     /// moves to small hot loops (heapsort and lpbench 10 to 15% slower). A function with setjmp keeps a local for
     /// each value, as the jump dispatch re-enters the body at its call sites.
@@ -1285,6 +1498,7 @@ internal sealed class FunctionEmitter : ValueEmitter
         var home = new List<int>();
         var low = new List<int>();
         var high = new List<int>();
+        var phis = new List<int>();
         int[] start = new int[blocks.Length], end = new int[blocks.Length];
         int position = 0;
         for (int block = 0; block < blocks.Length; block++)
@@ -1295,6 +1509,7 @@ internal sealed class FunctionEmitter : ValueEmitter
             {
                 if (TypeSystem.Kind(Llvm.LLVMTypeOf(instruction)) != 0 && !atUse.Contains(instruction))
                 {
+                    if (Llvm.LLVMGetInstructionOpcode(instruction) == 44) phis.Add(values.Count);
                     valueIndex.Add(instruction, values.Count);
                     values.Add(instruction);
                     home.Add(block);
@@ -1305,6 +1520,17 @@ internal sealed class FunctionEmitter : ValueEmitter
             }
             end[block] = position - 1;
         }
+        // Phis and the values they copy, which may join one local; their last use in each block decides that.
+        bool[] coalescing = new bool[values.Count];
+        int[] definition = [.. low];
+        foreach (int phi in phis)
+        {
+            coalescing[phi] = true;
+            definition[phi] = start[home[phi]];
+            for (uint index = 0; index < Llvm.LLVMCountIncoming(values[phi]); index++)
+                if (valueIndex.TryGetValue(Llvm.LLVMGetIncomingValue(values[phi], index), out int incoming)) coalescing[incoming] = true;
+        }
+        var lastUse = new Dictionary<(int Value, int Block), int>();
         void Extend(int value, int at)
         {
             low[value] = Math.Min(low[value], at);
@@ -1324,6 +1550,8 @@ internal sealed class FunctionEmitter : ValueEmitter
             if (!valueIndex.TryGetValue(operand, out int value)) return;
             Extend(value, at);
             if (block != home[value]) uses.Add((value, block));
+            if (coalescing[value])
+                lastUse[(value, block)] = lastUse.TryGetValue((value, block), out int last) ? Math.Max(last, at) : at;
             if (Llvm.LLVMGetInstructionOpcode(operand) is 42 or 43 or 51 or 52 && seen.Add(operand))
                 for (int index = 0; index < Llvm.LLVMGetNumOperands(operand); index++)
                     Use(Llvm.LLVMGetOperand(operand, (uint)index), block, at);
@@ -1353,6 +1581,8 @@ internal sealed class FunctionEmitter : ValueEmitter
                     seen.Clear();
                     for (int index = 0; index < Llvm.LLVMGetNumOperands(instruction); index++)
                         Use(Llvm.LLVMGetOperand(instruction, (uint)index), block, at);
+                    if (Types.Vector(Llvm.LLVMTypeOf(instruction)) is not null)
+                        foreach (nint read in Vectors.Reads(instruction)) Use(read, block, at);
                 }
                 at++;
             }
@@ -1396,24 +1626,110 @@ internal sealed class FunctionEmitter : ValueEmitter
                 if ((liveIn[block][index >> 6] & 1UL << index) != 0) Extend(global[index], start[block]);
                 if ((liveOut[block][index >> 6] & 1UL << index) != 0) Extend(global[index], end[block]);
             }
-        // Linear scan: a value takes a local of its type that the values before it no longer use.
+        // Where each phi and copied value is live: in each block it is defined in or live into, from its definition
+        // (a phi's at the block's start) or the block's start to its last use there or the block's end, as sorted
+        // [From, To] position segments, disjoint because blocks are.
+        var segments = new List<(int From, int To)>?[values.Count];
+        for (int value = 0; value < values.Count; value++)
+            if (coalescing[value]) segments[value] = [];
+        int segmentIndex = 0;
+        for (int block = 0; block < blocks.Length; block++)
+        {
+            for (; segmentIndex < values.Count && home[segmentIndex] == block; segmentIndex++)
+            {
+                if (!coalescing[segmentIndex]) continue;
+                bool liveAfter = bit.TryGetValue(segmentIndex, out int index) && (liveOut[block][index >> 6] & 1UL << index) != 0;
+                int through = lastUse.TryGetValue((segmentIndex, block), out int at) ? Math.Max(at, definition[segmentIndex]) : definition[segmentIndex];
+                segments[segmentIndex]!.Add((definition[segmentIndex], liveAfter ? end[block] : through));
+            }
+            for (int word = 0; word < words; word++)
+                for (ulong bits = liveIn[block][word]; bits != 0; bits &= bits - 1)
+                {
+                    int index = word * 64 + System.Numerics.BitOperations.TrailingZeroCount(bits);
+                    int value = global[index];
+                    if (!coalescing[value]) continue;
+                    bool liveAfter = (liveOut[block][index >> 6] & 1UL << index) != 0;
+                    segments[value]!.Add((start[block], liveAfter || !lastUse.TryGetValue((value, block), out int at) ? end[block] : at));
+                }
+        }
+        // A phi joins the class of a value it copies, as LLVM's register coalescer joins a copy's intervals, when no
+        // member of one class is live where a member of the other is (SSA interference); a class then has one local
+        // and its edge copies are not emitted. An edge loads every value it copies before it stores any phi, so a
+        // copied value whose last use is the edge does not conflict with the phi; one still live after it, or a phi
+        // live where the other is defined, does. The phis of one block conflict at its start, and an instruction
+        // reads its operands where its result is written, so it never joins them.
+        int[] parent = [.. Enumerable.Range(0, values.Count)];
+        int Find(int value)
+        {
+            while (parent[value] != value) value = parent[value] = parent[parent[value]];
+            return value;
+        }
+        // Copies of phis go first: a dispatch loop forwards its values through chains of phis, which one class can
+        // take whole, and a value computed from a phi of the chain (an induction variable's next value), joined first,
+        // would keep the chain apart.
+        bool[] isPhi = new bool[values.Count];
+        foreach (int phi in phis) isPhi[phi] = true;
+        foreach (bool forwarding in (bool[])[true, false])
+            foreach (int phi in phis)
+                for (uint index = 0; index < Llvm.LLVMCountIncoming(values[phi]); index++)
+                {
+                    if (!valueIndex.TryGetValue(Llvm.LLVMGetIncomingValue(values[phi], index), out int incoming) || isPhi[incoming] != forwarding)
+                        continue;
+                    int left = Find(phi), right = Find(incoming);
+                    if (left == right || Overlap(segments[left]!, segments[right]!)) continue;
+                    parent[right] = left;
+                    segments[left] = Merge(segments[left]!, segments[right]!);
+                    segments[right] = null;
+                }
+        // Linear scan: a class takes a local of its type that the classes before it no longer use, over the span of
+        // its members' ranges.
+        int[] first = [.. low], last = [.. high];
+        for (int value = 0; value < values.Count; value++)
+        {
+            int root = Find(value);
+            first[root] = Math.Min(first[root], low[value]);
+            last[root] = Math.Max(last[root], high[value]);
+        }
+        var assigned = new LocalBuilder?[values.Count];
         var available = new Dictionary<Type, Stack<LocalBuilder>>();
         var active = new PriorityQueue<int, int>();
-        foreach (int value in Enumerable.Range(0, values.Count).OrderBy(value => low[value]))
+        foreach (int root in Enumerable.Range(0, values.Count).Where(value => parent[value] == value).OrderBy(value => first[value]))
         {
-            while (active.TryPeek(out int expired, out int last) && last < low[value])
+            while (active.TryPeek(out int expired, out int until) && until < first[root])
             {
                 active.Dequeue();
-                LocalBuilder released = locals[values[expired]];
+                LocalBuilder released = assigned[expired]!;
                 if (!available.TryGetValue(released.LocalType, out Stack<LocalBuilder>? free)) available.Add(released.LocalType, free = new());
                 free.Push(released);
             }
-            Type managed = Types.Map(Llvm.LLVMTypeOf(values[value]));
+            Type managed = Types.Map(Llvm.LLVMTypeOf(values[root]));
             LocalBuilder local = available.TryGetValue(managed, out Stack<LocalBuilder>? pool) && pool.TryPop(out LocalBuilder? previous) ? previous : Il.DeclareLocal(managed);
             if (local.LocalIndex >= ushort.MaxValue)
                 throw new NotSupportedException($"Function {Llvm.Name(function)} exceeds the CIL local-variable limit.");
-            locals[values[value]] = local;
-            active.Enqueue(value, high[value]);
+            assigned[root] = local;
+            active.Enqueue(root, last[root]);
+        }
+        for (int value = 0; value < values.Count; value++)
+            locals[values[value]] = assigned[Find(value)]!;
+
+        static bool Overlap(List<(int From, int To)> left, List<(int From, int To)> right)
+        {
+            for (int i = 0, j = 0; i < left.Count && j < right.Count;)
+            {
+                if (left[i].To < right[j].From) i++;
+                else if (right[j].To < left[i].From) j++;
+                else return true;
+            }
+            return false;
+        }
+        static List<(int From, int To)> Merge(List<(int From, int To)> left, List<(int From, int To)> right)
+        {
+            var merged = new List<(int From, int To)>(left.Count + right.Count);
+            int i = 0, j = 0;
+            while (i < left.Count && j < right.Count) merged.Add(left[i].From < right[j].From ? left[i++] : right[j++]);
+            for (; i < left.Count; i++) merged.Add(left[i]);
+            for (; j < right.Count; j++) merged.Add(right[j]);
+            return merged;
         }
     }
 
@@ -2003,9 +2319,13 @@ internal sealed class FunctionEmitter : ValueEmitter
         }
     }
 
+    /// <summary>The IL locals past which a stub of an indirect call is not used (CilCompiler.ManagedCalli): RyuJIT stops
+    /// inlining into a method of about 920 locals, its temporaries included, and a stub it does not inline is a call more.</summary>
+    private const int StubLocals = 512;
+
     private void ManagedCalli(Type returnType, Type[] parameters, bool tail = false)
     {
-        Compiler.ManagedCalli(Il, method, returnType, parameters, tail);
+        Compiler.ManagedCalli(Il, method, returnType, parameters, tail, stub: localCount <= StubLocals);
     }
 
     private bool SystemIntegerArgumentCompatible(nint instruction, nint target, uint index)
@@ -2621,12 +2941,13 @@ internal sealed class FunctionEmitter : ValueEmitter
             Il.Emit(OpCodes.Ldloc, result);
             return;
         }
-        // Without branches, as Select explains, except against a constant bound. A constant bound is a clamp (FFmpeg's
-        // 10-bit pixels are smax(x, 0) then umin(x, 1023)) whose comparison almost always goes the same way, and a
-        // predicted branch costs less than a mask: with masks, HEVC decoding took 12% longer, and 5% with only
-        // smax(x, 0) as x & ~(x >> 31). Two variable operands are a data-dependent choice, as Paeth's umin(pb, pa),
-        // where a mispredicted branch costs far more. Up to 32 bits, with d = left - right in 64 bits and s = d >> 63
-        // (all ones when left < right): minimum = right + (d & s), maximum = left - (d & s); wider,
+        // Without branches, as Select explains, except against a constant bound and on a loop-carried chain
+        // (LoopCarried, Carry). A constant bound is a clamp (FFmpeg's 10-bit pixels are smax(x, 0) then umin(x, 1023))
+        // whose comparison almost always goes the same way, and a predicted branch costs less than a mask: with masks,
+        // HEVC decoding took 12% longer, and 5% with only smax(x, 0) as x & ~(x >> 31). Two variable operands are a
+        // data-dependent choice, as Paeth's umin(pb, pa), where a mispredicted branch costs far more. Up to 32 bits,
+        // with d = left - right in 64 bits and s = d >> 63 (all ones when left < right): minimum = right + (d & s),
+        // maximum = left - (d & s); wider,
         // right ^ ((left ^ right) & -(left < right)). abs is (x ^ s) - s with s = x >> (bits - 1), which wraps the
         // minimum to itself.
         if (operation is "smin" or "smax" or "umin" or "umax")
@@ -2635,6 +2956,20 @@ internal sealed class FunctionEmitter : ValueEmitter
             nint right = Llvm.LLVMGetOperand(instruction, 1);
             nint type = Llvm.LLVMTypeOf(left);
             bool signed = operation[0] == 's', minimum = operation.EndsWith("min", StringComparison.Ordinal);
+            if (Llvm.LLVMIsAConstantInt(left) == 0 && Llvm.LLVMIsAConstantInt(right) == 0 && LoopCarried(instruction))
+            {
+                Carry(() =>
+                {
+                    Load(left);
+                    if (signed)
+                        SignExtend(type);
+                    Load(right);
+                    if (signed)
+                        SignExtend(type);
+                    Il.Emit(operation switch { "smin" => OpCodes.Clt, "smax" => OpCodes.Cgt, "umin" => OpCodes.Clt_Un, _ => OpCodes.Cgt_Un });
+                }, left, right, Types.Map(type));
+                return;
+            }
             if (Llvm.LLVMIsAConstantInt(left) != 0 || Llvm.LLVMIsAConstantInt(right) != 0)
             {
                 Load(left);

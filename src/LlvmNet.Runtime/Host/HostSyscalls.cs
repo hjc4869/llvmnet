@@ -76,7 +76,7 @@ public static unsafe partial class HostSyscalls
                 Linux.Syscall.Mprotect or Linux.Syscall.Mlock or Linux.Syscall.Munlock or Linux.Syscall.Mlockall or
                     Linux.Syscall.Munlockall => 0,                     // no memory protection or paging control
                 Linux.Syscall.Munmap => Unmap((nint)a, b),
-                Linux.Syscall.Brk => 0,                                // report no heap, so mallocng uses mmap
+                Linux.Syscall.Brk => 0,                                // report no heap; the C library's allocator never asks
                 Linux.Syscall.RtSigaction => SetSignalAction((int)a, (SignalAction*)b, (SignalAction*)c),
                 Linux.Syscall.RtSigprocmask => SignalMask((int)a, (ulong*)b, (ulong*)c),
                 Linux.Syscall.Ioctl => Control((int)a, b, (nint)c),

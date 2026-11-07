@@ -8,25 +8,23 @@ namespace LlvmNet;
 
 /// <summary>
 /// The typed lowering of LLVM vector code (ADR-16 Level 1, docs/plan/12-simd.md): vector values are fragments of
-/// <see cref="Vector128{T}"/> (<see cref="VectorShape"/>), and each instruction becomes the Vector128 operations of its
-/// fragments, which RyuJIT and ILC compile to the host's SIMD instructions. Lane-changing operations (casts, masks of
-/// another lane width) go through Widen and Narrow, shuffles through constant Shuffle and select operations, and the
-/// rare operations with no vector instruction (integer division, variable shifts, partial memory accesses) through
-/// <see cref="Vectors"/>. A function whose vector code has no lowering here is scalarized by LLVM first
-/// (<see cref="Legalize"/>), as all vector code was before.
+/// <see cref="Vector128{T}"/> or <see cref="Vector256{T}"/> (<see cref="VectorShape"/>), and each instruction becomes the
+/// Vector128 or Vector256 operations of its fragments, which RyuJIT and ILC compile to the host's SIMD instructions.
+/// Lane-changing operations (casts, masks of another lane width) go through Widen and Narrow, shuffles through constant
+/// Shuffle and select operations, and the rare operations with no vector instruction (integer division, variable shifts,
+/// partial memory accesses) through <see cref="Vectors"/>. Where values of the two fragment widths meet (casts, masks,
+/// shuffles), <see cref="Part"/> views one in the other's width. A function whose vector code has no lowering here is
+/// scalarized by LLVM first (<see cref="Legalize"/>), as all vector code was before.
 /// </summary>
 internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSystem types)
 {
     private static readonly ConcurrentDictionary<(Type Owner, string Name, Type? Lane, string Parameters), MethodInfo> Methods = [];
     private readonly Dictionary<Type, Stack<LocalBuilder>> temporaries = [];
-    /// <summary>Vector128 or Vector256, whose static methods operate on this module's fragments (--vector-width).</summary>
-    private readonly Type owner = types.FragmentBits == 256 ? typeof(Vector256) : typeof(Vector128);
-    private readonly int fragmentBytes = types.FragmentBits / 8;
-    private bool Wide => types.FragmentBits == 256;
 
     /// <summary>
     /// Scalarizes, through LLVM's scalarizer, every function with vector code this lowering does not translate (lanes of
-    /// no CIL vector type such as i24 or i128, vector getelementptr, atomics, vector intrinsics without a lowering), so
+    /// no CIL vector type such as i24 or i128, atomics, vector intrinsics without a lowering; the driver has expanded
+    /// vector getelementptrs into address arithmetic, llvmnet_expand_vector_geps), so
     /// that only typed vectors remain at its boundaries; and every function whose vector code moves more lanes than it
     /// computes on. Each lane inserted or extracted costs an instruction in Vector128 form and nothing as scalars, and
     /// each operation on N lanes saves N - 1 scalar operations, so a function stays vector code when its operations save
@@ -35,13 +33,18 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// operation InstCombine formed (Bullet ran 4% slower with those typed). Without <paramref name="cost"/> (the hidden
     /// --vector-lowering=typed) only what the lowering does not translate is scalarized. Returns each scalarized
     /// function's name with the reason, null for one scalarized by this cost; <paramref name="computes"/> tells whether a
-    /// function that stays vector code computes on lanes, which makes NativeAOT target x86-64-v2 (Driver).
+    /// function that stays vector code computes on lanes, which makes NativeAOT target x86-64-v2 (Driver). With
+    /// <paramref name="gathers"/> the strided gathers of a function that stays vector code become wide loads and a
+    /// shuffle (SV-40, llvmnet_strided_gathers), whose inserts the cost does not count; <paramref name="gathered"/> names
+    /// the functions that had any, with the counts of gathers and of the wide loads they take.
     /// </summary>
-    internal static unsafe List<(string Function, string? Reason)> Legalize(TypeSystem types, nint module, bool cost, out bool computes)
+    internal static unsafe List<(string Function, string? Reason)> Legalize(TypeSystem types, nint module, bool cost, bool gathers, out bool computes,
+        out List<(string Function, uint Gathers, uint Loads)> gathered)
     {
         List<nint> functions = [];
         List<(string, string?)> report = [];
         computes = false;
+        gathered = [];
         foreach (nint function in Llvm.Functions(module))
         {
             if (Llvm.LLVMIsDeclaration(function) != 0) continue;
@@ -55,8 +58,11 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 if (opcode is 50 or 51 && types.Vector(Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, 0))) is not null) traffic++;
                 else saved += Saved(types, instruction, opcode);
             }
-            if (reason is null && (!cost || traffic <= saved))
+            uint lanes = 0;
+            if (reason is null && gathers && traffic != 0) Llvm.StridedGathers(function, (uint)types.FragmentBits, 0, out lanes, out _);
+            if (reason is null && (!cost || traffic - lanes <= saved))
             {
+                if (lanes != 0) gathered.Add((Llvm.Name(function), Llvm.StridedGathers(function, (uint)types.FragmentBits, 1, out _, out uint loads), loads));
                 computes |= saved > 0;
                 continue;
             }
@@ -76,24 +82,32 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// target intrinsic helpers, which run the instruction where the host has it (Sse2.SumAbsoluteDifferences and
     /// MultiplyAddAdjacent, AVX2's, AdvSimd's pairwise additions) and an exact composition elsewhere. Their literal
     /// dataflow, widening each lane to 32 bits first, ran 1.4 to 1.6 times native with the neutral API (SIMD survey).
-    /// With --vector-width=256 chunks of 32 bytes take AVX2's forms. Returns the functions that got any, with the counts.
+    /// With --vector-width=256 chunks of 32 bytes take AVX2's forms. The rounding average of bytes or halfwords computed
+    /// in wider lanes, lshr(a + b + 1, 1), becomes pavgb or pavgw the same way (SV-28). Returns the functions that got
+    /// any, with the counts.
     /// </summary>
-    internal static List<(string Function, uint Differences, uint Products)> Idioms(TypeSystem types, nint module)
+    internal static List<(string Function, uint Differences, uint Products, uint Averages)> Idioms(TypeSystem types, nint module)
     {
-        List<(string, uint, uint)> report = [];
+        List<(string, uint, uint, uint)> report = [];
         foreach (nint function in Llvm.Functions(module))
         {
             if (Llvm.LLVMIsDeclaration(function) != 0) continue;
             uint differences = Llvm.WideningReductions(function, (uint)types.FragmentBits, out uint products);
-            if (differences + products != 0) report.Add((Llvm.Name(function), differences, products));
+            uint averages = Llvm.RoundingAverages(function, (uint)types.FragmentBits);
+            if (differences + products + averages != 0) report.Add((Llvm.Name(function), differences, products, averages));
         }
         return report;
     }
 
     /// <summary>What <see cref="Idioms"/> did to one function, as -v and --report-simd print it.</summary>
-    internal static string Describe(uint differences, uint products) => string.Join(", ",
-        new[] { (Count: differences, What: "absolute differences as psadbw"), (Count: products, What: "products as pmaddwd") }
-            .Where(part => part.Count != 0).Select(part => $"{part.Count} {(part.Count == 1 ? "sum" : "sums")} of {part.What}"));
+    internal static string Describe(uint differences, uint products, uint averages = 0) => string.Join(", ",
+        new[] { (Count: differences, What: "sum", Of: "absolute differences as psadbw"), (Count: products, What: "sum", Of: "products as pmaddwd"),
+            (Count: averages, What: "rounding average", Of: "bytes or halfwords as pavgb or pavgw") }
+            .Where(part => part.Count != 0).Select(part => $"{part.Count} {part.What}{(part.Count == 1 ? "" : "s")} of {part.Of}"));
+
+    /// <summary>What <see cref="Legalize"/> made of one function's strided gathers, as -v and --report-simd print it.</summary>
+    internal static string DescribeGathers(uint gathers, uint loads) =>
+        $"{gathers} strided gather{(gathers == 1 ? "" : "s")} from {loads} wide load{(loads == 1 ? "" : "s")}";
 
     /// <summary>The scalar operations a vector instruction saves: one fewer than the lanes it computes on (arithmetic,
     /// comparisons, conversions, vector selects, vector intrinsics); zero for moves, shuffles and everything else.</summary>
@@ -122,9 +136,10 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         foreach (nint type in Enumerable.Range(0, Llvm.LLVMGetNumOperands(instruction)).Select(index => Llvm.LLVMTypeOf(Llvm.LLVMGetOperand(instruction, (uint)index))).Append(result))
         {
             if (TypeSystem.Kind(type) != 13) continue;
-            if (types.Vector(type) is not VectorShape shape) return $"lanes of {Llvm.PrintType(type)}";
-            // Masks are read, written and converted to integers as bits in one ulong.
-            if (shape is { Mask: true, Lanes: > 64 }) return $"more than 64 i1 lanes in {Llvm.PrintType(type)}";
+            // Masks are read, written and converted to integers as bits in one ulong, so a wider one has no shape.
+            if (types.Vector(type) is null)
+                return TypeSystem.Kind(Llvm.LLVMGetElementType(type)) == 8 && TypeSystem.Width(Llvm.LLVMGetElementType(type)) == 1
+                    ? $"more than 64 i1 lanes in {Llvm.PrintType(type)}" : $"lanes of {Llvm.PrintType(type)}";
             vectors = true;
         }
         if (!vectors) return null;
@@ -173,9 +188,12 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
 
     // ---- Vector128 API ----
 
-    /// <summary>The Vector128 (or Vector256) method with these parameter types: a non-generic overload, or the generic
-    /// method instantiated with <paramref name="lane"/>.</summary>
-    private MethodInfo Api(string name, Type? lane, params Type[] parameters) => Lookup(owner, name, lane, parameters);
+    /// <summary>Vector128 or Vector256, whose static methods operate on fragments of <paramref name="bits"/>.</summary>
+    private static Type Owner(int bits) => bits == 256 ? typeof(Vector256) : typeof(Vector128);
+
+    /// <summary>The Vector128 (or, for 256 <paramref name="bits"/>, Vector256) method with these parameter types: a
+    /// non-generic overload, or the generic method instantiated with <paramref name="lane"/>.</summary>
+    private static MethodInfo Api(int bits, string name, Type? lane, params Type[] parameters) => Lookup(Owner(bits), name, lane, parameters);
 
     /// <summary>A helper of <see cref="Vectors"/> with these parameter types, generic ones instantiated with the lane.</summary>
     private static MethodInfo Helper(string name, Type? lane, params Type[] parameters) => Lookup(typeof(Vectors), name, lane, parameters);
@@ -226,23 +244,24 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             throw new MissingMethodException($"{type.Name}.{name}({string.Join(", ", parameters.Select(parameter => parameter.Name))})");
         });
 
-    /// <summary>A fragment of <paramref name="lane"/>: Vector128 or Vector256.</summary>
-    private Type V(Type lane) => (Wide ? typeof(Vector256<>) : typeof(Vector128<>)).MakeGenericType(lane);
+    /// <summary>A fragment of <paramref name="bits"/> of <paramref name="lane"/>: Vector128 or Vector256.</summary>
+    private static Type V(Type lane, int bits) => (bits == 256 ? typeof(Vector256<>) : typeof(Vector128<>)).MakeGenericType(lane);
     /// <summary>Half a fragment: Vector64 or Vector128.</summary>
-    private Type Half(Type lane) => (Wide ? typeof(Vector128<>) : typeof(Vector64<>)).MakeGenericType(lane);
+    private static Type Half(Type lane, int bits) => (bits == 256 ? typeof(Vector128<>) : typeof(Vector64<>)).MakeGenericType(lane);
 
-    /// <summary>A generic Vector128 operation on vectors of <paramref name="lane"/>, such as Add or ConditionalSelect.</summary>
-    private void Call(string name, Type lane, int arity) => il.Emit(OpCodes.Call, Api(name, lane, Enumerable.Repeat(V(lane), arity).ToArray()));
+    /// <summary>A generic Vector128 (or Vector256) operation on fragments of <paramref name="lane"/>, such as Add or ConditionalSelect.</summary>
+    private void Call(string name, Type lane, int arity, int bits) => il.Emit(OpCodes.Call, Api(bits, name, lane, Enumerable.Repeat(V(lane, bits), arity).ToArray()));
 
-    private void As(Type from, Type to)
+    private void As(Type from, Type to, int bits)
     {
         if (from == to) return;
+        Type owner = Owner(bits);
         il.Emit(OpCodes.Call, Methods.GetOrAdd((owner, "As", from, to.FullName!), _ =>
             owner.GetMethods().Single(method => method.Name == "As" && method.GetGenericArguments().Length == 2).MakeGenericMethod(from, to)));
     }
 
-    private void Zero(Type lane) => il.Emit(OpCodes.Call, V(lane).GetProperty("Zero")!.GetMethod!);
-    private void AllBitsSet(Type lane) => il.Emit(OpCodes.Call, V(lane).GetProperty("AllBitsSet")!.GetMethod!);
+    private void Zero(Type lane, int bits) => il.Emit(OpCodes.Call, V(lane, bits).GetProperty("Zero")!.GetMethod!);
+    private void AllBitsSet(Type lane, int bits) => il.Emit(OpCodes.Call, V(lane, bits).GetProperty("AllBitsSet")!.GetMethod!);
 
     private static Type Unsigned(Type lane) =>
         lane == typeof(sbyte) ? typeof(byte) : lane == typeof(short) ? typeof(ushort) : lane == typeof(int) ? typeof(uint) : lane == typeof(long) ? typeof(ulong) : lane;
@@ -302,6 +321,32 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         if (shape.Fragments > 1) il.Emit(OpCodes.Ldfld, shape.Fields[index]);
     }
 
+    /// <summary>
+    /// Pushes fragment <paramref name="index"/> of a value of <paramref name="shape"/>, whose own fragments
+    /// <paramref name="source"/> pushes, viewed as fragments of <paramref name="bits"/> (SV-41): a Vector128 of it is a
+    /// half of one of its Vector256 fragments (GetLower, GetUpper), a Vector256 two of its Vector128 fragments, or one
+    /// with undefined upper lanes (ToVector256Unsafe, no instruction). Fragments past the value's are zero.
+    /// </summary>
+    private void Part(VectorShape shape, Action<int> source, int bits, int index)
+    {
+        int first = bits < shape.Bits ? index / 2 : bits > shape.Bits ? 2 * index : index;
+        if (first >= shape.Fragments)
+        {
+            Zero(shape.Lane, bits);
+            return;
+        }
+        source(first);
+        if (bits < shape.Bits)
+            il.Emit(OpCodes.Call, Api(256, index % 2 == 0 ? "GetLower" : "GetUpper", shape.Lane, V(shape.Lane, 256)));
+        else if (bits > shape.Bits && first + 1 < shape.Fragments)
+        {
+            source(first + 1);
+            il.Emit(OpCodes.Call, Api(256, "Create", shape.Lane, V(shape.Lane, 128), V(shape.Lane, 128)));
+        }
+        else if (bits > shape.Bits)
+            il.Emit(OpCodes.Call, Api(128, "ToVector256Unsafe", shape.Lane, V(shape.Lane, 128)));
+    }
+
     // ---- Constants ----
 
     internal void Constant(nint value, VectorShape shape) => Build(shape, index => ConstantFragment(value, shape, index));
@@ -313,7 +358,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         int first = index * shape.PerFragment;
         if (Llvm.LLVMIsNull(value) != 0 || Llvm.LLVMIsUndef(value) != 0 || Llvm.LLVMIsPoison(value) != 0)
         {
-            Zero(shape.Lane);
+            Zero(shape.Lane, shape.Bits);
             return;
         }
         nint[] lanes = Enumerable.Range(first, Math.Min(shape.PerFragment, shape.Lanes - first))
@@ -337,13 +382,13 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             long[] bits = lanes.Select(Bits).ToArray();
             if (bits.All(lane => lane == 0))
             {
-                Zero(shape.Lane);
+                Zero(shape.Lane, shape.Bits);
                 return;
             }
             if (bits.All(lane => lane == bits[0]))
             {
                 Scalar(shape.Lane, bits[0]);
-                il.Emit(OpCodes.Call, Api("Create", null, shape.Lane));
+                il.Emit(OpCodes.Call, Api(shape.Bits, "Create", null, shape.Lane));
                 return;
             }
             for (int lane = 0; lane < shape.PerFragment; lane++)
@@ -358,11 +403,28 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                     Scalar(shape.Lane, lane < lanes.Length ? Bits(lanes[lane]) : 0);
                     continue;
                 }
-                values.Load(lanes[lane]);
+                LoadLane(lanes[lane]);
                 if (shape.Lane == typeof(long)) il.Emit(OpCodes.Conv_I8);
             }
         }
-        il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(shape.Lane, shape.PerFragment).ToArray()));
+        il.Emit(OpCodes.Call, Api(shape.Bits, "Create", null, Enumerable.Repeat(shape.Lane, shape.PerFragment).ToArray()));
+    }
+
+    /// <summary>
+    /// Pushes a scalar that becomes a vector lane. To ILC a function's address (ldftn) is a relocatable constant, and RyuJIT
+    /// folds a Vector128.Create or WithElement of constants into a vector literal holding the handles' values at compile
+    /// time, without their relocations, so a vector of function addresses compared unequal to every function pointer as
+    /// NativeAOT (SPEC CPU2017 502.gcc_r's gimplify_expr compares one with eight; the JIT folds the real addresses). Such
+    /// lanes, and constant expressions that may contain one, go through Vectors.Opaque, which ILC does not fold.
+    /// </summary>
+    private void LoadLane(nint lane)
+    {
+        values.Load(lane);
+        nint stripped = Llvm.LLVMIsAGlobalAlias(lane) != 0 ? Llvm.LLVMAliasGetAliasee(lane) : lane;
+        if (Llvm.LLVMIsAFunction(stripped) == 0 && Llvm.LLVMIsAConstantExpr(stripped) == 0) return;
+        Type type = TypeSystem.Kind(Llvm.LLVMTypeOf(lane)) == 12 ? typeof(nint) : types.Map(Llvm.LLVMTypeOf(lane));
+        if (type == typeof(nint) || type == typeof(int) || type == typeof(long))
+            il.Emit(OpCodes.Call, typeof(Vectors).GetMethod(type == typeof(nint) ? nameof(Vectors.OpaqueAddress) : nameof(Vectors.Opaque), [type])!);
     }
 
     /// <summary>Pushes a lane constant from its bits. Float NaNs go through their bits, because RyuJIT holds float constants
@@ -413,6 +475,8 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             Release(bits);
         }
         else
+        {
+            int fragmentBytes = shape.Bits / 8;
             Build(shape, index =>
             {
                 il.Emit(OpCodes.Ldloc, address);
@@ -426,10 +490,11 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                     return;
                 }
                 il.Emit(OpCodes.Ldc_I4, bytes);
-                il.Emit(OpCodes.Call, typeof(Vectors).GetMethod(Wide ? nameof(Vectors.LoadWide) : nameof(Vectors.Load))!);
+                il.Emit(OpCodes.Call, typeof(Vectors).GetMethod(shape.Bits == 256 ? nameof(Vectors.LoadWide) : nameof(Vectors.Load))!);
                 if (isVolatile) il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.MemoryBarrier))!);
-                As(typeof(byte), shape.Lane);
+                As(typeof(byte), shape.Lane, shape.Bits);
             });
+        }
         Release(address);
     }
 
@@ -453,6 +518,8 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             il.Emit(OpCodes.Call, typeof(Vectors).GetMethod(nameof(Vectors.StoreBits))!);
         }
         else
+        {
+            int fragmentBytes = shape.Bits / 8;
             for (int index = 0; index < shape.Fragments; index++)
             {
                 il.Emit(OpCodes.Ldloc, address);
@@ -467,11 +534,12 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                     il.Emit(OpCodes.Stobj, shape.Fragment);
                     continue;
                 }
-                As(shape.Lane, typeof(byte));
+                As(shape.Lane, typeof(byte), shape.Bits);
                 il.Emit(OpCodes.Ldc_I4, bytes);
                 if (isVolatile) il.Emit(OpCodes.Call, typeof(Thread).GetMethod(nameof(Thread.MemoryBarrier))!);
-                il.Emit(OpCodes.Call, typeof(Vectors).GetMethod(Wide ? nameof(Vectors.StoreWide) : nameof(Vectors.Store))!);
+                il.Emit(OpCodes.Call, typeof(Vectors).GetMethod(shape.Bits == 256 ? nameof(Vectors.StoreWide) : nameof(Vectors.Store))!);
             }
+        }
         Release(value);
         Release(address);
     }
@@ -496,9 +564,9 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
 
     /// <summary>
     /// Converts the vector on the stack to or from a target intrinsic helper's vector type: reinterpreted as the helper's
-    /// lanes, and with --vector-width=256, where a 128-bit value is the low half of a Vector256, narrowed to the helper's
-    /// Vector128 or widened from it. A 256-bit value of two Vector128 fragments (the default width) becomes the helper's
-    /// Vector256 and back (SV-09).
+    /// lanes, and where a value's fragment and the helper's vector differ in width, narrowed to the helper's Vector128
+    /// or widened from it. A 256-bit value of two Vector128 fragments (the default width) becomes the helper's Vector256
+    /// and back (SV-09).
     /// </summary>
     internal void Convert(Type from, Type to)
     {
@@ -590,7 +658,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             il.Emit(OpCodes.Ldc_I4, index * shape.PerFragment);
             il.Emit(OpCodes.Shr_Un);
         }
-        il.Emit(OpCodes.Call, typeof(Vectors).GetMethod(shape.LaneBits switch { 8 => nameof(Vectors.Mask8), 16 => nameof(Vectors.Mask16), 32 => nameof(Vectors.Mask32), _ => nameof(Vectors.Mask64) } + (Wide ? "Wide" : ""))!);
+        il.Emit(OpCodes.Call, typeof(Vectors).GetMethod(shape.LaneBits switch { 8 => nameof(Vectors.Mask8), 16 => nameof(Vectors.Mask16), 32 => nameof(Vectors.Mask32), _ => nameof(Vectors.Mask64) } + (shape.Bits == 256 ? "Wide" : ""))!);
     }
 
     /// <summary>Pushes the lanes of a mask as bits of a ulong, bit i for lane i and zero above the last lane.</summary>
@@ -599,7 +667,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         for (int index = 0; index < shape.Fragments; index++)
         {
             fragment(index);
-            il.Emit(OpCodes.Call, Api("ExtractMostSignificantBits", shape.Lane, V(shape.Lane)));
+            il.Emit(OpCodes.Call, Api(shape.Bits, "ExtractMostSignificantBits", shape.Lane, V(shape.Lane, shape.Bits)));
             il.Emit(OpCodes.Conv_U8);
             if (index > 0)
             {
@@ -660,59 +728,76 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// pushes in shape <paramref name="from"/>, which has the same lanes at another width: integers are truncated or
     /// extended (with their sign when <paramref name="signed"/>), floats widened to doubles or doubles narrowed to floats.
     /// With <paramref name="saturate"/>, integers narrow to the nearest value of the narrower type, signed or unsigned.
+    /// Each step runs on fragments of the result's width, the source viewed in it (<see cref="Part"/>): a Vector128
+    /// widened to a Vector256 is AVX2's vpmovsx or vpmovzx of the whole, a Vector256 narrowed to a Vector128 packs its
+    /// halves.
     /// </summary>
     private void Resize(VectorShape from, VectorShape to, Action<int> source, int index, bool signed, bool saturate = false)
     {
         bool floating = from.Lane == typeof(float) || from.Lane == typeof(double);
+        int bits = to.Bits;
         if (from.LaneBits == to.LaneBits)
         {
             source(index);
-            As(from.Lane, to.Lane);
+            As(from.Lane, to.Lane, bits);
             return;
         }
-        Type Lane(int bits) => floating ? bits == 32 ? typeof(float) : typeof(double) : signed ? Signed(bits) : Unsigned(Signed(bits));
+        Type Lane(int laneBits) => floating ? laneBits == 32 ? typeof(float) : typeof(double) : signed ? Signed(laneBits) : Unsigned(Signed(laneBits));
+        void Source(int fragment)
+        {
+            Part(from, source, bits, fragment);
+            As(from.Lane, Lane(from.LaneBits), bits);
+        }
         if (to.LaneBits < from.LaneBits)
         {
             int levels = System.Numerics.BitOperations.Log2((uint)(from.LaneBits / to.LaneBits));
             Narrow(levels, index);
-            As(Lane(to.LaneBits), to.Lane);
+            As(Lane(to.LaneBits), to.Lane, bits);
 
             void Narrow(int level, int fragment)
             {
                 if (level == 0)
                 {
-                    if (fragment < from.Fragments)
-                    {
-                        source(fragment);
-                        As(from.Lane, Lane(from.LaneBits));
-                    }
-                    else
-                        Zero(Lane(from.LaneBits));
+                    Source(fragment);
                     return;
                 }
                 Type lane = Lane(from.LaneBits >> (level - 1));
                 Narrow(level - 1, 2 * fragment);
+                if (bits == 128 && from.Bits == 128 && (2 * fragment + 1) << (level - 1) >= from.Fragments)
+                {
+                    // Zeros above the source's fragments: the lower half alone, xtn on ARM64, where Narrow with a zero
+                    // vector is xtn, movi and xtn2 (SV-36).
+                    il.Emit(OpCodes.Call, Helper(saturate ? nameof(Vectors.NarrowWithSaturationLower) : nameof(Vectors.NarrowLower), null, V(lane, 128)));
+                    return;
+                }
                 Narrow(level - 1, 2 * fragment + 1);
-                il.Emit(OpCodes.Call, Api(saturate ? "NarrowWithSaturation" : "Narrow", null, V(lane), V(lane)));
+                il.Emit(OpCodes.Call, Api(bits, saturate ? "NarrowWithSaturation" : "Narrow", null, V(lane, bits), V(lane, bits)));
             }
         }
         else
         {
             int levels = System.Numerics.BitOperations.Log2((uint)(to.LaneBits / from.LaneBits));
+            if (!floating && levels >= 2 && index % (1 << levels) == 0)
+            {
+                // The lowest lanes of a fragment widened by two or three steps at once: one pmovzx or pmovsx (SV-29).
+                Source(index >> levels);
+                il.Emit(OpCodes.Call, Helper(to.LaneBits == 32 ? nameof(Vectors.WidenLowest32) : nameof(Vectors.WidenLowest64), null, V(Lane(from.LaneBits), bits)));
+                As(Lane(to.LaneBits), to.Lane, bits);
+                return;
+            }
             Widen(levels, index);
-            As(Lane(to.LaneBits), to.Lane);
+            As(Lane(to.LaneBits), to.Lane, bits);
 
             void Widen(int level, int fragment)
             {
                 if (level == 0)
                 {
-                    source(fragment);
-                    As(from.Lane, Lane(from.LaneBits));
+                    Source(fragment);
                     return;
                 }
                 Widen(level - 1, fragment / 2);
                 Type lane = Lane(from.LaneBits << (level - 1));
-                il.Emit(OpCodes.Call, Api(fragment % 2 == 0 ? "WidenLower" : "WidenUpper", null, V(lane)));
+                il.Emit(OpCodes.Call, Api(bits, fragment % 2 == 0 ? "WidenLower" : "WidenUpper", null, V(lane, bits)));
             }
         }
     }
@@ -730,7 +815,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             {
                 Fragment(left, index);
                 Fragment(right, index);
-                Call(logic, shape.Lane, 2);
+                Call(logic, shape.Lane, 2, shape.Bits);
             });
             return;
         }
@@ -738,16 +823,16 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         {
             // No SIMD instruction divides integers, and a padding lane must not divide by zero: lane by lane, as scalars.
             Type lane = opcode is 14 or 17 ? Unsigned(shape.Lane) : shape.Lane;
-            MethodInfo helper = Helper(opcode is 14 or 15 ? nameof(Vectors.Divide) : nameof(Vectors.Remainder), lane, V(lane), V(lane), typeof(int));
+            MethodInfo helper = Helper(opcode is 14 or 15 ? nameof(Vectors.Divide) : nameof(Vectors.Remainder), lane, V(lane, shape.Bits), V(lane, shape.Bits), typeof(int));
             Build(shape, index =>
             {
                 Fragment(left, index);
-                As(shape.Lane, lane);
+                As(shape.Lane, lane, shape.Bits);
                 Fragment(right, index);
-                As(shape.Lane, lane);
+                As(shape.Lane, lane, shape.Bits);
                 il.Emit(OpCodes.Ldc_I4, Math.Min(shape.PerFragment, shape.Lanes - index * shape.PerFragment));
                 il.Emit(OpCodes.Call, helper);
-                As(lane, shape.Lane);
+                As(lane, shape.Lane, shape.Bits);
             });
             return;
         }
@@ -757,30 +842,100 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             string name = opcode switch { 20 => "ShiftLeft", 21 => "ShiftRightLogical", _ => "ShiftRightArithmetic" };
             if (SplatScalar(right) is nint count)
             {
-                LocalBuilder amount = Rent(typeof(int));
-                LoadLaneScalar(count);
-                if (shape.LaneBits == 64) il.Emit(OpCodes.Conv_I4);
-                il.Emit(OpCodes.Stloc, amount);
+                // A constant count is an immediate at each shift (pslld xmm, 16): through a local, RyuJIT picks the form
+                // that takes the count in a register, from memory, before it propagates the constant (SV-27).
+                int? constant = ConstantCount(count);
+                LocalBuilder? amount = null;
+                if (constant is null)
+                {
+                    amount = Rent(typeof(int));
+                    LoadLaneScalar(count);
+                    if (shape.LaneBits == 64) il.Emit(OpCodes.Conv_I4);
+                    il.Emit(OpCodes.Stloc, amount);
+                }
                 Build(shape, index =>
                 {
                     Fragment(left, index);
-                    As(shape.Lane, lane);
-                    il.Emit(OpCodes.Ldloc, amount);
-                    il.Emit(OpCodes.Call, Api(name, null, V(lane), typeof(int)));
-                    As(lane, shape.Lane);
+                    As(shape.Lane, lane, shape.Bits);
+                    if (amount is null) il.Emit(OpCodes.Ldc_I4, constant!.Value);
+                    else il.Emit(OpCodes.Ldloc, amount);
+                    il.Emit(OpCodes.Call, Api(shape.Bits, name, null, V(lane, shape.Bits), typeof(int)));
+                    As(lane, shape.Lane, shape.Bits);
                 });
-                Release(amount);
+                if (amount is not null) Release(amount);
                 return;
             }
-            MethodInfo helper = Helper(name, lane, V(lane), V(lane));
+            if (opcode == 20 && shape.LaneBits is 16 or 32 && Multipliers(right, shape.LaneBits) is long[] multipliers)
+            {
+                // A shift left by a constant count per lane multiplies by that power of two, as LLVM's x86 backend
+                // computes it (pmullw, pmulld): one instruction on every host, where the counts would go lane by lane.
+                Build(shape, index =>
+                {
+                    Fragment(left, index);
+                    for (int lane = 0; lane < shape.PerFragment; lane++)
+                        Scalar(shape.Lane, index * shape.PerFragment + lane < multipliers.Length ? multipliers[index * shape.PerFragment + lane] : 0);
+                    il.Emit(OpCodes.Call, Api(shape.Bits, "Create", null, Enumerable.Repeat(shape.Lane, shape.PerFragment).ToArray()));
+                    Call("Multiply", shape.Lane, 2, shape.Bits);
+                });
+                return;
+            }
+            MethodInfo helper = Helper(name, lane, V(lane, shape.Bits), V(lane, shape.Bits));
             Build(shape, index =>
             {
                 Fragment(left, index);
-                As(shape.Lane, lane);
+                As(shape.Lane, lane, shape.Bits);
                 Fragment(right, index);
-                As(shape.Lane, lane);
+                As(shape.Lane, lane, shape.Bits);
                 il.Emit(OpCodes.Call, helper);
-                As(lane, shape.Lane);
+                As(lane, shape.Lane, shape.Bits);
+            });
+            return;
+        }
+        if (opcode == 12 && HalfSigns(value) is nint signs)
+        {
+            // The sign of each half of the lanes spread over it (SV-39): one arithmetic shift of the halves, sshr on ARM64
+            // as native AArch64's cmlt, psraw or psrad on x64, and a comparison with zero for bytes, where it was a shift, an
+            // and and a multiplication. The and and the shift emit nothing (Fused).
+            Type half = Signed(shape.LaneBits / 2);
+            Build(shape, index =>
+            {
+                Fragment(signs, index);
+                As(shape.Lane, half, shape.Bits);
+                if (half == typeof(sbyte))
+                {
+                    Zero(half, shape.Bits);
+                    Call("LessThan", half, 2, shape.Bits);
+                }
+                else
+                {
+                    il.Emit(OpCodes.Ldc_I4, shape.LaneBits / 2 - 1);
+                    il.Emit(OpCodes.Call, Api(shape.Bits, "ShiftRightArithmetic", null, V(half, shape.Bits), typeof(int)));
+                }
+                As(half, shape.Lane, shape.Bits);
+            });
+            return;
+        }
+        if (Widening(value) is var (narrowLeft, narrowRight, signed))
+        {
+            // Both extensions and the operation in one AdvSimd instruction on ARM64 (SV-37); other hosts add the extensions
+            // as before, which stay where they are, so that x64 folds each narrow load into its pmovzx.
+            VectorShape narrow = Shape(narrowLeft);
+            int ratio = shape.LaneBits / narrow.LaneBits;
+            Type lane = signed ? Signed(narrow.LaneBits) : Unsigned(Signed(narrow.LaneBits)), wide = signed ? Signed(shape.LaneBits) : Unsigned(Signed(shape.LaneBits));
+            MethodInfo helper = Helper((opcode == 8 ? "AddWidening" : "SubtractWidening") + shape.LaneBits, null, V(lane, 128), V(lane, 128), typeof(int), V(wide, 128), V(wide, 128));
+            Build(shape, index =>
+            {
+                Fragment(narrowLeft, index / ratio);
+                As(narrow.Lane, lane, 128);
+                Fragment(narrowRight, index / ratio);
+                As(narrow.Lane, lane, 128);
+                il.Emit(OpCodes.Ldc_I4, index % ratio);
+                Fragment(left, index);
+                As(shape.Lane, wide, 128);
+                Fragment(right, index);
+                As(shape.Lane, wide, 128);
+                il.Emit(OpCodes.Call, helper);
+                As(wide, shape.Lane, 128);
             });
             return;
         }
@@ -799,8 +954,83 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         {
             Fragment(left, index);
             Fragment(right, index);
-            Call(operation, shape.Lane, 2);
+            Call(operation, shape.Lane, 2, shape.Bits);
         });
+    }
+
+    /// <summary>
+    /// An add or subtract of two extensions of one narrow vector type, both zext or both sext, to twice its lane width (8
+    /// to 32 bits) or four times (bytes): the narrow operands and whether they are signed, or null. AdvSimd computes it in
+    /// one instruction (uaddl, usubl, saddl, ssubl and the upper forms), where each extension was an uxtl or sxtl (SV-37).
+    /// </summary>
+    private (nint Left, nint Right, bool Signed)? Widening(nint binary)
+    {
+        if (Llvm.LLVMGetInstructionOpcode(binary) is not (8 or 10)) return null;
+        nint left = Llvm.LLVMGetOperand(binary, 0), right = Llvm.LLVMGetOperand(binary, 1);
+        if (Llvm.LLVMIsAInstruction(left) == 0 || Llvm.LLVMIsAInstruction(right) == 0) return null;
+        int opcode = Llvm.LLVMGetInstructionOpcode(left);
+        if (opcode is not (31 or 32) || Llvm.LLVMGetInstructionOpcode(right) != opcode) return null;
+        nint narrowLeft = Llvm.LLVMGetOperand(left, 0), narrowRight = Llvm.LLVMGetOperand(right, 0);
+        if (Llvm.LLVMTypeOf(narrowLeft) != Llvm.LLVMTypeOf(narrowRight) || types.Vector(Llvm.LLVMTypeOf(narrowLeft)) is not { Mask: false } from ||
+            types.Vector(Llvm.LLVMTypeOf(binary)) is not { Mask: false } to || from.Bits != 128 || to.Bits != 128)
+            return null;
+        return to.LaneBits == 2 * from.LaneBits || to.LaneBits == 4 * from.LaneBits && from.LaneBits == 8 ? (narrowLeft, narrowRight, opcode == 32) : null;
+    }
+
+    /// <summary>
+    /// The x of mul(and(lshr(x, h - 1), 1 | 1 &lt;&lt; h), (1 &lt;&lt; h) - 1) in lanes of 2h bits, or null. The shift
+    /// and the and leave the sign bit of each h-bit half of x in its lowest bit, and the multiplication spreads it over
+    /// the half, so each half of the product is all ones where that half of x is negative (x264's abs2), which native
+    /// AArch64 code computes as one cmlt (SV-39).
+    /// </summary>
+    private nint? HalfSigns(nint multiply)
+    {
+        if (Llvm.LLVMGetInstructionOpcode(multiply) != 12 || types.Vector(Llvm.LLVMTypeOf(multiply)) is not { Mask: false } shape || shape.LaneBits < 16)
+            return null;
+        int half = shape.LaneBits / 2;
+        nint and = Llvm.LLVMGetOperand(multiply, 0);
+        if (!SplatOf(Llvm.LLVMGetOperand(multiply, 1), (1UL << half) - 1) || Llvm.LLVMIsAInstruction(and) == 0 || Llvm.LLVMGetInstructionOpcode(and) != 23)
+            return null;
+        for (uint operand = 0; operand < 2; operand++)
+        {
+            nint shift = Llvm.LLVMGetOperand(and, operand);
+            if (SplatOf(Llvm.LLVMGetOperand(and, 1 - operand), 1UL | 1UL << half) && Llvm.LLVMIsAInstruction(shift) != 0 &&
+                Llvm.LLVMGetInstructionOpcode(shift) == 21 && SplatOf(Llvm.LLVMGetOperand(shift, 1), (ulong)half - 1))
+                return Llvm.LLVMGetOperand(shift, 0);
+        }
+        return null;
+    }
+
+    /// <summary>Whether a vector is a splat of the constant, its undefined lanes aside; the constants asked for are
+    /// positive in their lanes.</summary>
+    private static bool SplatOf(nint vector, ulong value) =>
+        SplatScalar(vector) is nint scalar && Llvm.LLVMIsAConstantInt(scalar) != 0 && (ulong)Llvm.LLVMConstIntGetSExtValue(scalar) == value;
+
+    /// <summary>The values an instruction's lowering reads besides its operands, which must stay in their locals until
+    /// it (FunctionEmitter.ShareFunctionLocals): a widening add's narrow operands, the x of <see cref="HalfSigns"/>.</summary>
+    internal IEnumerable<nint> Reads(nint instruction)
+    {
+        if (Widening(instruction) is var (left, right, _))
+        {
+            yield return left;
+            yield return right;
+        }
+        if (HalfSigns(instruction) is nint signs) yield return signs;
+    }
+
+    /// <summary>Whether an instruction is computed in its one user's lowering from its own operands, and so emits nothing
+    /// itself, as a chained insertelement does: the and and the shift of <see cref="HalfSigns"/>.</summary>
+    internal bool Fused(nint value)
+    {
+        nint use = Llvm.LLVMGetFirstUse(value);
+        if (use == 0 || Llvm.LLVMGetNextUse(use) != 0) return false;
+        nint user = Llvm.LLVMGetUser(use);
+        return Llvm.LLVMGetInstructionOpcode(value) switch
+        {
+            23 => HalfSigns(user) is not null,
+            21 => Llvm.LLVMGetInstructionOpcode(user) == 23 && Fused(user),
+            _ => false
+        };
     }
 
     /// <summary>The scalar every lane of a splat holds: a constant vector with equal lanes, or the insertelement and
@@ -811,27 +1041,67 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         {
             // A zero vector stands for its own zero lane, which LoadLaneScalar loads as 0.
             if (Llvm.LLVMIsNull(vector) != 0) return vector;
+            // A poison or undef lane may take the value of the others, as the SLP vectorizer's partial splats need
+            // (<poison, poison, 1, 1>).
             uint lanes = Llvm.LLVMGetVectorSize(Llvm.LLVMTypeOf(vector));
-            nint first = Llvm.LLVMGetAggregateElement(vector, 0);
-            if (first == 0 || Llvm.LLVMIsAConstantInt(first) == 0) return null;
-            for (uint lane = 1; lane < lanes; lane++)
+            nint first = 0;
+            for (uint lane = 0; lane < lanes; lane++)
             {
                 nint element = Llvm.LLVMGetAggregateElement(vector, lane);
-                if (element == 0 || Llvm.LLVMIsAConstantInt(element) == 0 || Llvm.LLVMConstIntGetSExtValue(element) != Llvm.LLVMConstIntGetSExtValue(first))
-                    return null;
+                if (element != 0 && (Llvm.LLVMIsUndef(element) != 0 || Llvm.LLVMIsPoison(element) != 0)) continue;
+                if (element == 0 || Llvm.LLVMIsAConstantInt(element) == 0) return null;
+                if (first == 0) first = element;
+                else if (Llvm.LLVMConstIntGetSExtValue(element) != Llvm.LLVMConstIntGetSExtValue(first)) return null;
             }
-            return first;
+            return first == 0 ? null : first;
         }
         if (Llvm.LLVMIsAInstruction(vector) == 0 || Llvm.LLVMGetInstructionOpcode(vector) != 52) return null;
         uint count = Llvm.LLVMGetNumMaskElements(vector);
-        int selected = Llvm.LLVMGetMaskValue(vector, 0);
+        int selected = -1;
         for (uint lane = 0; lane < count; lane++)
-            if (Llvm.LLVMGetMaskValue(vector, lane) != selected) return null;
+        {
+            int element = Llvm.LLVMGetMaskValue(vector, lane);
+            if (element < 0) continue;
+            if (selected < 0) selected = element;
+            else if (element != selected) return null;
+        }
         nint source = Llvm.LLVMGetOperand(vector, 0);
         if (selected < 0 || Llvm.LLVMIsAInstruction(source) == 0 || Llvm.LLVMGetInstructionOpcode(source) != 51) return null;
         nint position = Llvm.LLVMGetOperand(source, 2);
         return Llvm.LLVMIsAConstantInt(position) != 0 && Llvm.LLVMConstIntGetSExtValue(position) == selected ? Llvm.LLVMGetOperand(source, 1) : null;
     }
+
+    /// <summary>Whether a vector's lanes past its own in its one fragment are zero: a load of fewer bytes than a fragment.</summary>
+    private bool ZeroAbove(nint value, VectorShape shape) =>
+        shape.Fragments == 1 && Llvm.LLVMIsAInstruction(value) != 0 && Llvm.LLVMGetInstructionOpcode(value) == 27 &&
+        types.StoreSize(Llvm.LLVMTypeOf(value)) < shape.Bits / 8;
+
+    /// <summary>The powers of two of a constant vector of shift counts below the lane width (1 for an undefined lane), or
+    /// null for another count.</summary>
+    private static long[]? Multipliers(nint counts, int width)
+    {
+        if (!IsConstant(counts) || Llvm.LLVMIsNull(counts) != 0) return null;
+        long[] multipliers = new long[Llvm.LLVMGetVectorSize(Llvm.LLVMTypeOf(counts))];
+        for (int lane = 0; lane < multipliers.Length; lane++)
+        {
+            nint element = Llvm.LLVMGetAggregateElement(counts, (uint)lane);
+            if (element != 0 && (Llvm.LLVMIsUndef(element) != 0 || Llvm.LLVMIsPoison(element) != 0))
+            {
+                multipliers[lane] = 1;
+                continue;
+            }
+            if (element == 0 || Llvm.LLVMIsAConstantInt(element) == 0) return null;
+            long count = Llvm.LLVMConstIntGetSExtValue(element);
+            if (count < 0 || count >= width) return null;
+            multipliers[lane] = 1L << (int)count;
+        }
+        return multipliers;
+    }
+
+    /// <summary>The count a splat's scalar (from <see cref="SplatScalar"/>) is when it is a constant, else null.</summary>
+    private static int? ConstantCount(nint scalar) =>
+        TypeSystem.Kind(Llvm.LLVMTypeOf(scalar)) == 13 ? 0 :
+        Llvm.LLVMIsAConstantInt(scalar) != 0 ? unchecked((int)Llvm.LLVMConstIntGetSExtValue(scalar)) : null;
 
     /// <summary>Pushes a lane scalar (a constant vector's element or a splatted variable) as its CIL value.</summary>
     private void LoadLaneScalar(nint scalar)
@@ -851,8 +1121,8 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         {
             Fragment(Llvm.LLVMGetOperand(value, 0), index);
             Scalar(shape.Lane, shape.Lane == typeof(float) ? int.MinValue : long.MinValue);
-            il.Emit(OpCodes.Call, Api("Create", null, shape.Lane));
-            Call("Xor", shape.Lane, 2);
+            il.Emit(OpCodes.Call, Api(shape.Bits, "Create", null, shape.Lane));
+            Call("Xor", shape.Lane, 2, shape.Bits);
         });
     }
 
@@ -877,9 +1147,9 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             int predicate = Llvm.LLVMGetICmpPredicate(value);
             Type lane = predicate is >= 34 and <= 37 ? Unsigned(operand.Lane) : operand.Lane;
             Fragment(left, index);
-            As(operand.Lane, lane);
+            As(operand.Lane, lane, operand.Bits);
             Fragment(right, index);
-            As(operand.Lane, lane);
+            As(operand.Lane, lane, operand.Bits);
             Call(predicate switch
             {
                 32 or 33 => "Equals",
@@ -887,9 +1157,9 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 35 or 39 => "GreaterThanOrEqual",
                 36 or 40 => "LessThan",
                 _ => "LessThanOrEqual"
-            }, lane, 2);
-            if (predicate == 33) Call("OnesComplement", lane, 1);
-            As(lane, mask);
+            }, lane, 2, operand.Bits);
+            if (predicate == 33) Call("OnesComplement", lane, 1, operand.Bits);
+            As(lane, mask, operand.Bits);
             return;
         }
         int floating = Llvm.LLVMGetFCmpPredicate(value);
@@ -897,30 +1167,30 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         switch (floating)
         {
             case 0:
-                Zero(mask);
+                Zero(mask, operand.Bits);
                 return;
             case 15:
-                AllBitsSet(mask);
+                AllBitsSet(mask, operand.Bits);
                 return;
             case 7 or 8:
                 // ord: each operand equals itself; uno is its complement.
                 Fragment(left, index);
                 Fragment(left, index);
-                Call("Equals", type, 2);
+                Call("Equals", type, 2, operand.Bits);
                 Fragment(right, index);
                 Fragment(right, index);
-                Call("Equals", type, 2);
-                Call("BitwiseAnd", type, 2);
+                Call("Equals", type, 2, operand.Bits);
+                Call("BitwiseAnd", type, 2, operand.Bits);
                 break;
             case 6 or 9:
                 // one: less or greater, which is false for NaN; ueq is its complement.
                 Fragment(left, index);
                 Fragment(right, index);
-                Call("LessThan", type, 2);
+                Call("LessThan", type, 2, operand.Bits);
                 Fragment(left, index);
                 Fragment(right, index);
-                Call("GreaterThan", type, 2);
-                Call("BitwiseOr", type, 2);
+                Call("GreaterThan", type, 2, operand.Bits);
+                Call("BitwiseOr", type, 2, operand.Bits);
                 break;
             default:
                 // The ordered predicates are the IEEE comparisons, false when either operand is NaN; each unordered one
@@ -934,11 +1204,11 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                     3 or 12 => "GreaterThanOrEqual",
                     4 or 11 => "LessThan",
                     _ => "LessThanOrEqual"
-                }, type, 2);
+                }, type, 2, operand.Bits);
                 break;
         }
-        if (floating is 8 or 9 or >= 10 and <= 14) Call("OnesComplement", type, 1);
-        As(type, mask);
+        if (floating is 8 or 9 or >= 10 and <= 14) Call("OnesComplement", type, 1, operand.Bits);
+        As(type, mask, operand.Bits);
     }
 
     /// <summary>A select on a vector condition: ConditionalSelect with the mask at the selected lanes' width.</summary>
@@ -950,10 +1220,10 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         Build(shape, index =>
         {
             LoadMask(condition, mask, index);
-            As(mask.Lane, shape.Lane);
+            As(mask.Lane, shape.Lane, shape.Bits);
             Fragment(whenTrue, index);
             Fragment(whenFalse, index);
-            Call("ConditionalSelect", shape.Lane, 3);
+            Call("ConditionalSelect", shape.Lane, 3, shape.Bits);
         });
     }
 
@@ -977,11 +1247,11 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 {
                     Fragment(source, fragment);
                     Scalar(from.Lane, 1);
-                    il.Emit(OpCodes.Call, Api("Create", null, from.Lane));
-                    Call("BitwiseAnd", from.Lane, 2);
+                    il.Emit(OpCodes.Call, Api(from.Bits, "Create", null, from.Lane));
+                    Call("BitwiseAnd", from.Lane, 2, from.Bits);
                     Scalar(from.Lane, 1);
-                    il.Emit(OpCodes.Call, Api("Create", null, from.Lane));
-                    Call("Equals", from.Lane, 2);
+                    il.Emit(OpCodes.Call, Api(from.Bits, "Create", null, from.Lane));
+                    Call("Equals", from.Lane, 2, from.Bits);
                 }, index, signed: true));
                 return;
             case 31 or 32 when from.Mask:
@@ -991,8 +1261,8 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                     if (opcode == 31)
                     {
                         Scalar(to.Lane, 1);
-                        il.Emit(OpCodes.Call, Api("Create", null, to.Lane));
-                        Call("BitwiseAnd", to.Lane, 2);
+                        il.Emit(OpCodes.Call, Api(to.Bits, "Create", null, to.Lane));
+                        Call("BitwiseAnd", to.Lane, 2, to.Bits);
                     }
                 });
                 return;
@@ -1027,8 +1297,8 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         Build(to, index => Resize(integers, to, fragment =>
         {
             Resize(from, wide, part => Fragment(source, part), fragment, signed: true);
-            il.Emit(OpCodes.Call, Api(conversion, null, V(wide.Lane)));
-            As(converted, integers.Lane);
+            il.Emit(OpCodes.Call, Api(wide.Bits, conversion, null, V(wide.Lane, wide.Bits)));
+            As(converted, integers.Lane, wide.Bits);
         }, index, signed, saturate));
     }
 
@@ -1038,15 +1308,11 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     {
         if (from.LaneBits == 64 && to.Lane == typeof(float))
         {
-            MethodInfo helper = typeof(Vectors).GetMethod((signed ? nameof(Vectors.SignedToSingle) : nameof(Vectors.UnsignedToSingle)) + (Wide ? "Wide" : ""))!;
+            MethodInfo helper = typeof(Vectors).GetMethod((signed ? nameof(Vectors.SignedToSingle) : nameof(Vectors.UnsignedToSingle)) + (to.Bits == 256 ? "Wide" : ""))!;
             Build(to, index =>
             {
-                // Two 64-bit fragments give one fragment of four floats.
-                for (int part = 0; part < 2; part++)
-                {
-                    if (2 * index + part < from.Fragments) Fragment(source, 2 * index + part);
-                    else Zero(typeof(long));
-                }
+                // Two 64-bit fragments of the result's width give one fragment of floats.
+                for (int part = 0; part < 2; part++) Part(from, fragment => Fragment(source, fragment), to.Bits, 2 * index + part);
                 il.Emit(OpCodes.Call, helper);
             });
             return;
@@ -1056,8 +1322,8 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         Build(to, index =>
         {
             Resize(from, integers, fragment => Fragment(source, fragment), index, signed);
-            As(integers.Lane, lane);
-            il.Emit(OpCodes.Call, Api(to.Lane == typeof(float) ? "ConvertToSingle" : "ConvertToDouble", null, V(lane)));
+            As(integers.Lane, lane, to.Bits);
+            il.Emit(OpCodes.Call, Api(to.Bits, to.Lane == typeof(float) ? "ConvertToSingle" : "ConvertToDouble", null, V(lane, to.Bits)));
         });
     }
 
@@ -1068,7 +1334,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             Build(to, index =>
             {
                 Fragment(source, index);
-                As(from.Lane, to.Lane);
+                As(from.Lane, to.Lane, to.Bits);
             });
             return;
         }
@@ -1095,6 +1361,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         // Between a vector and a scalar of the same size, or vectors fragmented differently: through memory, where both
         // have LLVM's layout.
         long size = Math.Max(types.Size(sourceType), types.Size(destinationType));
+        int fragmentBytes = types.FragmentBits / 8;
         VectorShape buffer = types.Shape(checked((int)((size + fragmentBytes - 1) / fragmentBytes * fragmentBytes)), typeof(sbyte), mask: false);
         LocalBuilder memory = Rent(buffer.Cil);
         il.Emit(OpCodes.Ldloca, memory);
@@ -1121,9 +1388,9 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 return;
             }
             Fragment(vector, (int)(index / shape.PerFragment));
-            As(shape.Lane, lane);
+            As(shape.Lane, lane, shape.Bits);
             il.Emit(OpCodes.Ldc_I4, (int)(index % shape.PerFragment));
-            il.Emit(OpCodes.Call, Api("GetElement", lane, V(lane), typeof(int)));
+            il.Emit(OpCodes.Call, Api(shape.Bits, "GetElement", lane, V(lane, shape.Bits), typeof(int)));
         }
         else
         {
@@ -1188,7 +1455,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                     for (int lane = first; lane < first + shape.PerFragment; lane++)
                         if (lane < shape.Lanes && lanes[lane] != 0) LaneValue(lanes[lane], shape);
                         else Scalar(shape.Lane, 0);
-                    il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(shape.Lane, shape.PerFragment).ToArray()));
+                    il.Emit(OpCodes.Call, Api(shape.Bits, "Create", null, Enumerable.Repeat(shape.Lane, shape.PerFragment).ToArray()));
                     return;
                 }
                 Fragment(vector, fragment);
@@ -1197,7 +1464,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                     if (lanes[lane] == 0) continue;
                     il.Emit(OpCodes.Ldc_I4, lane - first);
                     LaneValue(lanes[lane], shape);
-                    il.Emit(OpCodes.Call, Api("WithElement", shape.Lane, V(shape.Lane), typeof(int), shape.Lane));
+                    il.Emit(OpCodes.Call, Api(shape.Bits, "WithElement", shape.Lane, V(shape.Lane, shape.Bits), typeof(int), shape.Lane));
                 }
             });
             return;
@@ -1240,7 +1507,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// <summary>Pushes a scalar as a lane of the shape: pointers as 64-bit integers, i1 as all ones or zero.</summary>
     private void LaneValue(nint element, VectorShape shape)
     {
-        values.Load(element);
+        LoadLane(element);
         if (shape.Mask)
         {
             il.Emit(OpCodes.Neg);
@@ -1254,7 +1521,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// A shufflevector: each result fragment is classified by the source fragments its lanes come from. Lanes from one
     /// fragment are that fragment (in order) or a Shuffle with constant indices, which RyuJIT compiles to one instruction
     /// where the host has it (pshufd, shufps, pshufb, tbl); lanes from two fragments that are halves of each are Create
-    /// of the halves (movlhps, unpckhpd), and any other mix is a ConditionalSelect of such shuffles. An i1 vector is
+    /// of the halves (movlhps, unpckhpd), and any other mix is a blend of such shuffles (Vectors.Select: pblendvb or bsl). An i1 vector is
     /// shuffled as a mask at the result's lane width.
     /// </summary>
     internal void Shuffle(nint value)
@@ -1268,21 +1535,39 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     /// <summary>
     /// Builds <paramref name="result"/> from lanes of <paramref name="operands"/>, <paramref name="map"/> naming the
     /// operand and lane of each result lane (null where it is undefined), for shufflevector and llvm.vector.reverse,
-    /// insert and extract.
+    /// insert and extract. Operands of another fragment width are viewed in the result's (<see cref="Part"/>), except
+    /// that a Vector256 of 8- or 16-bit lanes from Vector128 operands is gathered as its two halves and joined
+    /// (vinserti128): AVX2 has no shuffle of such lanes across the halves of a Vector256 (vpermd and vpermq move 32 and
+    /// 64 bits), and SSE's pshufb shuffles a Vector128 whole.
     /// </summary>
     private void Gather(VectorShape result, nint[] operands, (int Operand, int Lane)?[] map)
     {
         VectorShape[] inputs = operands.Select(operand => result.Mask ? types.Shape(Shape(operand).Lanes, result.Lane, mask: true) : Shape(operand)).ToArray();
         // Lanes of a zero vector, as the padding of a shorter vector, are cleared with one and of the other lanes.
         bool[] zero = operands.Select(operand => Llvm.LLVMIsNull(operand) != 0).ToArray();
-        int per = result.PerFragment;
-        void Source(int operand, int fragment)
+        bool halves = result.Bits == 256 && result.LaneBits < 32 && Enumerable.Range(0, operands.Length).All(operand => zero[operand] || inputs[operand].Bits == 128);
+        void Own(int operand, int fragment)
         {
             if (result.Mask) LoadMask(operands[operand], inputs[operand], fragment);
             else Fragment(operands[operand], fragment);
         }
+        void Source(int operand, int fragment, int bits) => Part(inputs[operand], own => Own(operand, own), bits, fragment);
         Build(result, index =>
         {
+            if (!halves)
+            {
+                Gathered(index, result.Bits);
+                return;
+            }
+            Gathered(2 * index, 128);
+            Gathered(2 * index + 1, 128);
+            il.Emit(OpCodes.Call, Api(256, "Create", result.Lane, V(result.Lane, 128), V(result.Lane, 128)));
+        });
+
+        // Pushes fragment index of the result in fragments of bits.
+        void Gathered(int index, int bits)
+        {
+            int per = bits / result.LaneBits;
             // (operand, fragment) -> the lane each result lane takes from it, -1 elsewhere.
             var sources = new Dictionary<(int Operand, int Fragment), int[]>();
             bool[] cleared = new bool[per];
@@ -1301,36 +1586,73 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             }
             if (sources.Count == 0)
             {
-                Zero(result.Lane);
+                Zero(result.Lane, bits);
                 return;
             }
-            Combine(sources);
+            Combine(sources, bits, per);
             if (!cleared.Contains(true)) return;
+            // A vector load of fewer bytes than a fragment reads them into its low lanes and zeros above (Vectors.Load), so
+            // the lanes past its own that a shuffle keeps in place are zero already: the zero padding of an 8-byte row
+            // for psadbw is no instruction, as natively after movq.
+            if (!result.Mask && sources.Count == 1 && sources.Single() is { Key: (int only, 0), Value: int[] kept } && inputs[only].Bits == bits &&
+                ZeroAbove(operands[only], inputs[only]) &&
+                Enumerable.Range(0, per).All(lane => (kept[lane] < 0 || kept[lane] == lane) && (!cleared[lane] || lane >= inputs[only].Lanes)))
+                return;
             for (int lane = 0; lane < per; lane++) Scalar(IntegerLane(result.Lane), cleared[lane] ? 0 : -1);
-            il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(IntegerLane(result.Lane), per).ToArray()));
-            As(IntegerLane(result.Lane), result.Lane);
-            Call("BitwiseAnd", result.Lane, 2);
-        });
+            il.Emit(OpCodes.Call, Api(bits, "Create", null, Enumerable.Repeat(IntegerLane(result.Lane), per).ToArray()));
+            As(IntegerLane(result.Lane), result.Lane, bits);
+            Call("BitwiseAnd", result.Lane, 2, bits);
+        }
 
-        void Combine(Dictionary<(int Operand, int Fragment), int[]> sources)
+        void Combine(Dictionary<(int Operand, int Fragment), int[]> sources, int bits, int per)
         {
-            if (sources.Count == 2 && Halves(sources) is var (lower, upper))
+            if (sources.Count == 2 && Halves(sources, per) is var (lower, upper))
             {
-                if (Wide)
+                if (bits == 256)
                 {
-                    SourceHalf(lower);
-                    SourceHalf(upper);
-                    il.Emit(OpCodes.Call, Api("Create", result.Lane, Half(result.Lane), Half(result.Lane)));
+                    foreach ((int operand, int fragment, bool high) in new[] { lower, upper }) Source(operand, 2 * fragment + (high ? 1 : 0), 128);
+                    il.Emit(OpCodes.Call, Api(256, "Create", result.Lane, Half(result.Lane, 256), Half(result.Lane, 256)));
                 }
                 else
                 {
-                    // The halves of a Vector128 as the lanes of a Vector128<double>: unpcklpd and unpckhpd, or ins on
-                    // ARM64. Vector64 has no hardware acceleration on x64, where Create of two goes through memory.
+                    // The halves of a Vector128 as the lanes of a Vector128<double>: unpcklpd and unpckhpd on x64, one ins or
+                    // ext on ARM64 (Vectors.Halves, SV-38). Vector64 has no hardware acceleration on x64, where Create of two
+                    // goes through memory.
                     SourceElement(lower);
                     SourceElement(upper);
-                    il.Emit(OpCodes.Call, Api("Create", null, typeof(double), typeof(double)));
-                    As(typeof(double), result.Lane);
+                    il.Emit(OpCodes.Call, Helper(nameof(Vectors.Halves), null, V(typeof(double), 128), typeof(int), V(typeof(double), 128), typeof(int)));
+                    As(typeof(double), result.Lane, 128);
                 }
+                return;
+            }
+            if (bits == 128 && Unzip(sources, per) is var ((lowOperand, lowFragment), (highOperand, highFragment), odd))
+            {
+                Source(lowOperand, lowFragment, 128);
+                if ((lowOperand, lowFragment) == (highOperand, highFragment))
+                {
+                    il.Emit(OpCodes.Call, Helper(odd ? nameof(Vectors.OddLanes) : nameof(Vectors.EvenLanes), result.Lane, V(result.Lane, 128)));
+                    return;
+                }
+                Source(highOperand, highFragment, 128);
+                il.Emit(OpCodes.Call, Helper(odd ? nameof(Vectors.UnzipOdd) : nameof(Vectors.UnzipEven), result.Lane, V(result.Lane, 128), V(result.Lane, 128)));
+                return;
+            }
+            if (bits == 128 && result.LaneBits <= 16 && sources.Count is >= 2 and <= 4 &&
+                sources.Values.All(pattern => pattern.Where((element, lane) => element >= 0 && element != lane).Any()))
+            {
+                // Lanes of 8 and 16 bits from two to four fragments that each need a shuffle: byte shuffles that zero the
+                // lanes the other sources supply, or'ed (Vectors.ShuffleBytes), behind one test of SSSE3, which ILC makes
+                // at run time at the baseline instruction set, instead of a shuffle and a blend per source.
+                int bytes = result.LaneBits / 8;
+                foreach (((int operand, int fragment), int[] pattern) in sources)
+                {
+                    Source(operand, fragment, 128);
+                    As(result.Lane, typeof(byte), 128);
+                    for (int index = 0; index < 16; index++) Scalar(typeof(byte), pattern[index / bytes] is >= 0 and int element ? element * bytes + index % bytes : 0x80);
+                    il.Emit(OpCodes.Call, Api(128, "Create", null, Enumerable.Repeat(typeof(byte), 16).ToArray()));
+                }
+                il.Emit(OpCodes.Call, Helper(nameof(Vectors.ShuffleBytes), null, Enumerable.Repeat(V(typeof(byte), 128), 2 * sources.Count).ToArray()));
+                As(typeof(byte), result.Lane, 128);
                 return;
             }
             bool firstSource = true;
@@ -1339,51 +1661,102 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 if (!firstSource)
                 {
                     // The lanes this source supplies, from the shuffled source, else the lanes gathered so far.
-                    LocalBuilder gathered = Rent(result.Fragment);
+                    LocalBuilder gathered = Rent(V(result.Lane, bits));
                     il.Emit(OpCodes.Stloc, gathered);
                     for (int lane = 0; lane < per; lane++) Scalar(IntegerLane(result.Lane), pattern[lane] >= 0 ? -1 : 0);
-                    il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(IntegerLane(result.Lane), per).ToArray()));
-                    As(IntegerLane(result.Lane), result.Lane);
-                    Permute(operand, fragment, pattern);
+                    il.Emit(OpCodes.Call, Api(bits, "Create", null, Enumerable.Repeat(IntegerLane(result.Lane), per).ToArray()));
+                    As(IntegerLane(result.Lane), result.Lane, bits);
+                    Permute(operand, fragment, pattern, bits);
                     il.Emit(OpCodes.Ldloc, gathered);
-                    Call("ConditionalSelect", result.Lane, 3);
+                    il.Emit(OpCodes.Call, Helper(nameof(Vectors.Select), result.Lane, V(result.Lane, bits), V(result.Lane, bits), V(result.Lane, bits)));
                     Release(gathered);
                 }
                 else
-                    Permute(operand, fragment, pattern);
+                    Permute(operand, fragment, pattern, bits);
                 firstSource = false;
             }
         }
 
-        void SourceHalf((int Operand, int Fragment, bool Upper) half)
-        {
-            Source(half.Operand, half.Fragment);
-            il.Emit(OpCodes.Call, Api(half.Upper ? "GetUpper" : "GetLower", result.Lane, V(result.Lane)));
-        }
-
         void SourceElement((int Operand, int Fragment, bool Upper) half)
         {
-            Source(half.Operand, half.Fragment);
-            As(result.Lane, typeof(double));
+            Source(half.Operand, half.Fragment, 128);
+            As(result.Lane, typeof(double), 128);
             il.Emit(half.Upper ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
-            il.Emit(OpCodes.Call, Api("GetElement", typeof(double), V(typeof(double)), typeof(int)));
         }
 
-        void Permute(int operand, int fragment, int[] pattern)
+        void Permute(int operand, int fragment, int[] pattern, int bits)
         {
-            Source(operand, fragment);
+            Source(operand, fragment, bits);
             if (pattern.Select((element, lane) => element < 0 || element == lane).All(identity => identity)) return;
             // Unused lanes repeat a used index, which keeps a broadcast a broadcast.
             int fill = pattern.First(element => element >= 0);
+            int[] chosen = [.. Enumerable.Range(0, pattern.Length).Select(lane => pattern[lane] >= 0 ? pattern[lane] : pattern.All(element => element < 0 || element == fill) ? fill : lane)];
+            int form = bits == 128 ? PermuteForm(pattern, result.LaneBits / 8) : 0;
+            if (bits == 128 && result.LaneBits <= 16)
+            {
+                // Lanes of 8 and 16 bits by byte indices, through pshufb where the host has SSSE3 (Vectors.ShuffleBytes, SV-40),
+                // which ILC tests at run time at the baseline instruction set, where Vector128.Shuffle of them is software;
+                // one permute instruction on ARM64 where the indices are one (SV-38).
+                int bytes = result.LaneBits / 8;
+                As(result.Lane, typeof(byte), 128);
+                for (int index = 0; index < 16; index++) Scalar(typeof(byte), chosen[index / bytes] * bytes + index % bytes);
+                il.Emit(OpCodes.Call, Api(128, "Create", null, Enumerable.Repeat(typeof(byte), 16).ToArray()));
+                if (form != 0)
+                {
+                    il.Emit(OpCodes.Ldc_I4, form);
+                    il.Emit(OpCodes.Ldc_I4, bytes);
+                    il.Emit(OpCodes.Call, Helper(nameof(Vectors.ShuffleBytes), null, V(typeof(byte), 128), V(typeof(byte), 128), typeof(int), typeof(int)));
+                }
+                else
+                    il.Emit(OpCodes.Call, Helper(nameof(Vectors.ShuffleBytes), null, V(typeof(byte), 128), V(typeof(byte), 128)));
+                As(typeof(byte), result.Lane, 128);
+                return;
+            }
             Type indices = IntegerLane(result.Lane);
-            for (int lane = 0; lane < per; lane++) Scalar(indices, pattern[lane] >= 0 ? pattern[lane] : pattern.All(element => element < 0 || element == fill) ? fill : lane);
-            il.Emit(OpCodes.Call, Api("Create", null, Enumerable.Repeat(indices, per).ToArray()));
-            il.Emit(OpCodes.Call, Api("Shuffle", null, V(result.Lane), V(indices)));
+            for (int lane = 0; lane < pattern.Length; lane++) Scalar(indices, chosen[lane]);
+            il.Emit(OpCodes.Call, Api(bits, "Create", null, Enumerable.Repeat(indices, pattern.Length).ToArray()));
+            if (form != 0)
+            {
+                // One permute instruction on ARM64 where the indices are one, the constant Shuffle elsewhere (SV-38).
+                As(indices, result.Lane, 128);
+                il.Emit(OpCodes.Ldc_I4, form);
+                il.Emit(OpCodes.Call, Helper(nameof(Vectors.Shuffle), result.Lane, V(result.Lane, 128), V(result.Lane, 128), typeof(int)));
+                return;
+            }
+            il.Emit(OpCodes.Call, Api(bits, "Shuffle", null, V(result.Lane, bits), V(indices, bits)));
+        }
+
+        // A de-interleave by two (SV-40): the result's lower half from every other lane of one source fragment, its upper
+        // half from every other lane of another (or of the same), all even or all odd lanes. Returns the two sources and
+        // whether the lanes are odd.
+        static ((int, int) Lower, (int, int) Upper, bool Odd)? Unzip(Dictionary<(int Operand, int Fragment), int[]> sources, int per)
+        {
+            if (per < 4 || sources.Count > 2) return null;
+            int half = per / 2, parity = -1;
+            (int, int)? lower = null, upper = null;
+            foreach (((int, int) source, int[] pattern) in sources)
+            {
+                bool inLower = false, inUpper = false;
+                for (int lane = 0; lane < per; lane++)
+                {
+                    if (pattern[lane] < 0) continue;
+                    int offset = pattern[lane] - 2 * (lane % half);
+                    if (offset is not (0 or 1) || parity >= 0 && offset != parity) return null;
+                    parity = offset;
+                    inLower |= lane < half;
+                    inUpper |= lane >= half;
+                }
+                if (inLower && lower is not null || inUpper && upper is not null) return null;
+                if (inLower) lower = source;
+                if (inUpper) upper = source;
+            }
+            if (parity < 0) return null;
+            return (lower ?? upper!.Value, upper ?? lower!.Value, parity == 1);
         }
 
         // Two sources, one filling the result's lower half and the other its upper half, each with one of its own
         // halves lane for lane.
-        ((int, int, bool), (int, int, bool))? Halves(Dictionary<(int Operand, int Fragment), int[]> sources)
+        static ((int, int, bool), (int, int, bool))? Halves(Dictionary<(int Operand, int Fragment), int[]> sources, int per)
         {
             if (per < 2) return null;
             int half = per / 2;
@@ -1407,6 +1780,30 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             }
             return lower is { } low && upper is { } high ? (low, high) : null;
         }
+    }
+
+    /// <summary>
+    /// The AdvSimd permute (<see cref="Vectors.Shuffle{T}"/>'s form) that gives a shuffle of one fragment, pattern[i] the
+    /// source lane of result lane i or -1 where it is free, or 0 for none (SV-38): zip1, zip2, uzp1, uzp2, trn1 or trn2 of
+    /// the fragment with itself, a rotation (ext) or the reversal of lanes within 16-, 32- or 64-bit groups (rev16, rev32,
+    /// rev64). A broadcast is left to RyuJIT, which makes it a dup.
+    /// </summary>
+    private static int PermuteForm(int[] pattern, int laneBytes)
+    {
+        int per = pattern.Length;
+        if (per < 2 || pattern.Where(element => element >= 0).Distinct().Count() <= 1) return 0;
+        bool Matches(Func<int, int> lane) => Enumerable.Range(0, per).All(index => pattern[index] < 0 || pattern[index] == lane(index) % per);
+        if (Matches(index => index / 2)) return Vectors.PermuteZip1;
+        if (Matches(index => per / 2 + index / 2)) return Vectors.PermuteZip2;
+        if (Matches(index => 2 * index)) return Vectors.PermuteUnzip1;
+        if (Matches(index => 2 * index + 1)) return Vectors.PermuteUnzip2;
+        if (Matches(index => index & ~1)) return Vectors.PermuteTranspose1;
+        if (Matches(index => index | 1)) return Vectors.PermuteTranspose2;
+        for (int count = 1; count < per; count++)
+            if (Matches(index => index + count)) return Vectors.PermuteRotate | count << 5;
+        for (int group = 2; group * laneBytes <= 8; group *= 2)
+            if (Matches(index => index / group * group + group - 1 - index % group)) return Vectors.PermuteReverse | group * laneBytes << 5;
+        return 0;
     }
 
     // ---- Reductions ----
@@ -1466,7 +1863,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         if (kind == "add" && shape.Lanes == shape.PerFragment * shape.Fragments && System.Numerics.BitOperations.IsPow2(shape.Fragments))
         {
             Fold(vector, shape, lane, operation);
-            il.Emit(OpCodes.Call, Api("Sum", lane, V(lane)));
+            il.Emit(OpCodes.Call, Api(shape.Bits, "Sum", lane, V(lane, shape.Bits)));
         }
         else if (System.Numerics.BitOperations.IsPow2(shape.Lanes))
             ReduceTree(vector, shape, lane, operation);
@@ -1476,9 +1873,9 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             for (int element = 0; element < shape.Lanes; element++)
             {
                 Fragment(vector, element / shape.PerFragment);
-                As(shape.Lane, lane);
+                As(shape.Lane, lane, shape.Bits);
                 il.Emit(OpCodes.Ldc_I4, element % shape.PerFragment);
-                il.Emit(OpCodes.Call, Api("GetElement", lane, V(lane), typeof(int)));
+                il.Emit(OpCodes.Call, Api(shape.Bits, "GetElement", lane, V(lane, shape.Bits), typeof(int)));
                 if (element == 0) continue;
                 if (combine is not null) il.Emit(OpCodes.Call, combine);
                 else
@@ -1509,12 +1906,12 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             if (count == shape.Fragments)
             {
                 Fragment(vector, index);
-                As(shape.Lane, lane);
+                As(shape.Lane, lane, shape.Bits);
                 return;
             }
             Pair(count * 2, index);
             Pair(count * 2, index + count);
-            Call(operation, lane, 2);
+            Call(operation, lane, 2, shape.Bits);
         }
         Pair(1, 0);
     }
@@ -1527,25 +1924,24 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
     {
         Fold(vector, shape, lane, operation);
         int lanes = Math.Min(shape.Lanes, shape.PerFragment), per = shape.PerFragment;
-        Type owner = this.owner;
-        Type Fragment(Type type) => (owner == typeof(Vector256) ? typeof(Vector256<>) : typeof(Vector128<>)).MakeGenericType(type);
-        if (Wide)
+        if (shape.Bits == 256)
         {
-            LocalBuilder whole = Rent(V(lane));
+            LocalBuilder whole = Rent(V(lane, 256));
             il.Emit(OpCodes.Stloc, whole);
             il.Emit(OpCodes.Ldloc, whole);
-            il.Emit(OpCodes.Call, Api("GetLower", lane, V(lane)));
+            il.Emit(OpCodes.Call, Api(256, "GetLower", lane, V(lane, 256)));
             if (lanes == per)
             {
                 il.Emit(OpCodes.Ldloc, whole);
-                il.Emit(OpCodes.Call, Api("GetUpper", lane, V(lane)));
-                il.Emit(OpCodes.Call, Lookup(typeof(Vector128), operation, lane, [Half(lane), Half(lane)]));
+                il.Emit(OpCodes.Call, Api(256, "GetUpper", lane, V(lane, 256)));
+                il.Emit(OpCodes.Call, Api(128, operation, lane, V(lane, 128), V(lane, 128)));
                 lanes /= 2;
             }
             Release(whole);
-            owner = typeof(Vector128);
             per /= 2;
         }
+        Type owner = typeof(Vector128);
+        Type Fragment(Type type) => V(type, 128);
         Type fragment = Fragment(lane), indices = IntegerLane(lane);
         LocalBuilder folded = Rent(fragment);
         il.Emit(OpCodes.Stloc, folded);
@@ -1555,7 +1951,10 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             il.Emit(OpCodes.Ldloc, folded);
             for (int element = 0; element < per; element++) Scalar(indices, element < width ? element + width : element);
             il.Emit(OpCodes.Call, Lookup(owner, "Create", null, Enumerable.Repeat(indices, per).ToArray()));
-            il.Emit(OpCodes.Call, Lookup(owner, "Shuffle", null, [fragment, Fragment(indices)]));
+            // The upper lanes to the lower ones: an ext on ARM64, where the other lanes are free (SV-38).
+            Reinterpret(Fragment(indices), fragment);
+            il.Emit(OpCodes.Ldc_I4, Vectors.PermuteRotate | width << 5);
+            il.Emit(OpCodes.Call, Lookup(typeof(Vectors), nameof(Vectors.Shuffle), lane, [fragment, fragment, typeof(int)]));
             il.Emit(OpCodes.Call, Lookup(owner, operation, lane, [fragment, fragment]));
             il.Emit(OpCodes.Stloc, folded);
         }
@@ -1580,7 +1979,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         {
             Fragment(vector, element / shape.PerFragment);
             il.Emit(OpCodes.Ldc_I4, element % shape.PerFragment);
-            il.Emit(OpCodes.Call, Api("GetElement", shape.Lane, V(shape.Lane), typeof(int)));
+            il.Emit(OpCodes.Call, Api(shape.Bits, "GetElement", shape.Lane, V(shape.Lane, shape.Bits), typeof(int)));
             il.Emit(operation);
             il.Emit(round);
         }
@@ -1598,46 +1997,56 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         Type lane = Unsigned(shape.Lane);
         if (SplatScalar(count) is not nint scalar)
         {
-            MethodInfo helper = Helper(nameof(Vectors.FunnelShift), lane, V(lane), V(lane), V(lane), typeof(bool));
+            MethodInfo helper = Helper(nameof(Vectors.FunnelShift), lane, V(lane, shape.Bits), V(lane, shape.Bits), V(lane, shape.Bits), typeof(bool));
             Build(shape, index =>
             {
                 foreach (nint operand in new[] { high, low, count })
                 {
                     Fragment(operand, index);
-                    As(shape.Lane, lane);
+                    As(shape.Lane, lane, shape.Bits);
                 }
                 il.Emit(right ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
                 il.Emit(OpCodes.Call, helper);
-                As(lane, shape.Lane);
+                As(lane, shape.Lane, shape.Bits);
             });
             return;
         }
-        LocalBuilder amount = Rent(typeof(int));
-        LoadLaneScalar(scalar);
-        if (shape.LaneBits == 64) il.Emit(OpCodes.Conv_I4);
-        il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1);
-        il.Emit(OpCodes.And);
-        il.Emit(OpCodes.Stloc, amount);
-        MethodInfo near = Api(right ? "ShiftRightLogical" : "ShiftLeft", null, V(lane), typeof(int));
-        MethodInfo far = Api(right ? "ShiftLeft" : "ShiftRightLogical", null, V(lane), typeof(int));
+        int? constant = ConstantCount(scalar) & (shape.LaneBits - 1);
+        LocalBuilder? amount = null;
+        if (constant is null)
+        {
+            amount = Rent(typeof(int));
+            LoadLaneScalar(scalar);
+            if (shape.LaneBits == 64) il.Emit(OpCodes.Conv_I4);
+            il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, amount);
+        }
+        MethodInfo near = Api(shape.Bits, right ? "ShiftRightLogical" : "ShiftLeft", null, V(lane, shape.Bits), typeof(int));
+        MethodInfo far = Api(shape.Bits, right ? "ShiftLeft" : "ShiftRightLogical", null, V(lane, shape.Bits), typeof(int));
         Build(shape, index =>
         {
             Fragment(right ? low : high, index);
-            As(shape.Lane, lane);
-            il.Emit(OpCodes.Ldloc, amount);
+            As(shape.Lane, lane, shape.Bits);
+            if (amount is null) il.Emit(OpCodes.Ldc_I4, constant!.Value);
+            else il.Emit(OpCodes.Ldloc, amount);
             il.Emit(OpCodes.Call, near);
             Fragment(right ? high : low, index);
-            As(shape.Lane, lane);
+            As(shape.Lane, lane, shape.Bits);
             il.Emit(OpCodes.Ldc_I4_1);
             il.Emit(OpCodes.Call, far);
-            il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1);
-            il.Emit(OpCodes.Ldloc, amount);
-            il.Emit(OpCodes.Sub);
+            if (amount is null) il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1 - constant!.Value);
+            else
+            {
+                il.Emit(OpCodes.Ldc_I4, shape.LaneBits - 1);
+                il.Emit(OpCodes.Ldloc, amount);
+                il.Emit(OpCodes.Sub);
+            }
             il.Emit(OpCodes.Call, far);
-            Call("BitwiseOr", lane, 2);
-            As(lane, shape.Lane);
+            Call("BitwiseOr", lane, 2, shape.Bits);
+            As(lane, shape.Lane, shape.Bits);
         });
-        Release(amount);
+        if (amount is not null) Release(amount);
     }
 
     /// <summary>Translates a generic vector intrinsic (<see cref="Intrinsics"/>); false for any other call.</summary>
@@ -1683,13 +2092,13 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
                 "cttz" => nameof(Vectors.TrailingZeroCount),
                 "bswap" => nameof(Vectors.ByteSwap),
                 _ => nameof(Vectors.ReverseBits)
-            }, [V(lane)])!;
+            }, [V(lane, shape.Bits)])!;
             Build(shape, index =>
             {
                 Fragment(Operand(0), index);
-                As(shape.Lane, lane);
+                As(shape.Lane, lane, shape.Bits);
                 il.Emit(OpCodes.Call, helper);
-                As(lane, shape.Lane);
+                As(lane, shape.Lane, shape.Bits);
             });
             return true;
         }
@@ -1704,11 +2113,11 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             Build(shape, index =>
             {
                 Fragment(Operand(0), index);
-                As(shape.Lane, lane);
+                As(shape.Lane, lane, shape.Bits);
                 Fragment(Operand(1), index);
-                As(shape.Lane, lane);
-                Call(operation.EndsWith("min", StringComparison.Ordinal) ? "Min" : "Max", lane, 2);
-                As(lane, shape.Lane);
+                As(shape.Lane, lane, shape.Bits);
+                Call(operation.EndsWith("min", StringComparison.Ordinal) ? "Min" : "Max", lane, 2, shape.Bits);
+                As(lane, shape.Lane, shape.Bits);
             });
             return true;
         }
@@ -1718,11 +2127,11 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             Build(shape, index =>
             {
                 Fragment(Operand(0), index);
-                As(shape.Lane, lane);
+                As(shape.Lane, lane, shape.Bits);
                 Fragment(Operand(1), index);
-                As(shape.Lane, lane);
-                Call(operation.EndsWith("add", StringComparison.Ordinal) ? "AddSaturate" : "SubtractSaturate", lane, 2);
-                As(lane, shape.Lane);
+                As(shape.Lane, lane, shape.Bits);
+                Call(operation.EndsWith("add", StringComparison.Ordinal) ? "AddSaturate" : "SubtractSaturate", lane, 2, shape.Bits);
+                As(lane, shape.Lane, shape.Bits);
             });
             return true;
         }
@@ -1733,9 +2142,9 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             {
                 Fragment(Operand(0), index);
                 Fragment(Operand(1), index);
-                Call("Multiply", shape.Lane, 2);
+                Call("Multiply", shape.Lane, 2, shape.Bits);
                 Fragment(Operand(2), index);
-                Call("Add", shape.Lane, 2);
+                Call("Add", shape.Lane, 2, shape.Bits);
             });
             return true;
         }
@@ -1747,10 +2156,10 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             {
                 if (shape.Lane == typeof(float)) il.Emit(OpCodes.Ldc_R4, -0.0f);
                 else il.Emit(OpCodes.Ldc_R8, -0.0);
-                il.Emit(OpCodes.Call, Api("Create", null, shape.Lane));
+                il.Emit(OpCodes.Call, Api(shape.Bits, "Create", null, shape.Lane));
                 Fragment(Operand(1), index);
                 Fragment(Operand(0), index);
-                Call("ConditionalSelect", shape.Lane, 3);
+                Call("ConditionalSelect", shape.Lane, 3, shape.Bits);
             });
             return true;
         }
@@ -1760,7 +2169,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
             {
                 Fragment(Operand(0), index);
                 il.Emit(OpCodes.Ldc_I4, (int)MidpointRounding.AwayFromZero);
-                il.Emit(OpCodes.Call, Api("Round", null, V(shape.Lane), typeof(MidpointRounding)));
+                il.Emit(OpCodes.Call, Api(shape.Bits, "Round", null, V(shape.Lane, shape.Bits), typeof(MidpointRounding)));
             });
             return true;
         }
@@ -1782,7 +2191,7 @@ internal sealed class VectorEmitter(ValueEmitter values, ILGenerator il, TypeSys
         Build(shape, index =>
         {
             for (uint operand = 0; operand < arity; operand++) Fragment(Operand(operand), index);
-            il.Emit(OpCodes.Call, Api(method, generic ? shape.Lane : null, Enumerable.Repeat(V(shape.Lane), arity).ToArray()));
+            il.Emit(OpCodes.Call, Api(shape.Bits, method, generic ? shape.Lane : null, Enumerable.Repeat(V(shape.Lane, shape.Bits), arity).ToArray()));
         });
         return true;
     }

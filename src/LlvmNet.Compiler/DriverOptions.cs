@@ -147,7 +147,7 @@ internal static class DriverOptions
         new("--simd128", OptionKind.Flag, Modes, "--isa=wasm-simd128: compile wasm_simd128.h intrinsics to Vector128 code (docs/user/simd128.md)", H),
         new("--vector-lowering=", OptionKind.Joined, Hidden, "", H, value: "<auto|typed|scalar>"),
         new("--vector-idioms=", OptionKind.Joined, Hidden, "", H, value: "<on|off>"),
-        new("--vector-width=", OptionKind.Joined, Modes, "128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a 256-bit vector as one instruction where the host has AVX2 and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128; --isa=x86-64-v3 implies 256", H, value: "<bits>"),
+        new("--vector-width=", OptionKind.Joined, Modes, "128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a vector of more than 128 bits as Vector256 (shorter ones stay Vector128), a 256-bit one as one instruction where the host has AVX2, and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128; --isa=x86-64-v3 implies 256", H, value: "<bits>"),
         // Managed and native libraries
         new("--cil-reference", OptionKind.JoinedOrSeparate, Managed, "Resolve calls to the public CExport methods of a managed library built with -shared, in the same mode", H, value: "<assembly>"),
         new("--system-library", OptionKind.JoinedOrSeparate, Managed, "System mode: a native shared library whose functions the program calls through generated bridges", H, value: "<library>"),
@@ -167,7 +167,7 @@ internal static class DriverOptions
         new("--keep-ir", OptionKind.JoinedOrSeparate, Debugging, "Copy the linked bitcode, before lowering, to <file> (kept as <output>.failed.bc on a compile error)", H, value: "<file>"),
         new("--trap-missing-arguments", OptionKind.Flag, Debugging, "Compile a void call with fewer arguments than its definition to a trap instead of failing", H),
         new("--diagnose-limits", OptionKind.Flag, Debugging, "Report each function's IL size and locals, and the ones the JIT compiles without optimization", H),
-        new("--report-simd", OptionKind.Flag, Debugging, "Report what the program's vector code runs as: the functions of Vector128 or Vector256 code and the scalarized ones, the reductions run as psadbw and pmaddwd, and each SIMD helper the code calls with the x64 and ARM64 instruction sets it uses where the host has them (docs/user/simd.md)", H),
+        new("--report-simd", OptionKind.Flag, Debugging, "Report what the program's vector code runs as: the functions of Vector128 or Vector256 code and the scalarized ones, the reductions run as psadbw and pmaddwd, the averages as pavgb and pavgw and the strided gathers as wide loads, and each SIMD helper the code calls with the x64 and ARM64 instruction sets it uses where the host has them (docs/user/simd.md)", H),
         new("--check-indirect-calls", OptionKind.Flag, Debugging, "Check every indirect call's CIL signature against its target at run time", H),
         new("-v", OptionKind.Flag, Debugging, "Print the commands run and the notes for options without effect; alone, the frontend's version", H),
         // Information

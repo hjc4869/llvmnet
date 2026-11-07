@@ -14,6 +14,7 @@ namespace LlvmNet;
 internal sealed class VarArgEmitter(CilCompiler compiler, ILGenerator il, FunctionEmitter emitter)
 {
     private LocalBuilder? storage;
+    private LocalBuilder? slot;
     private static readonly uint byvalKind = Llvm.LLVMGetEnumAttributeKindForName("byval", 5);
 
     /// <summary>The aggregate type a byval argument points to, or 0 for any other argument.</summary>
@@ -23,12 +24,20 @@ internal sealed class VarArgEmitter(CilCompiler compiler, ILGenerator il, Functi
         return attribute == 0 ? 0 : Llvm.LLVMGetTypeAttributeValue(attribute);
     }
 
-    /// <summary>Whether the method holds a variadic call area (a localloc or arena block).</summary>
+    /// <summary>Whether the method holds a variadic call area (a frame slot, localloc or arena block).</summary>
     internal bool Allocated => storage is not null;
 
-    /// <summary>Allocates the area for the function's largest variadic call: with localloc, or from the thread's alloca
-    /// arena when <paramref name="arena"/> is set (a function with a musttail call, which must not use localloc).</summary>
-    internal void Allocate(nint function, bool arena)
+    /// <summary>The largest area a frame slot holds: a page, so that the area alone never makes the prolog probe the stack.</summary>
+    private const int SlotLimit = 4096;
+
+    /// <summary>
+    /// Allocates the area for the function's largest variadic call: from the thread's alloca arena when
+    /// <paramref name="arena"/> is set (a function with a musttail call, which must not use localloc); in a frame slot, a
+    /// local of a value type of the area's size, when <paramref name="slot"/> is set and the area fits one; otherwise with
+    /// localloc. A method with localloc gets a frame pointer, a stack probe and NativeAOT's stack cookie, checked on every
+    /// return, also when the variadic call is on an error path it never takes (PF-24); a slot is part of the fixed frame.
+    /// </summary>
+    internal void Allocate(nint function, bool arena, bool slot)
     {
         int size = 0;
         foreach (nint instruction in Llvm.Blocks(function).SelectMany(Llvm.Instructions))
@@ -47,6 +56,13 @@ internal sealed class VarArgEmitter(CilCompiler compiler, ILGenerator il, Functi
         if (size == 0)
             return;
         storage = il.DeclareLocal(typeof(nint));
+        if (slot && !arena && size <= SlotLimit)
+        {
+            // 15 bytes more, for the 16-byte alignment of localloc's block: va_arg aligns the overflow area's pointer
+            // itself, so the area's offsets hold only from an aligned start. Each call computes the address (Pack).
+            this.slot = il.DeclareLocal(compiler.Types.Block(size + 15));
+            return;
+        }
         if (arena)
         {
             // Arena blocks are not aligned; the floating-point slots are 16-byte ones, as in localloc's block.
@@ -73,6 +89,20 @@ internal sealed class VarArgEmitter(CilCompiler compiler, ILGenerator il, Functi
     {
         if (storage is null)
             throw new InvalidOperationException("Variadic frame was not allocated.");
+        if (slot is not null)
+        {
+            // The slot's address, rounded up to 16 bytes, at the call: entry stays free of it, and the pointer is not
+            // kept in a register across the whole method.
+            il.Emit(OpCodes.Ldloca, slot);
+            il.Emit(OpCodes.Conv_U);
+            il.Emit(OpCodes.Ldc_I4, 15);
+            il.Emit(OpCodes.Conv_I);
+            il.Emit(OpCodes.Add);
+            il.Emit(OpCodes.Ldc_I4, -16);
+            il.Emit(OpCodes.Conv_I);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, storage);
+        }
         uint fixedCount = Llvm.LLVMCountParamTypes(Llvm.LLVMGetCalledFunctionType(instruction));
         int general = 0;
         int floating = 0;

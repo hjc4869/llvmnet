@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # tags: core aot
 # Integer select, abs and min/max are computed without branches (RyuJIT turns branches into cmov only outside loops),
-# except min/max against a constant bound, which keep a predictable branch:
-# tests/c/select.c runs every comparison predicate and integer width on edge values and must print what the native build
-# prints, under the JIT and NativeAOT, and its kernels (libpng's Paeth predictor among them) must have no branch in CIL.
+# except min/max against a constant bound and selects on a loop-carried chain (a running maximum), which keep a
+# predictable branch: tests/c/select.c runs every comparison predicate and integer width on edge values and must print
+# what the native build prints, under the JIT and NativeAOT, and its kernels (libpng's Paeth predictor among them) must
+# have no branch in CIL.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 rm -rf "$test_output"
 mkdir -p "$test_output"
@@ -34,7 +35,16 @@ for function in paeth_predictor clip_pixel8 clamp_long select_flag select_wide; 
 done
 # A minimum or maximum against a constant bound keeps its branch: a clamp is predictable (smax(x, 0), umin(x, 1023)).
 dotnet "$checks" il-opcodes "$test_output/portable-O2.dll" clip_pixel10 | grep -Eq ' (brtrue|brfalse)(\.s)? '
+# So do a running maximum's umax chain and a running minimum's smin and index select (PF-18): their loops branch anyway,
+# so the test is that no mask arithmetic is left (the sign shift of a 32-bit minimum, the xor of a select).
+for function in running_max running_argmin; do
+    opcodes="$(dotnet "$checks" il-opcodes "$test_output/portable-O2.dll" "$function")"
+    if grep -Eq ' (xor|shr|shr\.un) ' <<<"$opcodes"; then
+        printf 'FAIL: %s computes its loop-carried selects without branches:\n%s\n' "$function" "$opcodes" >&2
+        exit 1
+    fi
+done
 "$llvmnet" --runtime=portable -O2 --nativeaot "$source_file" -o "$test_output/aot" >"$test_output/aot.log"
 "$test_output/aot" >"$test_output/aot.txt"
 diff -u "$test_output/native.txt" "$test_output/aot.txt"
-printf 'PASS: branch-free select, abs and min/max match native in both modes under the JIT and NativeAOT\n'
+printf 'PASS: branch-free select, abs and min/max, and the branches of loop-carried ones, match native in both modes under the JIT and NativeAOT\n'

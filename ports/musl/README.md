@@ -22,4 +22,6 @@ This directory holds the llvmnet port of musl 1.2.5. `scripts/build-portable-lib
 - `src/fenv/llvmnet/fenv.c` describes the CIL floating-point environment: round to nearest only and no exception flags. Selecting another rounding mode or raising an exception fails.
 - `src/math/llvmnet/roundevenl.c` adds C23's `roundevenl`, which the linker substitutes for `llvm.roundeven.f80`; the other `long double` intrinsics (`llvm.log.f80` and the rest) become calls to musl's generic C functions (`logl`).
 
+musl's allocator is not compiled: mallocng (`src/malloc/mallocng/`) and the files of `src/malloc/` that define `malloc`, `calloc`, `realloc`, `free` and their internal names are left out of the source selection, and mimalloc ([ports/mimalloc](../mimalloc/README.md)) defines them in `libc.a` instead. musl's `posix_memalign`, `memalign`, `valloc` and `reallocarray` stay and call it.
+
 Assembly sources under `src/*/x86_64/` are not compiled; musl's generic C implementations, including those of the `long double` math functions, are used.
