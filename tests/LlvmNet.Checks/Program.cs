@@ -89,9 +89,11 @@ try
         }
         return 0;
     }
-    if (args is ["il-opcodes", string opcodePath, string methodName])
+    if (args is ["il-opcodes", string opcodePath, string methodName, .. var flags] && flags is [] or ["--locals"])
     {
         // The CIL opcodes of each method named methodName, one line per method, for checks of what a lowering emits.
+        // With --locals, every ldloc and stloc form is written ldloc:N or stloc:N with its local's index.
+        bool withLocals = flags is ["--locals"];
         var opcodes = typeof(System.Reflection.Emit.OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static)
             .Select(field => (System.Reflection.Emit.OpCode)field.GetValue(null)!).ToDictionary(opcode => (ushort)opcode.Value);
         using FileStream stream = File.OpenRead(opcodePath);
@@ -109,7 +111,19 @@ try
                 ushort value = il.ReadByte();
                 if (value == 0xFE) value = (ushort)(0xFE00 | il.ReadByte());
                 System.Reflection.Emit.OpCode opcode = opcodes[value];
-                names.Add(opcode.Name!);
+                string name = opcode.Name!;
+                if (withLocals && name.Split('.') is [("ldloc" or "stloc") and var access, .. var form])
+                {
+                    int index = form switch
+                    {
+                        ["s"] => il.ReadByte(),
+                        [] => il.ReadUInt16(),
+                        _ => int.Parse(form[0])
+                    };
+                    names.Add($"{access}:{index}");
+                    continue;
+                }
+                names.Add(name);
                 int operand = opcode.OperandType switch
                 {
                     System.Reflection.Emit.OperandType.InlineNone => 0,
@@ -262,7 +276,7 @@ try
         }
         return 0;
     }
-    Console.Error.WriteLine("Usage: LlvmNet.Checks compare-numeric expected actual absolute-tolerance | inspect assembly.dll | jit-all path... | inspect-methods assembly.dll name-filter | il-opcodes assembly.dll method | inspect-signatures assembly.dll | vector-calls assembly.dll | simd128-probe inputs.bin");
+    Console.Error.WriteLine("Usage: LlvmNet.Checks compare-numeric expected actual absolute-tolerance | inspect assembly.dll | jit-all path... | inspect-methods assembly.dll name-filter | il-opcodes assembly.dll method [--locals] | inspect-signatures assembly.dll | vector-calls assembly.dll | simd128-probe inputs.bin");
     return 2;
 }
 catch (Exception error)

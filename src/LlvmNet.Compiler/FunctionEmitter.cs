@@ -1628,7 +1628,10 @@ internal sealed class FunctionEmitter : ValueEmitter
             }
         // Where each phi and copied value is live: in each block it is defined in or live into, from its definition
         // (a phi's at the block's start) or the block's start to its last use there or the block's end, as sorted
-        // [From, To] position segments, disjoint because blocks are.
+        // [From, To] segments, disjoint because blocks are. Positions are doubled: an instruction reads its operands at
+        // 2p, and a scalar result that is computed on the evaluation stack and stored once (ReadsBeforeWriting) is
+        // written at 2p + 1, so an operand whose last use it is, as an induction variable's for its next value
+        // (iv.next = iv + 1, which x86's two-address add ties the same way), can share its local.
         var segments = new List<(int From, int To)>?[values.Count];
         for (int value = 0; value < values.Count; value++)
             if (coalescing[value]) segments[value] = [];
@@ -1639,8 +1642,9 @@ internal sealed class FunctionEmitter : ValueEmitter
             {
                 if (!coalescing[segmentIndex]) continue;
                 bool liveAfter = bit.TryGetValue(segmentIndex, out int index) && (liveOut[block][index >> 6] & 1UL << index) != 0;
-                int through = lastUse.TryGetValue((segmentIndex, block), out int at) ? Math.Max(at, definition[segmentIndex]) : definition[segmentIndex];
-                segments[segmentIndex]!.Add((definition[segmentIndex], liveAfter ? end[block] : through));
+                int from = 2 * definition[segmentIndex] + (isPhiValue(segmentIndex) || !ReadsBeforeWriting(values[segmentIndex]) ? 0 : 1);
+                int through = lastUse.TryGetValue((segmentIndex, block), out int at) ? Math.Max(2 * at, from) : from;
+                segments[segmentIndex]!.Add((from, liveAfter ? 2 * end[block] + 1 : through));
             }
             for (int word = 0; word < words; word++)
                 for (ulong bits = liveIn[block][word]; bits != 0; bits &= bits - 1)
@@ -1649,9 +1653,10 @@ internal sealed class FunctionEmitter : ValueEmitter
                     int value = global[index];
                     if (!coalescing[value]) continue;
                     bool liveAfter = (liveOut[block][index >> 6] & 1UL << index) != 0;
-                    segments[value]!.Add((start[block], liveAfter || !lastUse.TryGetValue((value, block), out int at) ? end[block] : at));
+                    segments[value]!.Add((2 * start[block], liveAfter || !lastUse.TryGetValue((value, block), out int at) ? 2 * end[block] + 1 : 2 * at));
                 }
         }
+        bool isPhiValue(int value) => Llvm.LLVMGetInstructionOpcode(values[value]) == 44;
         // A phi joins the class of a value it copies, as LLVM's register coalescer joins a copy's intervals, when no
         // member of one class is live where a member of the other is (SSA interference); a class then has one local
         // and its edge copies are not emitted. An edge loads every value it copies before it stores any phi, so a
@@ -1712,6 +1717,14 @@ internal sealed class FunctionEmitter : ValueEmitter
         for (int value = 0; value < values.Count; value++)
             locals[values[value]] = assigned[Find(value)]!;
 
+        // A scalar arithmetic, cast, comparison, address or select result: Emit pushes it from its operands and
+        // StoreResult stores it once, so every operand is read before its local is written.
+        static bool ReadsBeforeWriting(nint instruction)
+        {
+            nint type = Llvm.LLVMTypeOf(instruction);
+            return Llvm.LLVMGetInstructionOpcode(instruction) is >= 8 and <= 25 or >= 29 and <= 43 or 46 &&
+                TypeSystem.Kind(type) switch { 2 or 3 or 12 => true, 8 => TypeSystem.Width(type) <= 64, _ => false };
+        }
         static bool Overlap(List<(int From, int To)> left, List<(int From, int To)> right)
         {
             for (int i = 0, j = 0; i < left.Count && j < right.Count;)
