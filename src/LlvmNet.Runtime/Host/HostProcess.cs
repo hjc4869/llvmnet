@@ -212,20 +212,29 @@ public static unsafe partial class HostSyscalls
             string program = Text(path);
             string? executable = FindExecutable(program, search != 0, environment);
             if (executable is null) return ENOENT;
-            var start = new ProcessStartInfo(executable)
-            {
-                UseShellExecute = false,
-                WorkingDirectory = directory != 0 ? Path.GetFullPath(HostPaths.ToHost(Text(directory))) : Directory.GetCurrentDirectory()
-            };
+            // An llvmnet launcher starts its payload with dotnet directly, as the script would (Windows cannot run the
+            // script), and the child sees the argv[0] it was given, as a native child does.
+            string? payload = Launchers.Payload(executable);
+            string argv0 = arguments != 0 && *(nint*)arguments != 0 ? Text(*(nint*)arguments) : program;
+            ProcessStartInfo start = payload is null ? new ProcessStartInfo(executable) : Launchers.Start(executable, payload, argv0);
+            start.UseShellExecute = false;
+            start.WorkingDirectory = directory != 0 ? Path.GetFullPath(HostPaths.ToHost(Text(directory))) : Directory.GetCurrentDirectory();
             for (nint* argument = (nint*)arguments + 1; arguments != 0 && *argument != 0; argument++)
                 start.ArgumentList.Add(Text(*argument));
             if (environment != 0)
             {
+                string? argv0Variable = start.Environment.TryGetValue("LLVMNET_ARGV0", out string? given) ? given : null;
+                string? exeVariable = start.Environment.TryGetValue("LLVMNET_EXE", out string? self) ? self : null;
                 start.Environment.Clear();
                 foreach (string variable in Strings(environment))
                 {
                     int separator = variable.IndexOf('=');
                     if (separator > 0) start.Environment[variable[..separator]] = variable[(separator + 1)..];
+                }
+                if (payload is not null)
+                {
+                    start.Environment["LLVMNET_ARGV0"] = argv0Variable;
+                    start.Environment["LLVMNET_EXE"] = exeVariable;
                 }
             }
             OpenFile?[] sources = new OpenFile?[3];
@@ -286,6 +295,7 @@ public static unsafe partial class HostSyscalls
         {
             string full = Path.GetFullPath(HostPaths.ToHost(program));
             if (File.Exists(full)) return full;
+            if (OperatingSystem.IsWindows() && WindowsLauncher(full) is string launcher) return launcher;
             return OperatingSystem.IsWindows() ? WindowsShell(program, path) : null;
         }
         foreach (string directory in (path ?? "/usr/local/bin:/bin:/usr/bin").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
@@ -293,9 +303,13 @@ public static unsafe partial class HostSyscalls
             string candidate = Path.Combine(directory, program);
             if (File.Exists(candidate)) return candidate;
             if (OperatingSystem.IsWindows() && File.Exists(candidate + ".exe")) return candidate + ".exe";
+            if (OperatingSystem.IsWindows() && WindowsLauncher(candidate) is string launcher) return launcher;
         }
         return null;
     }
+
+    /// <summary>On Windows, the llvmnet launcher <paramref name="path"/>.cmd, which a program names without the extension as it would a .exe.</summary>
+    private static string? WindowsLauncher(string path) => File.Exists(path + ".cmd") && Launchers.Payload(path + ".cmd") is not null ? path + ".cmd" : null;
 
     /// <summary>
     /// Windows has no /bin/sh, which system and popen run. The shell of the same name from Git for Windows (or MSYS2 or

@@ -28,12 +28,9 @@ dotnet publish "$root/src/LlvmNet.Compiler" -c Release "${publish_options[@]}" -
 cp "$root/src/LlvmNet.Compiler/bin/Release/net10.0/libllvmnet-llvm.so" "$prefix/lib/llvmnet/"
 cp "$root/bin/llvmnet" "$prefix/bin/llvmnet"
 chmod +x "$prefix/bin/llvmnet"
-for driver in llvmnet-clang llvmnet-clang++ llvmnet-flang; do
-    ln -sfn llvmnet "$prefix/bin/$driver"
-done
-for utility in ar ranlib nm; do
-    cp "$root/bin/llvmnet-tool" "$prefix/bin/llvmnet-$utility"
-    chmod +x "$prefix/bin/llvmnet-$utility"
+# bin/llvmnet is every command, chosen by the name it is started by.
+for command in llvmnet-clang llvmnet-clang++ llvmnet-flang llvmnet-ar llvmnet-ranlib llvmnet-nm; do
+    ln -sfn llvmnet "$prefix/bin/$command"
 done
 cp -a "$root/docs" "$prefix/share/llvmnet/"
 # The build-system files the user documentation names: <prefix>/share/llvmnet/cmake/llvmnet.cmake finds the

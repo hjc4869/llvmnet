@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using LlvmNet.Runtime;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -78,21 +79,22 @@ internal static class Toolchain
     }
 
     /// <summary>
-    /// Writes the launcher for <paramref name="assembly"/>, a POSIX shell script that runs it with dotnet. The script follows
-    /// symbolic links to itself, as the kernel does for /proc/self/exe, so a link in another directory finds the payload,
-    /// and passes its $0 (LLVMNET_ARGV0) and its resolved path (LLVMNET_EXE) to the runtime, which reports them as argv[0]
-    /// and /proc/self/exe (ProcessRuntime.ProgramName and Executable). It runs no utility unless it was reached through a
-    /// link, which takes one readlink per link.
+    /// Writes the launcher for <paramref name="assembly"/>, a POSIX shell script that runs it with dotnet, and on Windows
+    /// also <paramref name="output"/>.cmd, which cmd.exe and PowerShell run by the name without the extension. The script
+    /// follows symbolic links to itself, as the kernel does for /proc/self/exe, so a link in another directory finds the
+    /// payload, and passes its $0 (LLVMNET_ARGV0) and its resolved path (LLVMNET_EXE) to the runtime, which reports them as
+    /// argv[0] and /proc/self/exe (ProcessRuntime.ProgramName and Executable). It runs no utility unless it was reached
+    /// through a link, which takes one readlink per link. Both name the payload on their second line
+    /// (<see cref="Launchers.Marker"/>), so the host layer and the compiler can start it without a shell.
     /// </summary>
     internal static void Launcher(string output, string assembly)
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            throw new PlatformNotSupportedException("Use --nativeaot or a .dll output on this host; shell launchers require Unix.");
-        string relative = Path.GetRelativePath(Path.GetDirectoryName(output)!, assembly);
-        if (relative.Contains('\n')) throw new ArgumentException("Newlines are not supported in executable output paths.");
+        string relative = Path.GetRelativePath(Path.GetDirectoryName(output)!, assembly).Replace('\\', '/');
+        if (relative.Contains('\n') || relative.Contains('\r')) throw new ArgumentException("Newlines are not supported in executable output paths.");
         string quoted = relative.Replace("'", "'\"'\"'", StringComparison.Ordinal);
         File.WriteAllText(output, $$"""
             #!/bin/sh
+            # {{Launchers.Marker}}{{relative}}
             self=$0
             while [ -h "$self" ]; do
                 link=$(readlink -- "$self") || exit 1
@@ -104,8 +106,27 @@ internal static class Toolchain
             exec "${LLVMNET_DOTNET:-dotnet}" "$root"/'{{quoted}}' "$@"
 
             """);
-        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        if (!OperatingSystem.IsWindows())
+        {
             File.SetUnixFileMode(output, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+            return;
+        }
+        // %~dpn0 is the launcher's path without .cmd, the script's path beside it: the name Clang and llvm-ar read their mode
+        // from, as from a native program's file name.
+        string payload = relative.Replace('/', '\\').Replace("%", "%%", StringComparison.Ordinal);
+        // CRLF line endings: cmd.exe misreads labels in batch files with LF alone.
+        File.WriteAllText(output + ".cmd", string.Join("\r\n",
+            "@echo off",
+            $"rem {Launchers.Marker}{relative}",
+            "setlocal",
+            "set \"LLVMNET_ARGV0=%~dpn0\"",
+            "set \"LLVMNET_EXE=%~dpn0\"",
+            "if defined LLVMNET_DOTNET goto configured",
+            $"dotnet \"%~dp0{payload}\" %*",
+            "exit /b",
+            ":configured",
+            $"\"%LLVMNET_DOTNET%\" \"%~dp0{payload}\" %*",
+            ""));
     }
 
     /// <summary>
@@ -248,8 +269,9 @@ internal static class Toolchain
 
     private static string Capture(string executable, IEnumerable<string> arguments, bool verbose, string? input, out int status)
     {
-        var start = new ProcessStartInfo(executable) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = input is not null };
-        foreach (string argument in arguments) start.ArgumentList.Add(argument);
+        ProcessStartInfo start = Start(executable, arguments);
+        start.RedirectStandardOutput = start.RedirectStandardError = true;
+        start.RedirectStandardInput = input is not null;
         if (verbose) Console.Error.WriteLine(executable + " " + string.Join(" ", start.ArgumentList.Select(argument => System.Text.Json.JsonSerializer.Serialize(argument))));
         using Process process = Process.Start(start) ?? throw new InvalidOperationException($"Cannot start {executable}");
         if (input is not null) { process.StandardInput.Write(input); process.StandardInput.Close(); }
@@ -379,15 +401,52 @@ internal static class Toolchain
 
     internal static int Run(string executable, IEnumerable<string> arguments, bool verbose = false, bool isolatedHeaders = false)
     {
-        var start = new ProcessStartInfo(executable) { UseShellExecute = false };
+        ProcessStartInfo start = Start(executable, arguments);
         if (isolatedHeaders)
             foreach (string name in new[] { "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH", "SDKROOT" })
                 start.Environment.Remove(name);
-        foreach (string argument in arguments) start.ArgumentList.Add(argument);
-        if (verbose || DryRun) Console.Error.WriteLine(executable + " " + string.Join(" ", start.ArgumentList.Select(argument => System.Text.Json.JsonSerializer.Serialize(argument))));
+        if (verbose || DryRun) Console.Error.WriteLine(executable + " " + string.Join(" ", start.ArgumentList.Skip(start.FileName == executable ? 0 : 1).Select(argument => System.Text.Json.JsonSerializer.Serialize(argument))));
         if (DryRun) return 0;
         using Process process = Process.Start(start) ?? throw new InvalidOperationException($"Cannot start {executable}");
         process.WaitForExit();
         return process.ExitCode;
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> payloads = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// How to start a tool. An llvmnet launcher, as the LLVM tools of a portable toolchain are (llvmnet-built clang, flang,
+    /// opt, llvm-ar), starts its payload with dotnet directly (<see cref="Launchers"/>), under its own name as argv[0]; on
+    /// Windows its arguments name paths in the program's form (<see cref="ProgramArgument"/>). Anything else starts directly.
+    /// </summary>
+    internal static ProcessStartInfo Start(string executable, IEnumerable<string> arguments)
+    {
+        string? payload = payloads.GetOrAdd(executable, Launchers.Payload);
+        ProcessStartInfo start = payload is null ? new ProcessStartInfo(executable) { UseShellExecute = false } : Launchers.Start(executable, payload, executable);
+        foreach (string argument in arguments)
+            start.ArgumentList.Add(payload is not null && OperatingSystem.IsWindows() ? ProgramArgument(argument) : argument);
+        return start;
+    }
+
+    /// <summary>Options whose value, joined to them, is a path: on Windows it is given to a portable tool in the program's form.</summary>
+    private static readonly string[] PathOptions = [.. new[] { "-I", "-L", "-o", "-F", "-J", "@", "-isystem", "-iquote", "-idirafter", "-include", "-imacros",
+        "-isysroot", "-iprefix", "-iwithprefix", "-include-pch", "-MF", "-MT", "-MQ", "-module-dir", "--sysroot=", "-resource-dir=", "-fmodule-file=",
+        "-fdebug-prefix-map=", "-ffile-prefix-map=", "-fmacro-prefix-map=", "-fdebug-compilation-dir=", "-fcoverage-compilation-dir=",
+        "-fprofile-instr-generate=", "-fprofile-instr-use=", "-fprofile-use=", "-fprofile-generate=", "-fcrash-diagnostics-dir=" }.OrderByDescending(option => option.Length)];
+
+    /// <summary>
+    /// An argument for a portable tool on Windows, where the program sees paths in its own form (docs/dev/host-abi.md):
+    /// "C:\src\a.c" is "/c/src/a.c", and a relative "src\a.c" is "src/a.c", which LLVM's POSIX path functions split as the
+    /// directory of a quoted #include. That applies to an argument that is not an option, and to the value joined to a path
+    /// option (-IC:\include, --sysroot=C:\root); other options (-DNAME=C:\x) pass unchanged.
+    /// </summary>
+    internal static string ProgramArgument(string argument)
+    {
+        if (argument.Length == 0) return argument;
+        if (argument[0] != '-' && argument[0] != '@') return LlvmManaged.ProgramPath(argument);
+        foreach (string option in PathOptions)
+            if (argument.Length > option.Length && argument.StartsWith(option, StringComparison.Ordinal))
+                return option + LlvmManaged.ProgramPath(argument[option.Length..]);
+        return argument;
     }
 }

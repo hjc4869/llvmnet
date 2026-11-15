@@ -53,7 +53,7 @@ jobs:
       - name: Unit tests
         run: dotnet test tests/LlvmNet.UnitTests -c Release --no-build --logger "trx;LogFileName=unit-results.trx" --results-directory artifacts/tests/unit
       - name: Shell lint
-        run: shellcheck -S error scripts/*.sh scripts/ci/*.sh tests/*.sh tests/xp/*.sh bin/llvmnet bin/llvmnet-tool
+        run: shellcheck -S error scripts/*.sh scripts/ci/*.sh tests/*.sh tests/xp/*.sh bin/llvmnet scripts/selfhost/*.sh
       - name: Core and toolchain tests
         run: tests/run.sh --no-build --tag core --tag toolchain --exclude-tag slow -j 4
       - if: always()

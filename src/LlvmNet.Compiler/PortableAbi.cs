@@ -56,15 +56,36 @@ internal static class PortableAbi
         result.AddRange(["-isystem", include, "-isystem", Extensions.InterfaceInclude]);
         foreach (string directory in Extensions.IncludeDirectories())
             result.AddRange(["-isystem", directory]);
+        result.AddRange(["-isystem", Path.Combine(ResourceDirectory.Value, "include")]);
+        return result;
+    }
+
+    /// <summary>
+    /// Clang's resource directory, whose include/ holds the builtin headers: lib/clang/22 beside the frontend's own bin/
+    /// (links resolved), as Clang finds it, which spares the frontend start that -print-resource-dir costs (seconds for a
+    /// JIT-compiled llvmnet-built clang); else what the frontend prints.
+    /// </summary>
+    private static readonly Lazy<string> ResourceDirectory = new(() =>
+    {
         string clang = Toolchain.Executable("clang-22", "LLVMNET_CLANG");
-        var start = new ProcessStartInfo(clang) { UseShellExecute = false, RedirectStandardOutput = true };
-        start.ArgumentList.Add("-print-resource-dir");
+        string? located = File.Exists(clang) ? clang : Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator)
+            .Select(directory => Path.Combine(directory, clang)).FirstOrDefault(File.Exists);
+        if (located is not null && Path.GetDirectoryName(Path.GetDirectoryName(Runtime.Launchers.Resolve(located))) is string prefix &&
+            Path.Combine(prefix, "lib", "clang", LlvmMajor) is string beside && File.Exists(Path.Combine(beside, "include", "stddef.h")))
+            return beside;
+        ProcessStartInfo start = Toolchain.Start(clang, ["-print-resource-dir"]);
+        start.RedirectStandardOutput = true;
         using Process process = Process.Start(start) ?? throw new InvalidOperationException("Cannot find clang resource headers.");
         string resource = process.StandardOutput.ReadToEnd().Trim();
         process.WaitForExit();
+        // A portable clang on Windows prints the directory in its own form (/c/...).
+        if (OperatingSystem.IsWindows() && resource.Length > 2 && resource[0] == '/' && char.IsAsciiLetter(resource[1]) && (resource.Length == 2 || resource[2] == '/'))
+            resource = resource[1] + ":" + resource[2..];
         if (process.ExitCode != 0 || !Directory.Exists(Path.Combine(resource, "include")))
             throw new DirectoryNotFoundException("Clang's builtin headers are missing.");
-        result.AddRange(["-isystem", Path.Combine(resource, "include")]);
-        return result;
-    }
+        return resource;
+    });
+
+    /// <summary>The LLVM major version llvmnet pins (ADR-06), which names Clang's resource directory.</summary>
+    internal const string LlvmMajor = "22";
 }

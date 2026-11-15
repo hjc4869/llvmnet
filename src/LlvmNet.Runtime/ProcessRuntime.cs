@@ -19,9 +19,11 @@ public static unsafe class ProcessRuntime
     /// argv[0] as a native program started the same way sees it. .NET reports the image (program.dll) and the dotnet host,
     /// so a launcher (Toolchain.Launcher in the compiler) passes its own $0 in LLVMNET_ARGV0 and its path, with links
     /// resolved, in LLVMNET_EXE. Both leave the environment here: a native program's environment has no such variables, and
-    /// a child process must not take them for its own.
+    /// a child process must not take them for its own. On Windows a launcher's name is a host path (a .cmd launcher passes
+    /// C:\...\name), which the program sees in its own form (/c/.../name), as it sees every other path.
     /// </summary>
-    public static string ProgramName { get; } = TakeVariable("LLVMNET_ARGV0") ?? Environment.GetCommandLineArgs().FirstOrDefault() ?? Environment.ProcessPath ?? "program";
+    public static string ProgramName { get; } = TakeVariable("LLVMNET_ARGV0") is string launcher ? HostPaths.ToProgram(launcher)
+        : Environment.GetCommandLineArgs().FirstOrDefault() ?? Environment.ProcessPath ?? "program";
 
     /// <summary>
     /// The host path /proc/self/exe names: the launcher, else the process's executable (the dotnet host, or the NativeAOT
