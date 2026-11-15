@@ -297,6 +297,19 @@ internal static unsafe class Llvm
     /// </summary>
     internal static bool IsExported(nint global) => LLVMGetLinkage(global) is not (InternalLinkage or PrivateLinkage) && LLVMGetVisibility(global) == DefaultVisibility;
 
+    /// <summary>The names of the module's definitions, functions and variables, that a library exports (<see cref="IsExported"/>).</summary>
+    internal static HashSet<string> ExportedDefinitions(nint module)
+    {
+        HashSet<string> names = new(StringComparer.Ordinal);
+        foreach (nint function in Functions(module))
+            if (LLVMIsDeclaration(function) == 0 && IsExported(function)) names.Add(Name(function));
+        for (nint global = LLVMGetFirstGlobal(module); global != 0; global = LLVMGetNextGlobal(global))
+            if (LLVMIsDeclaration(global) == 0 && IsExported(global)) names.Add(Name(global));
+        for (nint alias = LLVMGetFirstGlobalAlias(module); alias != 0; alias = LLVMGetNextGlobalAlias(alias))
+            if (IsExported(alias)) names.Add(Name(alias));
+        return names;
+    }
+
     /// <summary>Human-readable symbol name: demangled for C++ and Rust, unchanged otherwise.</summary>
     internal static string Demangle(string name)
     {
