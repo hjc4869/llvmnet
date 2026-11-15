@@ -167,8 +167,8 @@ The owner asked how a portable program could reference standardized native libra
 An experiment outside the repository (`artifacts/selfhost/`, like the library survey) built LLVM, Clang and Flang 22.1.8 with llvmnet in portable mode: every LLVM tool llvmnet runs (`clang-22`, `flang-22`, `opt-22`, `llvm-ar-22`, `llvm-nm-22`) became a .NET program, under the JIT and as a NativeAOT executable. Replaying the build's 3,542 compile commands with the built `clang-22` gave the same IR as native Clang, and llvmnet's sysroots rebuilt by those tools match master's.
 
 - **BE-47 (done).** Programs with more than 65,535 methods (Clang 119,681, Flang 234,651) linked but did not start, because the CLR limits the methods of one class. Internal methods now go to several classes, 32,768 per class ([evidence](../evidence/2026-11-02-method-holders.md)).
+- **TC-21 (done).** A program started through its launcher saw the image as `argv[0]` and the `dotnet` host as `/proc/self/exe`. The shell launcher now follows links to itself and passes its `$0` and resolved path to the runtime, so `argv[0]`, `/proc/self/exe` and re-executing it match a native program on Linux and macOS, except that through `PATH` a script sees the path the shell found. Children started with `posix_spawn` still get their executable's path as `argv[0]` (LC-33) ([evidence](../evidence/2026-11-02-tc21-launcher-identity.md)).
 - **Other findings, in progress on their own branches.**
-  - The launcher's `argv[0]` and `/proc/self/exe` (TC-21).
   - `llvm.frameaddress`.
   - Precompiled headers.
   - NativeAOT's 32 MB metadata limit for Flang-sized programs.
