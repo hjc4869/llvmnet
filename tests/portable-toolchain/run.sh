@@ -119,7 +119,9 @@ selected launcher-output && check launcher-output sh -c '
     "$0/llvmnet-clang" -O1 launcher.c -o launcher && test -f launcher.llvmnet/program.dll &&
     if [ "$1" = windows ]; then out="$(cmd //c "launcher.cmd a b")"; else out="$(./launcher a b)"; fi; status=$?
     out="$(printf "%s" "$out" | tr -d "\r")"
-    echo "$out status $status"; test "$out" = "launcher 3" && test "$status" = 3' "$bin" "$system"
+    echo "$out status $status"; test "$out" = "launcher 3" && test "$status" = 3 &&
+    out="$("$0/llvmnet" --run-launcher launcher a b | tr -d "\r")"; status=$?
+    echo "run-launcher: $out"; test "$out" = "launcher 3"' "$bin" "$system"
 selected archive && check archive sh -c '
     printf "int twice(int x) { return 2 * x; }\n" >twice.c &&
     printf "#include <stdio.h>\nint twice(int);\nint main(void) { printf(\"%%d\", twice(21)); putchar(10); return 0; }\n" >main.c &&

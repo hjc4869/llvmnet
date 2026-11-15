@@ -341,6 +341,20 @@ internal static class Driver
 
     internal static int Run(string[] arguments)
     {
+        // The hidden --run-launcher <launcher> [arguments]: runs an executable output through its payload, with the
+        // launcher's argv[0] and path, as the host layer starts one. The CMake toolchain runs configure probes and tests
+        // with it on Windows, where neither the shell script nor cmd.exe /c with CMake's forward-slash paths can.
+        if (arguments is ["--run-launcher", string launcherPath, .. string[] launcherArguments])
+        {
+            string launcher = Path.GetFullPath(launcherPath);
+            if (!File.Exists(launcher) && OperatingSystem.IsWindows() && File.Exists(launcher + ".cmd")) launcher += ".cmd";
+            string payload = Launchers.Payload(launcher) ?? throw new ArgumentException($"{launcherPath} is not an llvmnet launcher.");
+            System.Diagnostics.ProcessStartInfo start = Launchers.Start(launcher, payload, launcherPath);
+            foreach (string argument in launcherArguments) start.ArgumentList.Add(argument);
+            using System.Diagnostics.Process process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException($"Cannot start {launcherPath}");
+            process.WaitForExit();
+            return process.ExitCode;
+        }
         arguments = Toolchain.ExpandResponseFiles(arguments);
         string driver = Environment.GetEnvironmentVariable("LLVMNET_DRIVER") ?? "clang";
         List<ParsedArgument> parsed = DriverOptions.Parse(arguments);

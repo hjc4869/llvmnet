@@ -56,5 +56,5 @@ unchanged headers an older time, so a compiler-only change costs the links (abou
 
 - About 5,300 objects at `-O3`, five to six seconds each; the library's 1,562 come first.
 - Links with translation to CIL: clang about 3 minutes and 7 GB, flang about 4.5 minutes, opt about 1 minute.
-- Images: clang 295 MB, flang 405 MB, opt 145 MB, `LlvmNet.Llvm.dll` 27 MB; precompiled for one host with
-  `scripts/readytorun.sh` (2 minutes) the toolchain grows from 0.9 to 1.5 GB.
+- Images: clang 196 MB, flang 287 MB, opt 96 MB, `LlvmNet.Llvm.dll` 27 MB; the portable package is 733 MB (97 MB as
+  `.tar.xz`), and precompiled for one host with `scripts/readytorun.sh` (2 minutes) 1.1 to 1.3 GB (261 MB as `.tar.xz`).

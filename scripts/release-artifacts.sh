@@ -122,6 +122,6 @@ PYTHON
     esac
 done
 rm -rf "$work"
-(cd "$out" && sha256sum -- *.tar.xz *.zip *.nupkg 2>/dev/null >SHA256SUMS)
+(cd "$out" && shopt -s nullglob && sha256sum -- *.tar.xz *.zip *.nupkg >SHA256SUMS)
 printf 'Release artifacts for %s in %s:\n' "$version" "$out"
 cat "$out/SHA256SUMS"

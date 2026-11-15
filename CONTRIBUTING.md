@@ -21,7 +21,7 @@ tests/run.sh smoke driver                                    # selected tests by
 FUZZ_SEEDS=500 tests/run.sh fuzz                             # csmith and YARPGen differential fuzzing
 dotnet test tests/LlvmNet.UnitTests -c Release
 dotnet format whitespace llvmnet.slnx --verify-no-changes
-shellcheck -S error scripts/*.sh scripts/ci/*.sh tests/*.sh bin/llvmnet scripts/selfhost/*.sh
+shellcheck -S error scripts/*.sh scripts/ci/*.sh tests/*.sh tests/portable-toolchain/*.sh bin/llvmnet scripts/selfhost/*.sh
 ```
 
 The runner builds the solution once, runs tests in parallel, continues after failures, and writes per-test logs plus `summary.tsv` and JUnit `results.xml` under `artifacts/tests/results/`. Tests whose prerequisites are missing are reported as skipped with the reason. Integration and conformance tests need pinned upstream sources, which `scripts/fetch-sources.sh` downloads and verifies. The nightly CI job also runs the `integration`, `optional`, `fuzz` and `conformance` tags; see [.github/workflows/ci.yml](.github/workflows/ci.yml).
