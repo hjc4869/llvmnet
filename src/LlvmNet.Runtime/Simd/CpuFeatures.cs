@@ -91,13 +91,13 @@ public static unsafe class CpuFeatures
     }
 
     /// <summary>
-    /// The AT_HWCAP of Linux on this host for the auxiliary vector portable programs start with: CPUID leaf 1's EDX on x64,
-    /// as Linux reports it there, and the HWCAP_* bits of the instruction sets .NET reports on ARM64 (FP, ASIMD, AES,
+    /// The AT_HWCAP of Linux on this host for the auxiliary vector portable programs start with: on x64 the kernel's own
+    /// on Linux and CPUID leaf 1's EDX elsewhere, as Linux reports it, and the HWCAP_* bits of the instruction sets .NET reports on ARM64 (FP, ASIMD, AES,
     /// PMULL, SHA1, SHA2, CRC32, ASIMDRDM, ASIMDDP, SVE); 0 elsewhere.
     /// </summary>
     internal static nint HardwareCapabilities()
     {
-        if (X86Base.IsSupported) return (nint)(uint)X86Base.CpuId(1, 0).Edx;
+        if (X86Base.IsSupported) return KernelCapabilities is { } kernel ? kernel.Hwcap : (nint)(uint)X86Base.CpuId(1, 0).Edx;
         ulong bits = 0;
         void Add(bool supported, ulong mask) { if (supported) bits |= mask; }
         Add(AdvSimd.IsSupported, 0x3);
@@ -112,11 +112,40 @@ public static unsafe class CpuFeatures
         return (nint)bits;
     }
 
-    /// <summary>The AT_HWCAP2 of Linux on this host: HWCAP2_FSGSBASE (bit 1) on x64 processors with FSGSBASE, which Linux
-    /// enables since 5.9; 0 elsewhere.</summary>
+    /// <summary>The AT_HWCAP2 of Linux on this host: the kernel's on Linux, else HWCAP2_FSGSBASE (bit 1) on x64 processors
+    /// with FSGSBASE, which Linux enables since 5.9; 0 elsewhere.</summary>
     internal static nint HardwareCapabilities2()
     {
-        if (!X86Base.IsSupported || X86Base.CpuId(0, 0).Eax < 7) return 0;
+        if (!X86Base.IsSupported) return 0;
+        if (KernelCapabilities is { } kernel) return kernel.Hwcap2;
+        if (X86Base.CpuId(0, 0).Eax < 7) return 0;
         return (X86Base.CpuId(7, 0).Ebx & 1) != 0 ? 2 : 0;
+    }
+
+    /// <summary>
+    /// On Linux, the AT_HWCAP and AT_HWCAP2 the kernel gave this process (/proc/self/auxv), which native processes get
+    /// too: a kernel or hypervisor can clear bits that CPUID still reports (a GitHub runner's AT_HWCAP differs from its
+    /// CPUID leaf 1). Null elsewhere or when the file cannot be read, where CPUID stands in.
+    /// </summary>
+    private static readonly (nint Hwcap, nint Hwcap2)? KernelCapabilities = ReadKernelCapabilities();
+
+    private static (nint, nint)? ReadKernelCapabilities()
+    {
+        if (!OperatingSystem.IsLinux() || IntPtr.Size != 8) return null;
+        try
+        {
+            byte[] vector = File.ReadAllBytes("/proc/self/auxv");
+            nint hwcap = 0, hwcap2 = 0;
+            bool found = false;
+            for (int offset = 0; offset + 16 <= vector.Length; offset += 16)
+            {
+                long key = BitConverter.ToInt64(vector, offset), value = BitConverter.ToInt64(vector, offset + 8);
+                if (key == 0) break;
+                if (key == 16) { hwcap = (nint)value; found = true; }
+                else if (key == 26) hwcap2 = (nint)value;
+            }
+            return found ? (hwcap, hwcap2) : null;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
     }
 }
