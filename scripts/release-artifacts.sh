@@ -5,7 +5,9 @@
 #
 # Usage: scripts/release-artifacts.sh <out-dir> [version]
 #   version defaults to the tag or describe of HEAD ("v0.3.0" gives 0.3.0; a dev build gives 0.3.0-dev+<commit>)
-#   LLVMNET_RELEASE_VARIANTS   space-separated subset of "thin llvm tool" (default: all three)
+#   LLVMNET_RELEASE_VARIANTS   space-separated subset of "thin llvm tool portable" (default: thin llvm tool); portable is
+#                              the toolchain for every .NET 10 host as .tar.xz and .zip, from the llvmnet-built LLVM
+#                              (scripts/selfhost/, LLVMNET_PORTABLE_LIBRARY and LLVMNET_PORTABLE_STAGE)
 #   SOURCE_DATE_EPOCH          the timestamp recorded in the archives (default: the commit time of HEAD)
 # Reproducibility: the same commit on the same toolchain produces byte-identical archives (tests/release.sh checks).
 set -euo pipefail
@@ -40,6 +42,32 @@ pack() {
         xz -T0 --block-size=32MiB -6 >"$out/$name.tar.xz"
     printf '%s\n' "$name.tar.xz"
 }
+# The same tree as a zip for Windows, made a function of its contents as the archives are: sorted entries, the commit time,
+# Unix modes kept (launchers stay executable when a Unix host unpacks it).
+zip_pack() {
+    local name="$1" prefix="$2"
+    python3 - "$prefix" "$out/$name.zip" "$SOURCE_DATE_EPOCH" <<'PYTHON'
+import os, stat, sys, time, zipfile
+prefix, destination, epoch = sys.argv[1], sys.argv[2], int(sys.argv[3])
+stamp = time.gmtime(max(epoch, 315532800))[:6]
+base = os.path.basename(prefix)
+entries = []
+for directory, directories, files in os.walk(prefix):
+    directories.sort()
+    for file in files:
+        entries.append(os.path.join(directory, file))
+with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+    for path in sorted(entries):
+        if os.path.islink(path):
+            raise SystemExit(f"{path} is a symbolic link, which a zip for Windows cannot hold")
+        info = zipfile.ZipInfo(os.path.join(base, os.path.relpath(path, prefix)).replace(os.sep, "/"), date_time=stamp)
+        info.compress_type = zipfile.ZIP_DEFLATED
+        info.external_attr = (stat.S_IFREG | (0o755 if os.access(path, os.X_OK) else 0o644)) << 16
+        with open(path, "rb") as source:
+            archive.writestr(info, source.read())
+PYTHON
+    printf '%s\n' "$name.zip"
+}
 for variant in $variants; do
     case "$variant" in
         thin)
@@ -51,6 +79,12 @@ for variant in $variants; do
             prefix="$work/llvmnet-$version-linux-x64-llvm"
             bash "$root/scripts/package-toolchain.sh" "$prefix" --self-contained --bundle-llvm >"$work/llvm.log"
             pack "llvmnet-$version-linux-x64-llvm" "$prefix"
+            ;;
+        portable)
+            prefix="$work/llvmnet-$version-portable"
+            bash "$root/scripts/package-toolchain.sh" "$prefix" --portable >"$work/portable.log"
+            pack "llvmnet-$version-portable" "$prefix"
+            zip_pack "llvmnet-$version-portable" "$prefix"
             ;;
         tool)
             # The dotnet tool: the compiler, its LLVM bridge and the sysroots in one package; LLVM 22 comes from PATH.
@@ -79,6 +113,6 @@ PYTHON
     esac
 done
 rm -rf "$work"
-(cd "$out" && sha256sum -- *.tar.xz *.nupkg 2>/dev/null >SHA256SUMS)
+(cd "$out" && sha256sum -- *.tar.xz *.zip *.nupkg 2>/dev/null >SHA256SUMS)
 printf 'Release artifacts for %s in %s:\n' "$version" "$out"
 cat "$out/SHA256SUMS"

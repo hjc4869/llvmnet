@@ -104,6 +104,8 @@ internal sealed class Invocation
     internal bool ListExtensions { get; private set; }
     /// <summary>The hidden --print-llvm-imports: the C names the compiler calls in its LLVM, the roots of LlvmNet.Llvm.dll (XP-04).</summary>
     internal bool PrintLlvmImports { get; private set; }
+    /// <summary>The hidden --write-launcher=&lt;payload&gt;: write -o's launcher for an existing payload, as a POSIX script and a .cmd (scripts/selfhost/build-tools.sh).</summary>
+    internal string? WriteLauncher { get; private set; }
     /// <summary>--install-extension: a built extension package to install in the sysroot's ext/ directory.</summary>
     internal string? InstallExtension { get; private set; }
     /// <summary>--uninstall-extension: the name of an installed extension to remove.</summary>
@@ -217,6 +219,7 @@ internal sealed class Invocation
                 case "--print-kernel-data=": KernelData = Path.GetFullPath(value); break;
                 case "--list-extensions": ListExtensions = true; break;
                 case "--print-llvm-imports": PrintLlvmImports = true; break;
+                case "--write-launcher=": WriteLauncher = Path.GetFullPath(value); break;
                 case "--install-extension": InstallExtension = Path.GetFullPath(value); break;
                 case "--uninstall-extension": UninstallExtension = value; break;
                 case "--nativeaot": Options.NativeAot = true; break;
@@ -370,6 +373,13 @@ internal static class Driver
         var invocation = new Invocation(parsed, driver);
         driver = invocation.Driver;
         if (invocation.ListExtensions) { Console.Write(Extensions.Listing()); return 0; }
+        if (invocation.WriteLauncher is string launcherPayload)
+        {
+            if (invocation.Output is null || !File.Exists(launcherPayload))
+                throw new ArgumentException("--write-launcher=<payload> needs an existing payload and -o <launcher>.");
+            Toolchain.Launcher(Path.GetFullPath(invocation.Output), launcherPayload, windows: true);
+            return 0;
+        }
         if (invocation.PrintLlvmImports) { Console.Write(string.Concat(LlvmNative.Imports.Select(name => name + "\n"))); return 0; }
         if (invocation.InstallExtension is not null) { Console.WriteLine(Extensions.Install(invocation.InstallExtension)); return 0; }
         if (invocation.UninstallExtension is not null) { Console.WriteLine(Extensions.Uninstall(invocation.UninstallExtension)); return 0; }

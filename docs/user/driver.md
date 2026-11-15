@@ -96,6 +96,7 @@ Every option falls into one of four classes, per runtime mode:
 | Option | Effect |
 | --- | --- |
 | `--cil-reference=<assembly>` | Resolve calls to the public CExport methods of a managed library built with -shared, in the same mode |
+| `--embed-libc` | Portable mode, with -shared: link the C library (musl, libc++, flang-rt, libomp) into the library, which then initializes it at its first call, so .NET code can call a library that uses the C library without a program around it; its exports are the default-visibility functions of the inputs |
 | `--system-library=<library>` | System mode: a native shared library whose functions the program calls through generated bridges |
 | `--native-kernels=<dir>` | Portable mode: a native kernel package (its directory, with manifest.json) whose library defines functions the program declares, such as assembly kernels; the image calls them through P/Invoke stubs, loads the library of the running host from runtimes/<rid>/native/ beside it and NativeAOT links the target's static library (docs/user/native-kernels.md) |
 | `--extension=<name>` | Link a native extension installed in the sysroot's ext/ directory: in portable mode its assembly, registered for dlopen; in system mode its Linux libraries, as --system-library (also -l<name> for a name its manifest lists) |

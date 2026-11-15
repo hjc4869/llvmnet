@@ -175,6 +175,7 @@ internal static class DriverOptions
         new("--help", OptionKind.Flag, Information, "This list; docs/user/driver.md is the full reference", H),
         new("--version", OptionKind.Flag, Information, "llvmnet's version, the LLVM version and the ABI tags, then the frontend's own version", H),
         new("--print-llvm-imports", OptionKind.Flag, Hidden, "", H),
+        new("--write-launcher=", OptionKind.Joined, Hidden, "", H, value: "<payload>"),
         new("--list-extensions", OptionKind.Flag, Information, "List the native extensions installed in the sysroot's ext/ directory, with their -l names, host libraries and headers", H),
         new("--install-extension", OptionKind.JoinedOrSeparate, Information, "Install a built native extension package (a directory with manifest.json, include/ and lib/) in the sysroot's ext/ directory, after checking its assembly, its llvmnet version and its names", H, value: "<dir>"),
         new("--uninstall-extension", OptionKind.JoinedOrSeparate, Information, "Remove an installed native extension from the sysroot's ext/ directory", H, value: "<name>"),

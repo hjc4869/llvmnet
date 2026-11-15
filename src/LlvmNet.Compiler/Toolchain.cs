@@ -80,14 +80,15 @@ internal static class Toolchain
 
     /// <summary>
     /// Writes the launcher for <paramref name="assembly"/>, a POSIX shell script that runs it with dotnet, and on Windows
-    /// also <paramref name="output"/>.cmd, which cmd.exe and PowerShell run by the name without the extension. The script
+    /// also <paramref name="output"/>.cmd (or with <paramref name="windows"/>, for a package), which cmd.exe and PowerShell
+    /// run by the name without the extension. The script
     /// follows symbolic links to itself, as the kernel does for /proc/self/exe, so a link in another directory finds the
     /// payload, and passes its $0 (LLVMNET_ARGV0) and its resolved path (LLVMNET_EXE) to the runtime, which reports them as
     /// argv[0] and /proc/self/exe (ProcessRuntime.ProgramName and Executable). It runs no utility unless it was reached
     /// through a link, which takes one readlink per link. Both name the payload on their second line
     /// (<see cref="Launchers.Marker"/>), so the host layer and the compiler can start it without a shell.
     /// </summary>
-    internal static void Launcher(string output, string assembly)
+    internal static void Launcher(string output, string assembly, bool windows = false)
     {
         string relative = Path.GetRelativePath(Path.GetDirectoryName(output)!, assembly).Replace('\\', '/');
         if (relative.Contains('\n') || relative.Contains('\r')) throw new ArgumentException("Newlines are not supported in executable output paths.");
@@ -107,10 +108,8 @@ internal static class Toolchain
 
             """);
         if (!OperatingSystem.IsWindows())
-        {
             File.SetUnixFileMode(output, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
-            return;
-        }
+        if (!windows && !OperatingSystem.IsWindows()) return;
         // %~dpn0 is the launcher's path without .cmd, the script's path beside it: the name Clang and llvm-ar read their mode
         // from, as from a native program's file name.
         string payload = relative.Replace('/', '\\').Replace("%", "%%", StringComparison.Ordinal);
@@ -432,7 +431,8 @@ internal static class Toolchain
     private static readonly string[] PathOptions = [.. new[] { "-I", "-L", "-o", "-F", "-J", "@", "-isystem", "-iquote", "-idirafter", "-include", "-imacros",
         "-isysroot", "-iprefix", "-iwithprefix", "-include-pch", "-MF", "-MT", "-MQ", "-module-dir", "--sysroot=", "-resource-dir=", "-fmodule-file=",
         "-fdebug-prefix-map=", "-ffile-prefix-map=", "-fmacro-prefix-map=", "-fdebug-compilation-dir=", "-fcoverage-compilation-dir=",
-        "-fprofile-instr-generate=", "-fprofile-instr-use=", "-fprofile-use=", "-fprofile-generate=", "-fcrash-diagnostics-dir=" }.OrderByDescending(option => option.Length)];
+        "-fprofile-instr-generate=", "-fprofile-instr-use=", "-fprofile-use=", "-fprofile-generate=", "-fcrash-diagnostics-dir=",
+        "--internalize-public-api-file=" }.OrderByDescending(option => option.Length)];
 
     /// <summary>
     /// An argument for a portable tool on Windows, where the program sees paths in its own form (docs/dev/host-abi.md):
