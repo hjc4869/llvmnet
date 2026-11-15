@@ -8,7 +8,7 @@ llvmnet is at version 0.x and not yet production-ready. What it does today is ch
 
 ## Install
 
-**The portable toolchain** (Windows, macOS and Linux; x64 and ARM64). It needs only the [.NET 10 runtime](https://dotnet.microsoft.com/download/dotnet/10.0). Each release has a universal package and one precompiled for each common host. They contain the same toolchain: the precompiled one compiles and links a small C program in one to two seconds instead of about seven, and still runs anywhere else.
+**The portable toolchain** (Windows, macOS and Linux; x64 and ARM64). It needs only the [.NET 10 runtime](https://dotnet.microsoft.com/download/dotnet/10.0). Each release has a universal package and one precompiled for each common host. They contain the same toolchain, used the same way: the precompiled one has Clang, Flang and the LLVM tools as native executables for its host, so it compiles and links a small C program in about a second instead of about seven, and runs on that host only.
 
 | Host | Package |
 | --- | --- |

@@ -6,10 +6,15 @@
 #
 # The workflow only builds and packages: the gate (ci.yml) tests the commit, and tests/portable-toolchain/ checks a
 # portable toolchain on a host by hand (docs/dev/release-process.md). The portable job builds LLVM, Clang, MLIR and Flang
-# with llvmnet (scripts/selfhost/): about 5,300 objects, hours on a 4-core runner when the cache is cold. Its build tree is
-# cached (restored from the newest entry and saved even when the job times out, so a cold build completes over reruns),
-# and the repository variable LLVMNET_PORTABLE_RUNNER can name a larger runner. Each host's precompiled package is made
-# from the universal one in a job of its own, in parallel. The jobs hand their files to the release job as short-lived
+# with llvmnet (scripts/selfhost/): about 5,300 objects, hours on a 4-core runner when the cache is cold. A bootstrap
+# build by default (XP-11): the release pinned as llvmnet-bootstrap in scripts/sources.lock, precompiled for the runner,
+# compiles LLVM, and this commit's compiler links the library and the tools, so no LLVM of the runner's is used for them;
+# a manual run can choose the checkout's compiler on Debian's LLVM 22 instead (llvm: native). Its build tree is cached
+# (restored from the newest entry and saved even when the job times out, so a cold build completes over reruns), and the
+# repository variable LLVMNET_PORTABLE_RUNNER can name a larger runner. Each host's precompiled package has the LLVM tools as NativeAOT
+# executables (XP-14), which NativeAOT can only compile on a host of the same operating system: the portable job writes
+# their projects, a runner of each host publishes them (aot-tools), and a Linux job per host makes the package from the
+# universal one with them, precompiling the compiler with ReadyToRun. The jobs hand their files on as short-lived
 # workflow artifacts.
 name: release
 
@@ -22,6 +27,11 @@ on:
         description: Build the portable toolchain (LLVM built with llvmnet)
         type: boolean
         default: true
+      llvm:
+        description: "What compiles LLVM for the portable toolchain: the release pinned as llvmnet-bootstrap, or this commit's compiler on Debian's LLVM 22"
+        type: choice
+        options: [bootstrap, native]
+        default: bootstrap
 
 permissions:
   contents: write
@@ -106,6 +116,7 @@ jobs:
             src/LlvmNet.Compiler/Driver.cs src/LlvmNet.Compiler/PortableAbi.cs src/LlvmNet.Compiler/Llvm.cs native/abi.cpp scripts/sources.lock |
             xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
           echo "selfhost=$(git ls-files -z scripts/sources.lock scripts/selfhost | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+          echo "llvm=${{ inputs.llvm || 'bootstrap' }}" >>"$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
           path: |
@@ -119,8 +130,9 @@ jobs:
             sysroot/dotnet64-v2
             sysroot/system-linux-x64-v1
           key: sysroot-${{ runner.os }}-${{ steps.deps.outputs.sysroot }}
-      # The patched source copy and the build tree: ninja rebuilds what the sysroot headers or the flags changed, which
-      # after a compiler-only change is nothing; the tools and the library are relinked every time.
+      # The patched source copy and the build tree, one per way of building it: ninja rebuilds what the sysroot headers or
+      # the flags changed, which after a compiler-only change is nothing; the tools and the library are relinked every time.
+      # A bootstrap build also keeps the prepared toolchain that compiles LLVM, which bootstrap.sh remakes when the pin changes.
       - name: Restore the LLVM build tree
         id: selfhost-cache
         uses: actions/cache/restore@v4
@@ -128,14 +140,21 @@ jobs:
           path: |
             artifacts/selfhost-build/llvm-project
             artifacts/selfhost-build/llvm
-          key: selfhost-${{ steps.deps.outputs.selfhost }}-${{ github.sha }}
+            artifacts/selfhost-build/bootstrap
+          key: selfhost-${{ steps.deps.outputs.llvm }}-${{ steps.deps.outputs.selfhost }}-${{ github.sha }}
           restore-keys: |
-            selfhost-${{ steps.deps.outputs.selfhost }}-
-            selfhost-
+            selfhost-${{ steps.deps.outputs.llvm }}-${{ steps.deps.outputs.selfhost }}-
+            selfhost-${{ steps.deps.outputs.llvm }}-
       - name: Build the compiler and the sysroots
         run: bash scripts/ensure-built.sh
       - name: Fetch LLVM's sources
         run: scripts/fetch-sources.sh llvm-project
+      # The scripts take the toolchain that compiles LLVM from LLVMNET_SELFHOST_TOOLCHAIN (scripts/selfhost/common.sh):
+      # the pinned release's universal package with its LLVM tools made NativeAOT executables, about 15 minutes on a
+      # 4-core runner when the cache has none for the pin.
+      - name: Prepare the release that compiles LLVM (llvmnet-bootstrap in scripts/sources.lock)
+        if: steps.deps.outputs.llvm == 'bootstrap'
+        run: echo "LLVMNET_SELFHOST_TOOLCHAIN=$(bash scripts/selfhost/bootstrap.sh)" >>"$GITHUB_ENV"
       - name: Configure LLVM for portable mode
         run: bash scripts/selfhost/configure.sh
       - name: Build LlvmNet.Llvm.dll (the compiler's LLVM)
@@ -149,9 +168,16 @@ jobs:
           path: |
             artifacts/selfhost-build/llvm-project
             artifacts/selfhost-build/llvm
-          key: selfhost-${{ steps.deps.outputs.selfhost }}-${{ github.sha }}
+            artifacts/selfhost-build/bootstrap
+          key: selfhost-${{ steps.deps.outputs.llvm }}-${{ steps.deps.outputs.selfhost }}-${{ github.sha }}
       - name: Package the universal portable toolchain
         run: LLVMNET_RELEASE_VARIANTS=portable bash scripts/release-artifacts.sh dist
+      # From the packaged payloads, so the executables are made from what the universal package ships.
+      - name: Write the NativeAOT projects of the LLVM tools
+        run: |
+          mkdir -p universal
+          tar -xJf dist/llvmnet-*-portable.tar.xz -C universal
+          bash scripts/aot-tools.sh projects universal/llvmnet-*-portable/libexec/llvm/bin aot-projects
       - uses: actions/upload-artifact@v4
         with:
           name: portable-universal
@@ -160,10 +186,52 @@ jobs:
           path: |
             dist/*.tar.xz
             dist/*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aot-projects
+          retention-days: 1
+          path: aot-projects
+
+  aot-tools:
+    name: LLVM tools as NativeAOT executables for ${{ matrix.rid }}
+    needs: portable
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: linux-x64, os: ubuntu-24.04 }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm }
+          - { rid: win-x64, os: windows-2025 }
+          - { rid: win-arm64, os: windows-11-arm }
+          - { rid: osx-arm64, os: macos-15 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      # NativeAOT links with the host's C toolchain: clang and zlib on Linux, MSVC on Windows and Xcode on macOS, which the
+      # Windows and macOS images have.
+      - name: Install clang and zlib
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang zlib1g-dev
+      - uses: actions/download-artifact@v4
+        with:
+          name: aot-projects
+          path: aot-projects
+      - name: Publish the tools
+        shell: bash
+        run: bash scripts/aot-tools.sh publish aot-projects ${{ matrix.rid }} aot-tools
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aot-tools-${{ matrix.rid }}
+          retention-days: 1
+          path: aot-tools
 
   portable-precompiled:
     name: Portable toolchain precompiled for ${{ matrix.rid }}
-    needs: portable
+    needs: [portable, aot-tools]
     strategy:
       fail-fast: false
       matrix:
@@ -182,12 +250,16 @@ jobs:
         with:
           name: portable-universal
           path: universal-archive
+      - uses: actions/download-artifact@v4
+        with:
+          name: aot-tools-${{ matrix.rid }}
+          path: aot-tools
       - name: Precompile and package
         run: |
           mkdir -p universal
           tar -xJf universal-archive/llvmnet-*-portable.tar.xz -C universal
           LLVMNET_PORTABLE_UNIVERSAL="$(echo "$PWD"/universal/llvmnet-*-portable)" LLVMNET_RELEASE_VARIANTS="portable-${{ matrix.rid }}" \
-            JOBS=2 bash scripts/release-artifacts.sh dist
+            LLVMNET_AOT_TOOLS="$PWD/aot-tools" JOBS=2 bash scripts/release-artifacts.sh dist
       - uses: actions/upload-artifact@v4
         with:
           name: portable-${{ matrix.rid }}
@@ -199,7 +271,7 @@ jobs:
 
   release:
     name: GitHub release
-    needs: [artifacts, portable, portable-precompiled]
+    needs: [artifacts, portable, aot-tools, portable-precompiled]
     if: ${{ !cancelled() && needs.artifacts.result == 'success' && (needs.portable.result == 'skipped' || needs.portable-precompiled.result == 'success') }}
     runs-on: ubuntu-24.04
     steps:

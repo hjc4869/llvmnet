@@ -19,7 +19,7 @@ The compiler calls LLVM in-process through about 125 functions of LLVM's C API a
 - `LlvmNet.Llvm.dll` holds LLVM's libraries, the C API roots `--print-llvm-imports` names and `native/*.cpp`, linked with `-shared --embed-libc`. `LlvmManaged` loads it when it sits beside `llvmnet.dll` (or `LLVMNET_LLVM` names it), checks that each export has the native import's shape, points one function pointer per import at it, and runs its type initializer, which starts musl and LLVM's static constructors. Each method of `Llvm` calls the function pointer or the import on a `static readonly` test the JIT folds; strings are passed as UTF-8 and, on Windows, paths in the program's `/c/...` form.
 - The tools are launchers in `libexec/llvm/bin` (a POSIX script and a `.cmd` per name) over portable images. `Toolchain.Start` recognizes a launcher (`Launchers` in `LlvmNet.Runtime`) and starts its payload with `dotnet`, `argv[0]` and `/proc/self/exe` set to the launcher's name and path, as the launcher would, and converts arguments that name paths to the program's form on Windows (`Toolchain.ProgramArgument`).
 
-The compiler is single-threaded in LLVM, but the library's exports attach any calling thread to musl, so that is not a requirement. Precompiled packages (`--readytorun=<rid>`) carry the same assemblies with ReadyToRun code, which removes the JIT start-up that otherwise dominates a compile.
+The compiler is single-threaded in LLVM, but the library's exports attach any calling thread to musl, so that is not a requirement. Precompiled packages (`--precompile=<rid>`) carry the same compiler assemblies with ReadyToRun code and the LLVM tools as NativeAOT executables, which removes the JIT start-up that otherwise dominates a compile.
 
 ## Values and Control Flow
 

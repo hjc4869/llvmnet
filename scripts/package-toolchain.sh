@@ -6,17 +6,18 @@ shift "$(( $# > 0 ? 1 : 0 ))"
 self_contained=0
 bundle_llvm=0
 portable=0
-readytorun=""
+precompile=""
 for option in "$@"; do
     case "$option" in
         --self-contained) self_contained=1 ;;
         --bundle-llvm) bundle_llvm=1 ;;
         --portable) portable=1 ;;
-        --readytorun=*) readytorun="${option#--readytorun=}" ;;
-        *) printf 'Usage: %s [prefix] [--self-contained] [--bundle-llvm] [--portable [--readytorun=<rid>]]\n' "$0" >&2; exit 2 ;;
+        # --readytorun=<rid> is the earlier name of --precompile=<rid>, from when everything was precompiled with ReadyToRun.
+        --precompile=*|--readytorun=*) precompile="${option#*=}" ;;
+        *) printf 'Usage: %s [prefix] [--self-contained] [--bundle-llvm] [--portable [--precompile=<rid>]]\n' "$0" >&2; exit 2 ;;
     esac
 done
-if [[ -n "$readytorun" && "$portable" -eq 0 ]]; then printf -- '--readytorun=<rid> precompiles a portable toolchain; add --portable.\n' >&2; exit 2; fi
+if [[ -n "$precompile" && "$portable" -eq 0 ]]; then printf -- '--precompile=<rid> precompiles a portable toolchain; add --portable.\n' >&2; exit 2; fi
 # --portable: the toolchain for every .NET 10 host (XP-04). The compiler is framework-dependent without an apphost and
 # runs on LlvmNet.Llvm.dll, LLVM built by llvmnet (scripts/selfhost/build-library.sh, LLVMNET_PORTABLE_LIBRARY), and
 # libexec/llvm holds the llvmnet-built tools (scripts/selfhost/build-tools.sh, LLVMNET_PORTABLE_STAGE). bin/ has the
@@ -55,7 +56,9 @@ if [[ "$portable" -eq 1 ]]; then
     rm -rf "$prefix/libexec/llvm"
     cp -a "$portable_stage" "$prefix/libexec/llvm"
     # Every tool runs on the package's own runtime, so a runtime fix reaches the tools without relinking them.
-    for payload in "$prefix"/libexec/llvm/bin/*.llvmnet; do cp "$prefix/lib/llvmnet/LlvmNet.Runtime.dll" "$payload/LlvmNet.Runtime.dll"; done
+    for payload in "$prefix"/libexec/llvm/bin/*.llvmnet; do
+        if [[ -d "$payload" ]]; then cp "$prefix/lib/llvmnet/LlvmNet.Runtime.dll" "$payload/LlvmNet.Runtime.dll"; fi
+    done
 else
     cp "$root/src/LlvmNet.Compiler/bin/Release/net10.0/libllvmnet-llvm.so" "$prefix/lib/llvmnet/"
     for command in "${commands[@]}"; do ln -sfn llvmnet "$prefix/bin/$command"; done
@@ -135,10 +138,11 @@ if [[ "$bundle_llvm" -eq 1 ]]; then
         [[ -n "$source_file" ]] && dpkg -S "$(realpath "$source_file")" 2>/dev/null | cut -d: -f1
     done | sort -u)
 fi
-# --readytorun=<rid>: the same toolchain with every managed assembly precompiled for one runtime identifier, which still
-# runs everywhere else under the JIT; on that host compiles start in about a second instead of five to ten.
-if [[ -n "$readytorun" ]]; then bash "$root/scripts/precompile-toolchain.sh" "$prefix" "$readytorun"; fi
+# --precompile=<rid>: the same toolchain for one runtime identifier, with the LLVM tools as NativeAOT executables and the
+# compiler precompiled with ReadyToRun (scripts/precompile-toolchain.sh); on that host compiles start in a fraction of a
+# second instead of five to ten.
+if [[ -n "$precompile" ]]; then bash "$root/scripts/precompile-toolchain.sh" "$prefix" "$precompile"; fi
 # The compiler's own native bridge and the publish output are stripped of what a run does not need.
 if [[ -f "$prefix/lib/llvmnet/libllvmnet-llvm.so" ]]; then strip --strip-unneeded "$prefix/lib/llvmnet/libllvmnet-llvm.so" 2>/dev/null || true; fi
 rm -f "$prefix/lib/llvmnet/libllvmnet-llvm.stamp"
-printf 'Toolchain installed in %s (bundled compiler runtime=%s, bundled LLVM=%s, portable=%s%s, %s). NativeAOT publishing requires the .NET 10 SDK.\n' "$prefix" "$self_contained" "$bundle_llvm" "$portable" "${readytorun:+ precompiled for $readytorun}" "$(du -sh "$prefix" | cut -f1)"
+printf 'Toolchain installed in %s (bundled compiler runtime=%s, bundled LLVM=%s, portable=%s%s, %s). NativeAOT publishing requires the .NET 10 SDK.\n' "$prefix" "$self_contained" "$bundle_llvm" "$portable" "${precompile:+ precompiled for $precompile}" "$(du -sh "$prefix" | cut -f1)"

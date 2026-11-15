@@ -4,16 +4,27 @@
 # (a POSIX script and a .cmd, llvmnet --write-launcher) that runs the tool's payload; Clang's resource headers; and Flang's
 # intrinsic modules, made by the built flang as flang/tools/f18 makes them natively (a cross build does not).
 # Usage: build-tools.sh [stage directory (default <work>/stage)]
-#   FLANG_MODULES  a directory of Flang 22 .mod files to use instead of making them
+#   FLANG_MODULES             a directory of Flang 22 .mod files to use instead of making them
+#   LLVMNET_SELFHOST_LIBRARY  in a bootstrap build, the LlvmNet.Llvm.dll this checkout's compiler links on (default
+#                             <work>/library/LlvmNet.Llvm.dll, which build-library.sh makes)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 stage="$(realpath -m "${1:-$work/stage}")"
 [[ -f "$build_dir/build.ninja" ]] || bash "$selfhost/configure.sh"
 settle_sysroot_headers
-# The images are relinked every time: ninja does not see the llvmnet compiler that links and translates them, and an
-# image must match the LlvmNet.Runtime it ships with.
-for image in clang-22 flang-22 opt llvm-ar llvm-nm; do rm -rf "${build_dir:?}/bin/$image" "${build_dir:?}/bin/$image.llvmnet"; done
-ninja -C "$build_dir" -j"$jobs" clang flang opt llvm-ar llvm-nm
+images=(bin/clang-22 bin/flang-22 bin/opt bin/llvm-ar bin/llvm-nm)
+# ninja compiles what the images link with the compiling toolchain; this checkout's compiler links them (common.sh). They
+# are relinked every time: ninja does not see the llvmnet compiler that links and translates them, and an image must
+# match the LlvmNet.Runtime it ships with.
+mapfile -t inputs < <(for image in "${images[@]}"; do link_inputs "$image"; done | sort -u)
+ninja -C "$build_dir" -j"$jobs" "${inputs[@]}"
+library="$(realpath -m "${LLVMNET_SELFHOST_LIBRARY:-$work/library/LlvmNet.Llvm.dll}")"
+if [[ "$bootstrap" == 1 && ! -f "$library" ]]; then printf 'No %s; build it with build-library.sh first.\n' "$library" >&2; exit 1; fi
+link_environment "$library"
+for image in "${images[@]}"; do
+    link_with_checkout "$image"
+    printf 'Linked %s\n' "$image"
+done
 rm -rf "$stage"
 mkdir -p "$stage/bin" "$stage/lib/clang" "$stage/include/flang"
 # tool <image in the build's bin/> <names...>: the payload once, a launcher per name.
@@ -22,7 +33,7 @@ tool() {
     shift
     cp -a "$build_dir/bin/$image.llvmnet" "$stage/bin/$image.llvmnet"
     for name in "$@"; do
-        "$toolchain/bin/llvmnet" --write-launcher="$stage/bin/$image.llvmnet/program.dll" -o "$stage/bin/$name"
+        "$root/bin/llvmnet" --write-launcher="$stage/bin/$image.llvmnet/program.dll" -o "$stage/bin/$name"
     done
 }
 tool clang-22 clang-22 clang++-22 clang clang++

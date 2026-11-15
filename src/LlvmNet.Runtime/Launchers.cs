@@ -77,12 +77,16 @@ public static class Launchers
 
     /// <summary>
     /// How to start the launcher at <paramref name="launcher"/> with <paramref name="payload"/> (see <see cref="Payload"/>):
-    /// dotnet with the payload, and the two variables a launcher passes. <paramref name="argv0"/> is the name it is started by.
+    /// dotnet with the payload, or the payload itself when it is a native executable rather than an image (.dll), and the
+    /// two variables a launcher passes. <paramref name="argv0"/> is the name it is started by. A native payload is how a
+    /// package precompiled for Windows gives a NativeAOT tool its other names (clang++ for clang-22.exe, flang for
+    /// flang-22.exe), which Windows cannot link to it.
     /// </summary>
     public static ProcessStartInfo Start(string launcher, string payload, string argv0)
     {
-        var start = new ProcessStartInfo(Dotnet) { UseShellExecute = false };
-        start.ArgumentList.Add(payload);
+        bool image = payload.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
+        var start = new ProcessStartInfo(image ? Dotnet : payload) { UseShellExecute = false };
+        if (image) start.ArgumentList.Add(payload);
         start.Environment["LLVMNET_ARGV0"] = argv0;
         // A Windows .cmd launcher stands beside the shell script of the same name, which is the program's own path.
         string self = launcher.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) && File.Exists(launcher[..^4]) ? launcher[..^4] : launcher;
