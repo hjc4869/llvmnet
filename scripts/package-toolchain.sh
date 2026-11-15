@@ -54,6 +54,8 @@ if [[ "$portable" -eq 1 ]]; then
     mkdir -p "$prefix/libexec"
     rm -rf "$prefix/libexec/llvm"
     cp -a "$portable_stage" "$prefix/libexec/llvm"
+    # Every tool runs on the package's own runtime, so a runtime fix reaches the tools without relinking them.
+    for payload in "$prefix"/libexec/llvm/bin/*.llvmnet; do cp "$prefix/lib/llvmnet/LlvmNet.Runtime.dll" "$payload/LlvmNet.Runtime.dll"; done
 else
     cp "$root/src/LlvmNet.Compiler/bin/Release/net10.0/libllvmnet-llvm.so" "$prefix/lib/llvmnet/"
     for command in "${commands[@]}"; do ln -sfn llvmnet "$prefix/bin/$command"; done

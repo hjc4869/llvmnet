@@ -10,6 +10,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 out="$(realpath -m "${1:-$work/library}")"
 [[ -f "$build_dir/build.ninja" ]] || bash "$selfhost/configure.sh"
+settle_sysroot_headers
 mapfile -t libraries < <(llvm-config-22 --link-static --libs core bitreader bitwriter irreader linker object passes codegen | tr ' ' '\n' | sed -n 's/^-l//p')
 ninja -C "$build_dir" -j"$jobs" "${libraries[@]}"
 obj="$out/obj"

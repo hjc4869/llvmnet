@@ -117,8 +117,9 @@ check() {
 selected launcher-output && check launcher-output sh -c '
     printf "#include <stdio.h>\nint main(int c, char **v) { const char *n = v[0]; for (const char *p = n; *p; p++) if (*p == 47) n = p + 1; printf(\"%%s %%d\", n, c); putchar(10); return 3; }\n" >launcher.c &&
     "$0/llvmnet-clang" -O1 launcher.c -o launcher && test -f launcher.llvmnet/program.dll &&
-    if [ "$1" = windows ]; then out="$(cmd //c "launcher.cmd a b" | tr -d "\r")"; else out="$(./launcher a b)"; fi; status=$?
-    echo "$out status $status"; test "$out" = "launcher 3" ; test "$status" = 3' "$bin" "$system"
+    if [ "$1" = windows ]; then out="$(cmd //c "launcher.cmd a b")"; else out="$(./launcher a b)"; fi; status=$?
+    out="$(printf "%s" "$out" | tr -d "\r")"
+    echo "$out status $status"; test "$out" = "launcher 3" && test "$status" = 3' "$bin" "$system"
 selected archive && check archive sh -c '
     printf "int twice(int x) { return 2 * x; }\n" >twice.c &&
     printf "#include <stdio.h>\nint twice(int);\nint main(void) { printf(\"%%d\", twice(21)); putchar(10); return 0; }\n" >main.c &&

@@ -16,6 +16,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 [[ -x "$native_llvm/llvm-tblgen" ]] || { printf 'The host LLVM 22 tools (llvm-tblgen, clang-tblgen) are needed; set NATIVE_LLVM.\n' >&2; exit 1; }
 prepare_source
 mkdir -p "$build_dir"
+settle_sysroot_headers
 flags="-D__linux__=1 -D__linux=1 -D__gnu_linux__=1 -D__unix__=1 -D__unix=1 -fvisibility=hidden -DLLVM_ENABLE_LLVM_C_EXPORT_ANNOTATIONS"
 cmake -G Ninja -S "$source_dir/llvm" -B "$build_dir" \
     -DCMAKE_TOOLCHAIN_FILE="$toolchain_file" \

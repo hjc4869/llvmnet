@@ -113,7 +113,8 @@ internal static class Toolchain
         // %~dpn0 is the launcher's path without .cmd, the script's path beside it: the name Clang and llvm-ar read their mode
         // from, as from a native program's file name.
         string payload = relative.Replace('/', '\\').Replace("%", "%%", StringComparison.Ordinal);
-        // CRLF line endings: cmd.exe misreads labels in batch files with LF alone.
+        // CRLF line endings: cmd.exe misreads labels in batch files with LF alone. The status is passed on explicitly:
+        // "cmd /c launcher.cmd" reports 0 after a bare "exit /b".
         File.WriteAllText(output + ".cmd", string.Join("\r\n",
             "@echo off",
             $"rem {Launchers.Marker}{relative}",
@@ -122,9 +123,10 @@ internal static class Toolchain
             "set \"LLVMNET_EXE=%~dpn0\"",
             "if defined LLVMNET_DOTNET goto configured",
             $"dotnet \"%~dp0{payload}\" %*",
-            "exit /b",
+            "exit /b %ERRORLEVEL%",
             ":configured",
             $"\"%LLVMNET_DOTNET%\" \"%~dp0{payload}\" %*",
+            "exit /b %ERRORLEVEL%",
             ""));
     }
 

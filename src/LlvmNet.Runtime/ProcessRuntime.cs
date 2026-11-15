@@ -58,7 +58,8 @@ public static unsafe class ProcessRuntime
         {
             try { status = ((delegate*<string[], int>)entry)(arguments); }
             catch (Exception exception) { failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception); }
-        }, MainStackSize) { Name = "main" };
+        }, MainStackSize)
+        { Name = "main" };
         thread.Start();
         thread.Join();
         failure?.Throw();

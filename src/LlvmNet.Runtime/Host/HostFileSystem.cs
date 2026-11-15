@@ -61,8 +61,28 @@ public static unsafe partial class HostSyscalls
     private static uint PermissionsOf(FileSystemInfo info, bool directory)
     {
         if (!OperatingSystem.IsWindows()) return (uint)info.UnixFileMode & 0xfff;
-        uint permissions = directory ? 0x1edu : 0x1a4u;    // 0755, 0644
+        uint permissions = directory || Runnable(info) ? 0x1edu : 0x1a4u;    // 0755, 0644
         return (info.Attributes & FileAttributes.ReadOnly) != 0 ? permissions & ~0x92u : permissions;
+    }
+
+    /// <summary>
+    /// On Windows, which has no mode bits, whether a file counts as executable (stat's x bits, access's X_OK): what
+    /// Windows runs by its extension (.exe, .com, .bat, .cmd) and a file without an extension that starts with "#!",
+    /// which posix_spawn runs through the shell or, for an llvmnet launcher, through its payload. Programs that look for
+    /// a tool by testing X_OK (Clang's and Flang's drivers finding themselves for -cc1 and -fc1) need it.
+    /// </summary>
+    private static bool Runnable(FileSystemInfo info)
+    {
+        string extension = Path.GetExtension(info.Name);
+        if (extension.Length != 0)
+            return extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) || extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase) ||
+                extension.Equals(".bat", StringComparison.OrdinalIgnoreCase) || extension.Equals(".com", StringComparison.OrdinalIgnoreCase);
+        try
+        {
+            using FileStream stream = new(info.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return stream.ReadByte() == '#' && stream.ReadByte() == '!';
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
     }
 
     private static long StatPath(int directory, nint pathPointer, nint buffer, int flags)

@@ -1,4 +1,4 @@
-# shellcheck shell=bash
+# shellcheck shell=bash disable=SC2034
 # Settings shared by the scripts that build LLVM, Clang and Flang 22 with llvmnet (scripts/selfhost/README.md).
 #   LLVMNET_SELFHOST_DIR        work directory: the patched source copy and the build tree (default artifacts/selfhost-build)
 #   LLVMNET_SELFHOST_TOOLCHAIN  the llvmnet toolchain that compiles LLVM (default this checkout: bin/, cmake/)
@@ -29,4 +29,19 @@ prepare_source() {
     local patch
     for patch in "$selfhost"/patches/*.patch; do patch -s -p1 -d "$source_dir" <"$patch"; done
     printf '%s\n' "$stamp" >"$source_dir/.llvmnet-stamp"
+}
+
+# build-sysroot.sh gives the sysroot's headers new times whenever it rebuilds, also with unchanged content (and a CI run
+# builds the sysroot afresh), which would make ninja recompile all of LLVM. The build tree records the header hash it was
+# compiled against (the sysroot's .llvmnet-headers); while the sysroot still has that hash, its headers get the time it
+# was recorded, which is older than every object compiled against them, so ninja rebuilds only what really changed.
+settle_sysroot_headers() {
+    local sysroot="$toolchain/sysroot/dotnet64-v2" recorded="$build_dir/.llvmnet-sysroot-headers" current
+    [[ -f "$sysroot/.llvmnet-headers" && -d "$build_dir" ]] || return 0
+    current="$(<"$sysroot/.llvmnet-headers")"
+    if [[ -f "$recorded" && "$(<"$recorded")" == "$current" ]]; then
+        find "$sysroot/include" -exec touch -h -r "$recorded" {} +
+    else
+        printf '%s\n' "$current" >"$recorded"
+    fi
 }

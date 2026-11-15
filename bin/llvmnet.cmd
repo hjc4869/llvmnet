@@ -35,7 +35,7 @@ if not exist "%llvmnet_compiler%" (
     exit /b 1
 )
 "%LLVMNET_DOTNET%" "%llvmnet_compiler%" %*
-exit /b
+exit /b %ERRORLEVEL%
 :tool
 rem The toolchain's llvmnet-built tool, through the launcher of its name.
 set "llvmnet_tool=%llvmnet_root%\libexec\llvm\bin\llvm-%llvmnet_name:llvmnet-=%-22.cmd"
@@ -44,4 +44,4 @@ if not exist "%llvmnet_tool%" (
     exit /b 1
 )
 call "%llvmnet_tool%" %*
-exit /b
+exit /b %ERRORLEVEL%
