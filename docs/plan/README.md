@@ -19,7 +19,7 @@ The owner settled every open decision in [decisions.md](decisions.md): the `dotn
 
 ## Progress (2026-11-16, bootstrapped releases and NativeAOT tools)
 
-The owner asked for the release pipeline to build LLVM with the published v0.3.0-dev.3 toolchain instead of the runner's LLVM, and for the per-host packages to use NativeAOT instead of ReadyToRun, used as the universal package is. Measurements are in [evidence/2026-11-16-bootstrap-and-native-tools.md](../evidence/2026-11-16-bootstrap-and-native-tools.md); the work is on the branch `release-bootstrap`, not merged or pushed.
+The owner asked for the release pipeline to build LLVM with the published v0.3.0-dev.3 toolchain instead of the runner's LLVM, and for the per-host packages to use NativeAOT instead of ReadyToRun, used as the universal package is. Measurements are in [evidence/2026-11-16-bootstrap-and-native-tools.md](../evidence/2026-11-16-bootstrap-and-native-tools.md); the work was done on the branch `release-bootstrap` and merged into master (`d815f75`) and pushed on the owner's go.
 
 - **XP-11 (done).** The release pinned in `scripts/sources.lock` compiles LLVM, Clang, MLIR, Flang and their TableGen, and the commit's own compiler links the library and the tools: the outputs match a build on Debian's LLVM byte for byte, apart from source paths in Flang's messages.
 - **XP-14 (done).** The precompiled packages have Clang, Flang and the LLVM tools as NativeAOT executables, published on a runner of each host; the kit passes on Linux, macOS and Windows, compiles start about twice as fast, and the archives are less than half the size.
