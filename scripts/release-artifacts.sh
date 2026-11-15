@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Build the release artifacts (TC-11) into a directory: the thin and the bundled-LLVM toolchain packages as
-# reproducible tar.xz files, the dotnet tool package of the thin variant, and SHA256SUMS. A tag's CI workflow
-# (.github/workflows/release.yml) runs this, signs the files and attaches them to the release.
+# reproducible tar.xz files, the dotnet tool package of the thin variant, the portable toolchains on request, SHA256SUMS
+# and VERSION. The release workflow (.github/workflows/release.yml) runs this and attaches the files to a GitHub release.
 #
 # Usage: scripts/release-artifacts.sh <out-dir> [version]
 #   version defaults to the tag or describe of HEAD ("v0.3.0" gives 0.3.0; a dev build gives 0.3.0-dev+<commit>)
 #   LLVMNET_RELEASE_VARIANTS   space-separated subset of "thin llvm tool portable portable-<rid>" (default: thin llvm
 #                              tool); portable is the toolchain for every .NET 10 host as .tar.xz and .zip, from the
 #                              llvmnet-built LLVM (scripts/selfhost/, LLVMNET_PORTABLE_LIBRARY and LLVMNET_PORTABLE_STAGE);
-#                              portable-<rid> (win-x64, osx-arm64, linux-x64, linux-arm64) is the same toolchain
+#                              portable-<rid> (win-x64, win-arm64, osx-arm64, linux-x64, linux-arm64) is the same toolchain
 #                              precompiled for that host (ReadyToRun), a .zip for Windows and a .tar.xz otherwise
 #   LLVMNET_PORTABLE_UNIVERSAL an unpacked universal portable toolchain that portable-<rid> precompiles, instead of one
 #                              packaged from this checkout (the release workflow precompiles each host in its own job)
@@ -131,5 +131,7 @@ PYTHON
 done
 rm -rf "$work"
 (cd "$out" && shopt -s nullglob && sha256sum -- *.tar.xz *.zip *.nupkg >SHA256SUMS)
+# The version the file names carry, for the release the workflow creates from them.
+printf '%s\n' "$version" >"$out/VERSION"
 printf 'Release artifacts for %s in %s:\n' "$version" "$out"
 cat "$out/SHA256SUMS"

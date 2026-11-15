@@ -17,7 +17,7 @@ Report these privately:
 
 - The compiler, the runtime or the host layer making a correct program unsafe: generated code that writes outside the memory the source addresses, a host function that grants access the corresponding system call would not (for example following a path the caller did not name), or a runtime check that the documentation promises and that does not happen.
 - A way for one program's input to change what the compiler emits for another, or for a crafted object, archive or managed reference to make the compiler write outside its output paths.
-- A release artifact whose checksum or signature does not verify ([docs/dev/release-process.md](docs/dev/release-process.md#verifying-a-download)).
+- A release artifact whose checksum does not match `SHA256SUMS` ([docs/dev/release-process.md](docs/dev/release-process.md#verifying-a-download)).
 
 A memory-safety bug in a translated program that the native build of the same source also has is a bug in that program, not in llvmnet.
 

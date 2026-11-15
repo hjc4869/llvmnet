@@ -13,6 +13,7 @@ llvmnet is at version 0.x and not yet production-ready. What it does today is ch
 | Host | Package |
 | --- | --- |
 | Windows x64 | `llvmnet-<version>-portable-win-x64.zip` |
+| Windows ARM64 | `llvmnet-<version>-portable-win-arm64.zip` (built, not yet tested on such a host) |
 | macOS ARM64 | `llvmnet-<version>-portable-osx-arm64.tar.xz` |
 | Linux x64 | `llvmnet-<version>-portable-linux-x64.tar.xz` |
 | Linux ARM64 | `llvmnet-<version>-portable-linux-arm64.tar.xz` |

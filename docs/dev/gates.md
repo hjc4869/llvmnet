@@ -46,7 +46,7 @@ The `conformance` job sets each threshold as an environment variable; a suite fa
 
 ## Release
 
-The `release` workflow on a `v*` tag runs the unit tests and `tests/run.sh --tag core --tag toolchain` including `slow`, builds the artifacts twice and checks that the sums agree, signs them and publishes the release ([release-process.md](release-process.md)). A release candidate additionally needs the M9 exit: the workload gates (WG-01 to WG-06) at threshold on the candidate build for two consecutive nightly runs.
+The `release` workflow on a `v*` tag builds the artifacts and publishes the release without testing again, so tag a commit whose gate is green ([release-process.md](release-process.md)). A release candidate additionally needs the M9 exit: the workload gates (WG-01 to WG-06) at threshold on the candidate build for two consecutive nightly runs.
 
 ## Private runner
 

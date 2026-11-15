@@ -6,7 +6,7 @@ llvmnet compiles C, C++ and Fortran to .NET: Clang or Flang 22 produces LLVM bit
 
 Pick one of four ways to get a toolchain.
 
-**The portable toolchain** (any host with the .NET 10 runtime). The compiler, its LLVM and the Clang, Flang and LLVM tools it runs are .NET programs built with llvmnet ([deployment.md](deployment.md#the-portable-toolchain)). Take `llvmnet-<version>-portable-<rid>` for your host (`win-x64` as a `.zip`; `osx-arm64`, `linux-x64` and `linux-arm64` as `.tar.xz`), which is precompiled for it, or `llvmnet-<version>-portable` for any other; unpack it and put its `bin` on `PATH`.
+**The portable toolchain** (any host with the .NET 10 runtime). The compiler, its LLVM and the Clang, Flang and LLVM tools it runs are .NET programs built with llvmnet ([deployment.md](deployment.md#the-portable-toolchain)). Take `llvmnet-<version>-portable-<rid>` for your host (`win-x64` and `win-arm64` as a `.zip`; `osx-arm64`, `linux-x64` and `linux-arm64` as `.tar.xz`), which is precompiled for it, or `llvmnet-<version>-portable` for any other; unpack it and put its `bin` on `PATH`.
 
 ```sh
 tar xJf llvmnet-0.3.0-portable-osx-arm64.tar.xz
