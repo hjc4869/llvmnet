@@ -5,9 +5,11 @@
 #
 # Usage: scripts/release-artifacts.sh <out-dir> [version]
 #   version defaults to the tag or describe of HEAD ("v0.3.0" gives 0.3.0; a dev build gives 0.3.0-dev+<commit>)
-#   LLVMNET_RELEASE_VARIANTS   space-separated subset of "thin llvm tool portable" (default: thin llvm tool); portable is
-#                              the toolchain for every .NET 10 host as .tar.xz and .zip, from the llvmnet-built LLVM
-#                              (scripts/selfhost/, LLVMNET_PORTABLE_LIBRARY and LLVMNET_PORTABLE_STAGE)
+#   LLVMNET_RELEASE_VARIANTS   space-separated subset of "thin llvm tool portable portable-<rid>" (default: thin llvm
+#                              tool); portable is the toolchain for every .NET 10 host as .tar.xz and .zip, from the
+#                              llvmnet-built LLVM (scripts/selfhost/, LLVMNET_PORTABLE_LIBRARY and LLVMNET_PORTABLE_STAGE);
+#                              portable-<rid> (win-x64, osx-arm64, linux-x64, linux-arm64) is the same toolchain
+#                              precompiled for that host (ReadyToRun), a .zip for Windows and a .tar.xz otherwise
 #   SOURCE_DATE_EPOCH          the timestamp recorded in the archives (default: the commit time of HEAD)
 # Reproducibility: the same commit on the same toolchain produces byte-identical archives (tests/release.sh checks).
 set -euo pipefail
@@ -85,6 +87,13 @@ for variant in $variants; do
             bash "$root/scripts/package-toolchain.sh" "$prefix" --portable >"$work/portable.log"
             pack "llvmnet-$version-portable" "$prefix"
             zip_pack "llvmnet-$version-portable" "$prefix"
+            ;;
+        portable-*)
+            rid="${variant#portable-}"
+            prefix="$work/llvmnet-$version-portable-$rid"
+            bash "$root/scripts/package-toolchain.sh" "$prefix" --portable --readytorun="$rid" >"$work/$variant.log"
+            if [[ "$rid" == win-* ]]; then zip_pack "llvmnet-$version-portable-$rid" "$prefix"; else pack "llvmnet-$version-portable-$rid" "$prefix"; fi
+            rm -rf "$prefix"
             ;;
         tool)
             # The dotnet tool: the compiler, its LLVM bridge and the sysroots in one package; LLVM 22 comes from PATH.

@@ -124,15 +124,22 @@ jobs:
             artifacts/selfhost-build/llvm-project
             artifacts/selfhost-build/llvm
           key: selfhost-${{ steps.deps.outputs.selfhost }}-${{ github.sha }}
+      # The universal package, and the same toolchain precompiled (ReadyToRun) for each supported host, where compiles
+      # start in about a second instead of five to ten; each still runs everywhere under the JIT.
       - name: Package the portable toolchain
-        run: LLVMNET_RELEASE_VARIANTS=portable bash scripts/release-artifacts.sh dist
+        run: |
+          LLVMNET_RELEASE_VARIANTS="portable portable-linux-x64 portable-linux-arm64 portable-win-x64 portable-osx-arm64" \
+            JOBS=2 bash scripts/release-artifacts.sh dist
       - name: Make the cross-platform kit (fixture sources and native results)
         run: bash tests/portable-toolchain/make-kit.sh artifacts/tests/portable-toolchain/kit
-      - name: Compile and run the kit with the packaged toolchain (Linux x64)
+      - name: Compile and run the kit with the universal and the precompiled package (Linux x64)
         run: |
-          mkdir -p /tmp/portable
-          tar -xJf dist/llvmnet-*-portable.tar.xz -C /tmp/portable
-          bash artifacts/tests/portable-toolchain/kit/run.sh --jobs 4 artifacts/tests/portable-toolchain/kit /tmp/portable/llvmnet-*-portable
+          mkdir -p /tmp/universal /tmp/precompiled
+          tar -xJf dist/llvmnet-*-portable.tar.xz -C /tmp/universal
+          tar -xJf dist/llvmnet-*-portable-linux-x64.tar.xz -C /tmp/precompiled
+          kit=artifacts/tests/portable-toolchain/kit
+          bash $kit/run.sh --jobs 4 $kit /tmp/universal/llvmnet-*
+          bash $kit/run.sh --jobs 4 $kit /tmp/precompiled/llvmnet-*
       - uses: actions/upload-artifact@v4
         with:
           name: portable-toolchain
@@ -151,9 +158,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: Windows x64, os: windows-2025, archive: zip }
-          - { name: macOS ARM64, os: macos-15, archive: tar.xz }
-          - { name: Linux ARM64, os: ubuntu-24.04-arm, archive: tar.xz }
+          - { name: Windows x64, os: windows-2025, package: portable-win-x64.zip }
+          - { name: macOS ARM64, os: macos-15, package: portable-osx-arm64.tar.xz }
+          - { name: Linux ARM64, os: ubuntu-24.04-arm, package: portable-linux-arm64.tar.xz }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
@@ -172,15 +179,14 @@ jobs:
         shell: bash
         run: |
           mkdir -p toolchain
-          if [[ "${{ matrix.archive }}" == zip ]]; then
-            pwsh -NoProfile -Command "Expand-Archive -Path (Get-Item dist/*.zip).FullName -DestinationPath toolchain"
-          else
-            tar -xJf dist/llvmnet-*-portable.tar.xz -C toolchain
-          fi
+          case "${{ matrix.package }}" in
+            *.zip) pwsh -NoProfile -Command "Expand-Archive -Path (Get-Item dist/llvmnet-*-${{ matrix.package }}).FullName -DestinationPath toolchain" ;;
+            *) tar -xJf dist/llvmnet-*-${{ matrix.package }} -C toolchain ;;
+          esac
           tar xzf kit.tar.gz
       - name: Compile and run the kit with the portable toolchain
         shell: bash
-        run: bash kit/run.sh --jobs 3 kit toolchain/llvmnet-*-portable
+        run: bash kit/run.sh --jobs 3 kit toolchain/llvmnet-*
       - if: always()
         uses: actions/upload-artifact@v4
         with:
