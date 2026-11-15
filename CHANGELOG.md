@@ -6,6 +6,10 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 
 ### Added
 
+- The portable toolchain: the compiler on Windows x64, macOS ARM64 and Linux ARM64 as well as Linux x64, with only the .NET 10 runtime installed. Its in-process LLVM (`LlvmNet.Llvm.dll`) and the Clang, Flang, `opt`, `llvm-ar` and `llvm-nm` it runs are LLVM 22 built with llvmnet in portable mode (`scripts/selfhost/`); `scripts/package-toolchain.sh --portable [--readytorun=<rid>]` packages it, and releases carry it as a universal `.tar.xz`/`.zip` and precompiled (ReadyToRun) for `win-x64`, `osx-arm64`, `linux-x64` and `linux-arm64`. `LLVMNET_LLVM` chooses between the host's native LLVM and the managed library (XP-04).
+- `-shared --embed-libc`: a portable library that links and initializes the C library itself, so .NET code can call a C or C++ library that uses stdio, the heap, threads or exceptions without a program around it; its exports are the default-visibility functions of its own inputs, and any .NET thread may call them (XP-04).
+- On Windows the compiler writes a `.cmd` launcher beside the POSIX one, the commands have `.cmd` versions, and llvmnet launchers that a portable program starts (`posix_spawn`, `system`) run their payload directly, so they work on Windows too and see the `argv[0]` they were given (XP-04).
+- `bin/` commands find `dotnet` through `LLVMNET_DOTNET`, `DOTNET_ROOT`, `PATH` and the usual install locations, and say what to install when there is no .NET 10 runtime; `llvmnet-ar`, `llvmnet-ranlib` and `llvmnet-nm` are the same script (XP-04).
 - MIT license, third-party notices, contribution guide and this changelog (FD-01 to FD-04).
 - `--version` reports the build and LLVM versions; emitted assemblies record them and refuse an incompatible runtime (FD-05).
 - Pinned upstream sources through `scripts/fetch-sources.sh` (FD-06).
@@ -126,6 +130,8 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 
 ### Fixed
 
+- Portable programs on Windows ran on the 1.5 MB main-thread stack dotnet.exe gives, while they are promised the 8 MB `RLIMIT_STACK` reports; an llvmnet-built clang overflowed it in its type initializer. The entry point now runs on an 8 MB thread there (XP-04).
+- Every portable compile started the frontend once more for `-print-resource-dir`; Clang's builtin headers are now found beside it (XP-04).
 - System mode answers the CPUID queries of Clang's `<cpuid.h>` (`__cpuid`, `__cpuid_count`) through native thunks, as it did the other spellings.
 - Portable `writev` to a pipe was split into one write per vector: two threads' records of at most `PIPE_BUF` bytes could interleave, a non-blocking `writev` without room for all of them returned a partial count instead of `EAGAIN`, and a `readv` from a pipe whose bytes filled the first vectors waited for more data instead of returning them (PF-19).
 - A program started through its launcher saw `<name>.llvmnet/program.dll` as `argv[0]` and the `dotnet` host as `/proc/self/exe`, so `llvm-ar` could not act as `ranlib`, Clang found no resource directory and Flang's driver started `dotnet -fc1`; a symbolic link to a launcher from another directory did not start at all. The launcher now follows links to itself and passes its `$0` and resolved path to the runtime (`LLVMNET_ARGV0`, `LLVMNET_EXE`, removed from the program's environment), which reports them as a native program sees them; `/proc/self/exe` works for `readlink`, `realpath`, `stat`, `open` and `posix_spawn` on every host, macOS and Windows included (TC-21).

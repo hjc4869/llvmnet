@@ -39,7 +39,8 @@ What still differs from a native program:
 | Portable images (`dotnet64-v2`), JIT | yes | yes | yes | yes |
 | Portable images, NativeAOT | yes | yes, published on the host or [cross-published](#nativeaot-on-other-hosts) from Linux x64 | yes | yes |
 | System ABI (`system-linux-x64-v1`) | yes | no | no | no |
-| The compiler | yes | no | no | no |
+| The compiler, [portable toolchain](#the-portable-toolchain) | yes | yes | yes | yes |
+| The compiler, native-LLVM packages | yes | no | no | no |
 
 .NET 10 (LTS) is required; an image's `runtimeconfig.json` pins the framework band (`rollForward: Minor`), so a host with only a later major version refuses to run it until `DOTNET_ROLL_FORWARD=LatestMajor` is set. A host the runtime cannot support (32-bit, big-endian, Mono, .NET before 10) prints one `llvmnet:` line naming the problem and the fix and exits with status 1 before any translated code runs. The `tests/xp/` bundle (`tests/xp.sh`) checks the matrix: the fixtures in `tests/xp/fixtures.tsv` are built natively and in portable mode on Linux x64, and the portable images must reproduce the native output and exit status on each host under the JIT and as NativeAOT executables, which the CI jobs on Windows, macOS and Linux ARM64 runners do.
 
@@ -92,6 +93,21 @@ Use it for a deployment whose host is known when the program's time goes into st
 
 The build needs the .NET 10 SDK: a restore of a generated project brings crossgen2 for this host and the runtime pack of the target from NuGet, the user's package cache or the offline feed of [NativeAOT's offline hosts](#nativeaot) (`LLVMNET_NUGET_FEED`; `scripts/nativeaot-feed.sh` fills it with these packages too). A missing package is one line naming the feed and the fix.
 
+## The portable toolchain
+
+The portable toolchain runs on every .NET 10 host: the compiler is a framework-dependent .NET program, and the LLVM it calls in-process and the tools it runs (Clang, Flang, `opt`, `llvm-ar`, `llvm-nm`) are built with llvmnet itself, in portable mode ([scripts/selfhost/README.md](../../scripts/selfhost/README.md)). It needs the .NET 10 runtime and nothing else; `scripts/package-toolchain.sh <prefix> --portable` makes one from a checkout.
+
+- `bin/`: `llvmnet`, `llvmnet-clang`, `llvmnet-clang++`, `llvmnet-flang`, `llvmnet-ar`, `llvmnet-ranlib` and `llvmnet-nm` as POSIX scripts (bash 3.2 or later, so macOS's own bash) and as `.cmd` files for Windows. They find `dotnet` through `LLVMNET_DOTNET`, `DOTNET_ROOT`, `PATH` and then the usual install locations, and when there is none, or it has no .NET 10 runtime, they print what to install and exit (127 and 150).
+- `lib/llvmnet/`: `llvmnet.dll`, `LlvmNet.Runtime.dll` and `LlvmNet.Llvm.dll`, LLVM 22's C API and llvmnet's bridge as one managed library that embeds its C library ([linking.md](linking.md#libraries-that-embed-the-c-library)). The compiler calls it instead of a native `libLLVM` (`LLVMNET_LLVM=native` or a path overrides the choice).
+- `libexec/llvm/`: the tools as portable images with a launcher pair per name (`clang-22`, `clang++-22`, `flang-22`, `opt-22`, `llvm-ar-22`, `llvm-ranlib-22`, `llvm-nm-22` and the names without the version), Clang's builtin headers and Flang's intrinsic modules. The compiler starts a tool's payload with `dotnet` directly, as the host layer starts any llvmnet launcher a program spawns, so Flang's driver runs `<self> -fc1` on Windows too.
+- `sysroot/` and `share/llvmnet/` as in [the toolchain package](#the-toolchain-package), without symbolic links, so the same tree is the `.tar.xz` and the `.zip`.
+
+**Precompiled packages.** Under the JIT every tool compiles itself at each start: compiling and linking hello takes 6.6 s in C on Linux x64, 12 s in C++ and 11 s in Fortran. `--readytorun=<rid>` precompiles every assembly of the package with ReadyToRun for one host (`scripts/readytorun.sh`, crossgen2 from NuGet); the images keep their IL, so a precompiled package still runs on other hosts, and on its own host the same compiles take 1.9, 4.0 and 3.7 s (C: 1.0 s on macOS ARM64, 2.3 s on Windows x64). It grows the package from 0.7 to 1.1–1.3 GB (a 97 MB universal `.tar.xz` against 261 MB for `linux-x64`). Releases carry one per supported host beside the universal package.
+
+**On Windows.** The compiler gives the tools the paths of the command line in the program's form (`C:\src\a.c` is `/c/src/a.c`, [dev/host-abi.md](../dev/host-abi.md#hosts-other-than-linux)), so Clang's messages and dependency files (`-MD`) name `/c/...` paths. An output without `.dll` is a POSIX launcher and a `.cmd` launcher beside it, which `cmd.exe` and PowerShell run by the name without the extension. The CMake toolchain file names the `.cmd` commands on a Windows host and runs configure probes, `try_run` and tests through `llvmnet --run-launcher`, which starts a launcher's payload: zlib and libxml2 configure, build and pass their tests with Visual Studio's CMake and Ninja from PowerShell. Under Git Bash the POSIX scripts and `make` work as on Linux. Dependency files and messages name `/c/...` paths, which Ninja and IDEs on Windows read as relative to the current drive.
+
+**Not in the portable toolchain:** system mode (Linux x86-64 only, with the native-LLVM packages), native objects and assembly sources (system mode), and NativeAOT publishing, which needs the .NET 10 SDK and the host's native toolchain as described [above](#nativeaot-on-other-hosts).
+
 ## The toolchain package
 
 `scripts/package-toolchain.sh <prefix> [--self-contained] [--bundle-llvm]` installs a relocatable Linux x86-64 toolchain, which is also what the release archives contain:
@@ -107,7 +123,7 @@ A self-contained, bundled installation needs neither `dotnet` nor LLVM on `PATH`
 
 ## Release packages
 
-Each release on GitHub carries `llvmnet-<version>-linux-x64.tar.xz` (thin: LLVM 22 expected on `PATH`), `llvmnet-<version>-linux-x64-llvm.tar.xz` (LLVM bundled), `llvmnet.<version>.nupkg` (the dotnet tool), `SHA256SUMS`, and a `.sigstore.json` bundle for each file, signed by the release workflow through GitHub's OIDC identity ([dev/release-process.md](../dev/release-process.md)). To verify a download:
+Each release on GitHub carries `llvmnet-<version>-portable.tar.xz` and `.zip` (the [portable toolchain](#the-portable-toolchain) for every .NET 10 host), `llvmnet-<version>-portable-<rid>.tar.xz` for `linux-x64`, `linux-arm64` and `osx-arm64` and `llvmnet-<version>-portable-win-x64.zip` (the same, precompiled for that host), `llvmnet-<version>-linux-x64.tar.xz` (thin: LLVM 22 expected on `PATH`), `llvmnet-<version>-linux-x64-llvm.tar.xz` (LLVM bundled), `llvmnet.<version>.nupkg` (the dotnet tool), `SHA256SUMS`, and a `.sigstore.json` bundle for each file, signed by the release workflow through GitHub's OIDC identity ([dev/release-process.md](../dev/release-process.md)). To verify a download:
 
 ```sh
 sha256sum -c SHA256SUMS
