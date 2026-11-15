@@ -27,7 +27,9 @@ internal static class Toolchain
         string? configured = variable is null ? null : Environment.GetEnvironmentVariable(variable);
         if (!string.IsNullOrEmpty(configured)) return configured;
         string bundled = Path.Combine(Root, "libexec", "llvm", "bin", name);
-        return File.Exists(bundled) ? bundled : name;
+        if (File.Exists(bundled)) return bundled;
+        // A package precompiled for Windows has the tools as NativeAOT executables, named with .exe.
+        return OperatingSystem.IsWindows() && File.Exists(bundled + ".exe") ? bundled + ".exe" : name;
     }
 
     internal static string[] ExpandResponseFiles(string[] arguments, string? directory = null, HashSet<string>? active = null)
@@ -86,13 +88,15 @@ internal static class Toolchain
     /// payload, and passes its $0 (LLVMNET_ARGV0) and its resolved path (LLVMNET_EXE) to the runtime, which reports them as
     /// argv[0] and /proc/self/exe (ProcessRuntime.ProgramName and Executable). It runs no utility unless it was reached
     /// through a link, which takes one readlink per link. Both name the payload on their second line
-    /// (<see cref="Launchers.Marker"/>), so the host layer and the compiler can start it without a shell.
+    /// (<see cref="Launchers.Marker"/>), so the host layer and the compiler can start it without a shell. A payload that is
+    /// not an image (.dll) is a native executable, which the launchers run themselves (<see cref="Launchers.Start"/>).
     /// </summary>
     internal static void Launcher(string output, string assembly, bool windows = false)
     {
         string relative = Path.GetRelativePath(Path.GetDirectoryName(output)!, assembly).Replace('\\', '/');
         if (relative.Contains('\n') || relative.Contains('\r')) throw new ArgumentException("Newlines are not supported in executable output paths.");
         string quoted = relative.Replace("'", "'\"'\"'", StringComparison.Ordinal);
+        bool image = assembly.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
         File.WriteAllText(output, $$"""
             #!/bin/sh
             # {{Launchers.Marker}}{{relative}}
@@ -104,7 +108,7 @@ internal static class Toolchain
             case $self in */*) directory=${self%/*} ;; *) directory=. ;; esac
             root=$(CDPATH= cd -P -- "${directory:-/}" && pwd -P) || exit 1
             export LLVMNET_ARGV0="$0" LLVMNET_EXE="${root%/}/${self##*/}"
-            exec "${LLVMNET_DOTNET:-dotnet}" "$root"/'{{quoted}}' "$@"
+            exec {{(image ? "\"${LLVMNET_DOTNET:-dotnet}\" " : "")}}"$root"/'{{quoted}}' "$@"
 
             """);
         if (!OperatingSystem.IsWindows())
@@ -115,19 +119,18 @@ internal static class Toolchain
         string payload = relative.Replace('/', '\\').Replace("%", "%%", StringComparison.Ordinal);
         // CRLF line endings: cmd.exe misreads labels in batch files with LF alone. The status is passed on explicitly:
         // "cmd /c launcher.cmd" reports 0 after a bare "exit /b".
-        File.WriteAllText(output + ".cmd", string.Join("\r\n",
+        string[] run = image
+            ? ["if defined LLVMNET_DOTNET goto configured", $"dotnet \"%~dp0{payload}\" %*", "exit /b %ERRORLEVEL%", ":configured", $"\"%LLVMNET_DOTNET%\" \"%~dp0{payload}\" %*"]
+            : [$"\"%~dp0{payload}\" %*"];
+        File.WriteAllText(output + ".cmd", string.Join("\r\n", [
             "@echo off",
             $"rem {Launchers.Marker}{relative}",
             "setlocal",
             "set \"LLVMNET_ARGV0=%~dpn0\"",
             "set \"LLVMNET_EXE=%~dpn0\"",
-            "if defined LLVMNET_DOTNET goto configured",
-            $"dotnet \"%~dp0{payload}\" %*",
+            .. run,
             "exit /b %ERRORLEVEL%",
-            ":configured",
-            $"\"%LLVMNET_DOTNET%\" \"%~dp0{payload}\" %*",
-            "exit /b %ERRORLEVEL%",
-            ""));
+            ""]));
     }
 
     /// <summary>
@@ -417,15 +420,19 @@ internal static class Toolchain
 
     /// <summary>
     /// How to start a tool. An llvmnet launcher, as the LLVM tools of a portable toolchain are (llvmnet-built clang, flang,
-    /// opt, llvm-ar), starts its payload with dotnet directly (<see cref="Launchers"/>), under its own name as argv[0]; on
-    /// Windows its arguments name paths in the program's form (<see cref="ProgramArgument"/>). Anything else starts directly.
+    /// opt, llvm-ar), starts its payload with dotnet directly (<see cref="Launchers"/>), under its own name as argv[0].
+    /// Anything else starts directly. On Windows the arguments of a portable program name paths in the program's form
+    /// (<see cref="ProgramArgument"/>): a launcher's payload, and the toolchain's own tools in libexec/llvm/bin, which a
+    /// package precompiled for Windows has as NativeAOT executables (XP-14) and which are llvmnet-built on every Windows host.
     /// </summary>
     internal static ProcessStartInfo Start(string executable, IEnumerable<string> arguments)
     {
         string? payload = payloads.GetOrAdd(executable, Launchers.Payload);
         ProcessStartInfo start = payload is null ? new ProcessStartInfo(executable) { UseShellExecute = false } : Launchers.Start(executable, payload, executable);
+        bool programPaths = OperatingSystem.IsWindows() && (payload is not null || string.Equals(Path.GetDirectoryName(Path.GetFullPath(executable)),
+            Path.Combine(Root, "libexec", "llvm", "bin"), StringComparison.OrdinalIgnoreCase));
         foreach (string argument in arguments)
-            start.ArgumentList.Add(payload is not null && OperatingSystem.IsWindows() ? ProgramArgument(argument) : argument);
+            start.ArgumentList.Add(programPaths ? ProgramArgument(argument) : argument);
         return start;
     }
 

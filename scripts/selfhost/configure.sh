@@ -9,11 +9,20 @@
 #   default-visibility functions are the C API, which the in-process library exports as libLLVM does. Executables are
 #   internalized whatever the visibility.
 # - LLVM_APPEND_VC_REV=OFF: the producer string of bitcode the library writes is "22.1.8", as the release's LLVM writes.
-# - TableGen comes from the host's LLVM 22; mlir-tblgen is built natively by LLVM's NATIVE sub-build.
+# - The host tools LLVM runs while it builds (TableGen) come from LLVM's NATIVE sub-build, a native build for the host.
+#   When this checkout compiles LLVM, llvm-tblgen and clang-tblgen are the host's LLVM 22 and the NATIVE build
+#   (mlir-tblgen and the rest) uses clang-22; in a bootstrap build (common.sh) the NATIVE build makes them all with the
+#   portable toolchain's clang, which compiles native code for the host like any clang.
 # - Precompiled headers are off (Flang's libraries use CMake PCH); Flang's runtime is llvmnet's own (sysroot).
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-[[ -x "$native_llvm/llvm-tblgen" ]] || { printf 'The host LLVM 22 tools (llvm-tblgen, clang-tblgen) are needed; set NATIVE_LLVM.\n' >&2; exit 1; }
+if [[ "$bootstrap" == 1 ]]; then
+    native=("-DCROSS_TOOLCHAIN_FLAGS_NATIVE=-DFLANG_ENABLE_FLANG_RT=OFF;-DCMAKE_C_COMPILER=$llvm_bin/clang-22;-DCMAKE_CXX_COMPILER=$llvm_bin/clang++-22;-DCMAKE_AR=$llvm_bin/llvm-ar-22;-DCMAKE_RANLIB=$llvm_bin/llvm-ranlib-22")
+else
+    [[ -x "$native_llvm/llvm-tblgen" ]] || { printf 'The host LLVM 22 tools (llvm-tblgen, clang-tblgen) are needed; set NATIVE_LLVM.\n' >&2; exit 1; }
+    native=("-DCROSS_TOOLCHAIN_FLAGS_NATIVE=-DFLANG_ENABLE_FLANG_RT=OFF;-DCMAKE_C_COMPILER=clang-22;-DCMAKE_CXX_COMPILER=clang++-22"
+        -DLLVM_NATIVE_TOOL_DIR="$native_llvm" -DLLVM_TABLEGEN="$native_llvm/llvm-tblgen" -DCLANG_TABLEGEN="$native_llvm/clang-tblgen")
+fi
 prepare_source
 mkdir -p "$build_dir"
 settle_sysroot_headers
@@ -27,13 +36,10 @@ cmake -G Ninja -S "$source_dir/llvm" -B "$build_dir" \
     -DFLANG_INCLUDE_TESTS=OFF -DMLIR_INCLUDE_TESTS=OFF -DMLIR_INCLUDE_INTEGRATION_TESTS=OFF -DFLANG_INCLUDE_DOCS=OFF \
     -DMLIR_INCLUDE_DOCS=OFF -DFLANG_BUILD_EXAMPLES=OFF -DMLIR_ENABLE_BINDINGS_PYTHON=OFF \
     -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
-    "-DCROSS_TOOLCHAIN_FLAGS_NATIVE=-DFLANG_ENABLE_FLANG_RT=OFF;-DCMAKE_C_COMPILER=clang-22;-DCMAKE_CXX_COMPILER=clang++-22" \
+    "${native[@]}" \
     -DLLVM_TARGETS_TO_BUILD=X86 \
     -DLLVM_HOST_TRIPLE=x86_64-pc-linux-gnu \
     -DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-pc-linux-gnu \
-    -DLLVM_NATIVE_TOOL_DIR="$native_llvm" \
-    -DLLVM_TABLEGEN="$native_llvm/llvm-tblgen" \
-    -DCLANG_TABLEGEN="$native_llvm/clang-tblgen" \
     -DLLVM_ENABLE_PIC=OFF \
     -DLLVM_BUILD_LLVM_DYLIB=OFF -DLLVM_LINK_LLVM_DYLIB=OFF \
     -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_LIBEDIT=OFF \

@@ -106,6 +106,8 @@ internal sealed class Invocation
     internal bool PrintLlvmImports { get; private set; }
     /// <summary>The hidden --write-launcher=&lt;payload&gt;: write -o's launcher for an existing payload, as a POSIX script and a .cmd (scripts/selfhost/build-tools.sh).</summary>
     internal string? WriteLauncher { get; private set; }
+    /// <summary>The hidden --write-aot-project=&lt;image&gt;: write the NativeAOT project of an existing image into -o's directory, as --aot-project does for a link (scripts/aot-tools.sh).</summary>
+    internal string? WriteAotProject { get; private set; }
     /// <summary>--install-extension: a built extension package to install in the sysroot's ext/ directory.</summary>
     internal string? InstallExtension { get; private set; }
     /// <summary>--uninstall-extension: the name of an installed extension to remove.</summary>
@@ -220,6 +222,7 @@ internal sealed class Invocation
                 case "--list-extensions": ListExtensions = true; break;
                 case "--print-llvm-imports": PrintLlvmImports = true; break;
                 case "--write-launcher=": WriteLauncher = Path.GetFullPath(value); break;
+                case "--write-aot-project=": WriteAotProject = Path.GetFullPath(value); Options.NativeAot = true; break;
                 case "--install-extension": InstallExtension = Path.GetFullPath(value); break;
                 case "--uninstall-extension": UninstallExtension = value; break;
                 case "--nativeaot": Options.NativeAot = true; break;
@@ -394,6 +397,13 @@ internal static class Driver
             Toolchain.Launcher(Path.GetFullPath(invocation.Output), launcherPayload, windows: true);
             return 0;
         }
+        if (invocation.WriteAotProject is string aotImage)
+        {
+            if (invocation.Output is null || !File.Exists(aotImage))
+                throw new ArgumentException("--write-aot-project=<image> needs an existing image and -o <project directory>.");
+            Console.WriteLine(Toolchain.AotProject(aotImage, Path.GetFullPath(invocation.Output), invocation.AotPreference, "", debug: false, []));
+            return 0;
+        }
         if (invocation.PrintLlvmImports) { Console.Write(string.Concat(LlvmNative.Imports.Select(name => name + "\n"))); return 0; }
         if (invocation.InstallExtension is not null) { Console.WriteLine(Extensions.Install(invocation.InstallExtension)); return 0; }
         if (invocation.UninstallExtension is not null) { Console.WriteLine(Extensions.Uninstall(invocation.UninstallExtension)); return 0; }
@@ -405,7 +415,7 @@ internal static class Driver
         if (invocation.Queries.Count != 0 && (invocation.Queries.Count > 1 || invocation.Queries[0] != "-v" || invocation.Inputs.Count == 0))
         {
             // Frontend queries are answered by the selected frontend, as Clang answers them without compiling anything.
-            string executable = driver == "flang" ? flang : driver == "clang++" ? Toolchain.Executable("clang++-22", "LLVMNET_CLANG") : clang;
+            string executable = driver == "flang" ? flang : clang;
             if (invocation.Queries.Contains("--version"))
             {
                 Console.WriteLine($"llvmnet {BuildInfo.Version} (LLVM {Llvm.Version}; ABIs system-linux-x64-v1, {PortableAbi.Tag})");
@@ -413,6 +423,8 @@ internal static class Driver
             }
             // In portable mode the frontend answers for the portable target (-dumpmachine prints its triple).
             List<string> target = options.Runtime == "portable" ? ["--target=" + PortableAbi.Triple] : [];
+            // C++ queries go to clang in its g++ mode, as compilations do, so a toolchain needs no clang++ executable.
+            if (driver == "clang++") target.Insert(0, "--driver-mode=g++");
             return Toolchain.Run(executable, [.. target, .. invocation.Queries.Where(query => query != "-v" || invocation.Inputs.Count == 0), .. invocation.Frontend], options.Verbose);
         }
         if (invocation.LinkerVersion)

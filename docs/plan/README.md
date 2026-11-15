@@ -17,6 +17,14 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-11-16, bootstrapped releases and NativeAOT tools)
+
+The owner asked for the release pipeline to build LLVM with the published v0.3.0-dev.3 toolchain instead of the runner's LLVM, and for the per-host packages to use NativeAOT instead of ReadyToRun, used as the universal package is. Measurements are in [evidence/2026-11-16-bootstrap-and-native-tools.md](../evidence/2026-11-16-bootstrap-and-native-tools.md); the work is on the branch `release-bootstrap`, not merged or pushed.
+
+- **XP-11 (done).** The release pinned in `scripts/sources.lock` compiles LLVM, Clang, MLIR, Flang and their TableGen, and the commit's own compiler links the library and the tools: the outputs match a build on Debian's LLVM byte for byte, apart from source paths in Flang's messages.
+- **XP-14 (done).** The precompiled packages have Clang, Flang and the LLVM tools as NativeAOT executables, published on a runner of each host; the kit passes on Linux, macOS and Windows, compiles start about twice as fast, and the archives are less than half the size.
+- **Open.** XP-15 (the compiler under NativeAOT, which needs an emitter without `System.Reflection.Emit`); the release workflow has not run on GitHub; the compiler and the sysroots in the portable job still use Debian's LLVM.
+
 ## Progress (2026-11-15, the portable toolchain)
 
 The owner asked for the self-hosted Clang/LLVM stack to run on Windows and macOS from one build, published as a portable toolchain that needs only the .NET 10 runtime, built by a GitHub Actions release job, and for the README to present llvmnet as a drop-in compiler with portable outputs. Measurements are in [evidence/2026-11-15-portable-toolchain.md](../evidence/2026-11-15-portable-toolchain.md). The work was done on the branch `portable-toolchain`, which also merges TC-21 (`claude/cool-napier-3e23cf`), and merged into master on the owner's go (`90c79e2`); nothing is pushed.
@@ -24,7 +32,7 @@ The owner asked for the self-hosted Clang/LLVM stack to run on Windows and macOS
 - **XP-04 (done).** The compiler runs on `LlvmNet.Llvm.dll`, LLVM 22's C API and `native/*.cpp` built with llvmnet, and runs the llvmnet-built Clang, Flang, `opt`, `llvm-ar` and `llvm-nm`; one package runs on Linux, Windows and macOS, x64 and ARM64. The 59 cross-platform fixtures compile and run with it on all three tested hosts; zlib, libxml2 and dav1d build with their own build systems; every host's compiler gives byte-identical assemblies. Precompiled (ReadyToRun) packages per host bring a C compile and link from 12 s to about 2 s.
 - **XP-09 (done).** `-shared --embed-libc` libraries carry their own C library and serve any .NET thread.
 - **Owner decision proposed.** Windows, macOS and Linux ARM64 as compiler hosts for 1.0 through the portable toolchain ([ADR-05](decisions.md#adr-05-supported-platforms-for-10)).
-- **Open.** XP-10 (Windows dependency-file paths), XP-11 (bootstrapping releases with the previous portable toolchain), XP-12 (splitting very large type initializers), XP-13 (start-up of the universal package); the release workflow's portable jobs have not run on GitHub; the branch `claude/eager-rubin-a429d0` (BE-48, TC-24, TC-25) is still unmerged and was not needed.
+- **Open.** XP-10 (Windows dependency-file paths), XP-11 (bootstrapping releases with the previous portable toolchain, done 2026-11-16), XP-12 (splitting very large type initializers), XP-13 (start-up of the universal package); the release workflow's portable jobs have not run on GitHub; the branch `claude/eager-rubin-a429d0` (BE-48, TC-24, TC-25) is still unmerged and was not needed.
 
 ## Progress (2026-11-07, 548.exchange2_r)
 
