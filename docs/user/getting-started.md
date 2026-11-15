@@ -1,12 +1,22 @@
 # Getting started
 
-llvmnet compiles C, C++ and Fortran to .NET: Clang or Flang 22 produces LLVM bitcode, llvmnet links it and translates it to CIL, and the result runs as ordinary .NET code, under the JIT or as a NativeAOT executable. The compiler runs on Linux x86-64; the programs it produces run on Linux x64 and ARM64, Windows x64 and macOS ARM64 ([deployment.md](deployment.md#supported-hosts)).
+llvmnet compiles C, C++ and Fortran to .NET: Clang or Flang 22 produces LLVM bitcode, llvmnet links it and translates it to CIL, and the result runs as ordinary .NET code, under the JIT or as a NativeAOT executable. The programs it produces run on Linux x64 and ARM64, Windows x64 and macOS ARM64, and so does the portable toolchain itself; the packages with native LLVM run on Linux x86-64 ([deployment.md](deployment.md#supported-hosts)).
 
 ## Install
 
-Pick one of three ways to get a toolchain.
+Pick one of four ways to get a toolchain.
 
-**A release package** (Linux x86-64). Each release ships two archives: `llvmnet-<version>-linux-x64.tar.xz` needs LLVM, Clang and Flang 22 installed (`clang-22`, `flang-22`, `opt-22`, `llvm-ar-22`, `llvm-nm-22`, `llvm-ranlib-22` on `PATH`), and `llvmnet-<version>-linux-x64-llvm.tar.xz` bundles them. Neither needs `dotnet` to compile; running the programs needs the .NET 10 runtime, and NativeAOT publishing needs the .NET 10 SDK and a native linker. [deployment.md](deployment.md#release-packages) says how to verify the download.
+**The portable toolchain** (any host with the .NET 10 runtime). The compiler, its LLVM and the Clang, Flang and LLVM tools it runs are .NET programs built with llvmnet ([deployment.md](deployment.md#the-portable-toolchain)). Take `llvmnet-<version>-portable-<rid>` for your host (`win-x64` as a `.zip`; `osx-arm64`, `linux-x64` and `linux-arm64` as `.tar.xz`), which is precompiled for it, or `llvmnet-<version>-portable` for any other; unpack it and put its `bin` on `PATH`.
+
+```sh
+tar xJf llvmnet-0.3.0-portable-osx-arm64.tar.xz
+export PATH="$PWD/llvmnet-0.3.0-portable-osx-arm64/bin:$PATH"
+llvmnet-clang --version
+```
+
+On Windows, `tar -xf llvmnet-0.3.0-portable-win-x64.zip` and add its `bin` to `PATH`; `llvmnet-clang` then runs `bin\llvmnet-clang.cmd` in `cmd.exe` and PowerShell. The commands find `dotnet` on `PATH`, in `DOTNET_ROOT` or in its usual install location, and say what to install when there is no .NET 10 runtime.
+
+**A Linux release package** (Linux x86-64, native LLVM, faster compiles). Each release ships two archives: `llvmnet-<version>-linux-x64.tar.xz` needs LLVM, Clang and Flang 22 installed (`clang-22`, `flang-22`, `opt-22`, `llvm-ar-22`, `llvm-nm-22`, `llvm-ranlib-22` on `PATH`), and `llvmnet-<version>-linux-x64-llvm.tar.xz` bundles them. Neither needs `dotnet` to compile; running the programs needs the .NET 10 runtime, and NativeAOT publishing needs the .NET 10 SDK and a native linker. [deployment.md](deployment.md#release-packages) says how to verify the download.
 
 ```sh
 tar xJf llvmnet-0.3.0-linux-x64-llvm.tar.xz
@@ -43,7 +53,7 @@ llvmnet-clang++ -std=c++20 -O2 app.cpp -o app.dll
 llvmnet-flang -O2 solver.f90 -o solver.dll
 ```
 
-An output name without `.dll` gives a Unix launcher script plus a `<name>.llvmnet/` directory, so `./app` runs it; `--nativeaot -o app` gives a native executable that needs no `dotnet` at all ([deployment.md](deployment.md)).
+An output name without `.dll` gives a launcher script plus a `<name>.llvmnet/` directory, so `./app` runs it (a compile on Windows also writes `app.cmd`, which `app` runs there); `--nativeaot -o app` gives a native executable that needs no `dotnet` at all ([deployment.md](deployment.md)). Every form runs on every supported host, whichever host compiled it.
 
 ## Build systems
 

@@ -15,13 +15,65 @@ public static unsafe class ProcessRuntime
     public static nint EnvironmentVector { get; private set; }
     public static int ArgumentCount { get; private set; }
 
+    /// <summary>
+    /// argv[0] as a native program started the same way sees it. .NET reports the image (program.dll) and the dotnet host,
+    /// so a launcher (Toolchain.Launcher in the compiler) passes its own $0 in LLVMNET_ARGV0 and its path, with links
+    /// resolved, in LLVMNET_EXE. Both leave the environment here: a native program's environment has no such variables, and
+    /// a child process must not take them for its own. On Windows a launcher's name is a host path (a .cmd launcher passes
+    /// C:\...\name), which the program sees in its own form (/c/.../name), as it sees every other path.
+    /// </summary>
+    public static string ProgramName { get; } = TakeVariable("LLVMNET_ARGV0") is string launcher ? HostPaths.ToProgram(launcher)
+        : Environment.GetCommandLineArgs().FirstOrDefault() ?? Environment.ProcessPath ?? "program";
+
+    /// <summary>
+    /// The host path /proc/self/exe names: the launcher, else the process's executable (the dotnet host, or the NativeAOT
+    /// executable). A launcher run by Git for Windows' shell may pass its path in the program's form (/c/...).
+    /// </summary>
+    public static string? Executable { get; } = TakeVariable("LLVMNET_EXE") is string launcher ? HostPaths.ToHost(launcher) : Environment.ProcessPath;
+
+    private static string? TakeVariable(string name)
+    {
+        string? value = Environment.GetEnvironmentVariable(name);
+        if (value is null) return null;
+        Environment.SetEnvironmentVariable(name, null);
+        return value.Length > 0 ? value : null;
+    }
+
+    /// <summary>The main thread's stack portable programs get, what RLIMIT_STACK reports where the host cannot tell (8 MB).</summary>
+    private const int MainStackSize = 8 << 20;
+
+    /// <summary>
+    /// Runs an image's entry point (<paramref name="entry"/>, its <c>int __Entry(string[])</c>). Portable programs are
+    /// promised the 8 MB main-thread stack that RLIMIT_STACK reports (docs/dev/host-abi.md), which Linux and macOS give
+    /// the main thread; on Windows, where dotnet.exe and NativeAOT executables give it 1.5 MB, the entry point runs on a
+    /// thread with 8 MB instead. Large programs need it before main: the precompiled type initializer of an llvmnet-built
+    /// clang takes about 2 MB of stack, and compilers recurse deeply on nested code.
+    /// </summary>
+    public static unsafe int RunEntry(nint entry, string[] arguments)
+    {
+        if (!OperatingSystem.IsWindows()) return ((delegate*<string[], int>)entry)(arguments);
+        int status = 0;
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? failure = null;
+        var thread = new Thread(() =>
+        {
+            try { status = ((delegate*<string[], int>)entry)(arguments); }
+            catch (Exception exception) { failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception); }
+        }, MainStackSize)
+        { Name = "main" };
+        thread.Start();
+        thread.Join();
+        failure?.Throw();
+        return status;
+    }
+
     public static int Initialize(string[] arguments)
     {
-        string[] values = [Environment.GetCommandLineArgs().FirstOrDefault() ?? Environment.ProcessPath ?? "program", .. arguments];
+        string[] values = [ProgramName, .. arguments];
         Arguments = Strings(values);
         ArgumentCount = values.Length;
         EnvironmentVector = Strings(EnvironmentEntries());
         RestoreRandomSeed();
+        RemoveLauncherVariables();
         return values.Length;
     }
 
@@ -34,6 +86,15 @@ public static unsafe class ProcessRuntime
     {
         if (!AbiContract.SystemCallbacks || !OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64) return;
         ((delegate* unmanaged[Cdecl]<uint, void>)SystemAbi.Symbol("libc.so.6", "srandom"))(1);
+    }
+
+    /// <summary>A system-mode program reads the process environment through glibc, which .NET does not change, so the launcher's variables leave it there too.</summary>
+    private static void RemoveLauncherVariables()
+    {
+        if (!AbiContract.SystemCallbacks || !OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64) return;
+        var unsetenv = (delegate* unmanaged[Cdecl]<byte*, int>)SystemAbi.Symbol("libc.so.6", "unsetenv");
+        fixed (byte* name = "LLVMNET_ARGV0"u8) unsetenv(name);
+        fixed (byte* name = "LLVMNET_EXE"u8) unsetenv(name);
     }
 
     /// <summary>
@@ -57,7 +118,7 @@ public static unsafe class ProcessRuntime
     public static int InitializeStartup(string[] arguments)
     {
         HostSyscalls.InitializeHost();
-        string[] values = [Environment.GetCommandLineArgs().FirstOrDefault() ?? Environment.ProcessPath ?? "program", .. arguments];
+        string[] values = [ProgramName, .. arguments];
         string[] environment = EnvironmentEntries();
         int slots = values.Length + 1 + environment.Length + 1 + 2 * 10;
         nint vector = (nint)NativeMemory.AllocZeroed((nuint)slots, (nuint)IntPtr.Size);

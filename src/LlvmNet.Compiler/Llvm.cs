@@ -4,46 +4,94 @@ namespace LlvmNet;
 
 internal static unsafe class Llvm
 {
-    private const string Library = "libLLVM-22.so";
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_constant_bits")]
-    private static extern uint ConstantBits(nint value, byte* destination, uint capacity);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_link")]
-    private static extern int LinkFiles(nint* paths, int* wholeArchive, uint count, nint* entry, uint entryCount, nint* required, uint requiredCount, [MarshalAs(UnmanagedType.LPUTF8Str)] string output, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, out nint message);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_native_objects")]
-    private static extern int ReadNativeObjects([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string directory, out nint listing, out nint message);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_stamp_abi")]
-    private static extern int StampFile([MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string abi, [MarshalAs(UnmanagedType.LPUTF8Str)] string isa, int textual, out nint message);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_isa_levels")]
-    private static extern nint IsaLevelsOf(nint module);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_create_native_shim")]
-    internal static extern nint CreateNativeShim(nint source);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_lower_constrained_fp")]
-    internal static extern uint LowerConstrainedFloatingPoint(nint module);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_wrap_vector_invokes")]
-    internal static extern uint WrapVectorInvokes(nint source);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_narrow_vector_integers")]
-    internal static extern uint NarrowVectorIntegers(nint module);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_expand_cttz_elts")]
-    internal static extern uint ExpandCountTrailingZeroElements(nint module);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_expand_vector_geps")]
-    internal static extern uint ExpandVectorGeps(nint module);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_fuse_multiply_adds")]
-    internal static extern uint FuseMultiplyAdds(nint module);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_scalarize_functions")]
-    internal static extern uint ScalarizeFunctions(nint* functions, uint count);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_rounding_averages")]
-    internal static extern uint RoundingAverages(nint function, uint fragmentBits);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_widening_reductions")]
-    internal static extern uint WideningReductions(nint function, uint fragmentBits, out uint products);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_strided_gathers")]
-    internal static extern uint StridedGathers(nint function, uint fragmentBits, int apply, out uint lanes, out uint loads);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_add_native_thunk")]
-    internal static extern void AddNativeThunk(nint shim, nint function, nint call, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_add_native_forwarder")]
-    internal static extern void AddNativeForwarder(nint shim, nint function, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
-    [DllImport(Library)] internal static extern int LLVMWriteBitcodeToFile(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
-    [DllImport(Library)] internal static extern nint LLVMGetTarget(nint module);
-    [DllImport(Library)] private static extern void LLVMGetVersion(out uint major, out uint minor, out uint patch);
+    internal const string Library = "libLLVM-22.so";
+    private static uint ConstantBits(nint value, byte* destination, uint capacity) => LlvmManaged.Active ? ((delegate*<nint, nint, uint, uint>)LlvmManaged.llvmnet_constant_bits)(value, (nint)destination, capacity) : LlvmNative.ConstantBits(value, destination, capacity);
+    private static int LinkFiles(nint* paths, int* wholeArchive, uint count, nint* entry, uint entryCount, nint* required, uint requiredCount, string output, string abi, out nint message)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LinkFiles(paths, wholeArchive, count, entry, entryCount, required, requiredCount, output, abi, out message);
+        message = default;
+        fixed (byte* outputUtf8 = LlvmManaged.Utf8(LlvmManaged.ProgramPath(output)))
+        fixed (byte* abiUtf8 = LlvmManaged.Utf8(abi))
+        fixed (nint* messagePointer = &message)
+            return ((delegate*<nint, nint, uint, nint, uint, nint, uint, nint, nint, nint, int>)LlvmManaged.llvmnet_link)((nint)paths, (nint)wholeArchive, count, (nint)entry, entryCount, (nint)required, requiredCount, (nint)outputUtf8, (nint)abiUtf8, (nint)messagePointer);
+    }
+    private static int ReadNativeObjects(string path, string directory, out nint listing, out nint message)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.ReadNativeObjects(path, directory, out listing, out message);
+        listing = default;
+        message = default;
+        fixed (byte* pathUtf8 = LlvmManaged.Utf8(LlvmManaged.ProgramPath(path)))
+        fixed (byte* directoryUtf8 = LlvmManaged.Utf8(LlvmManaged.ProgramPath(directory)))
+        fixed (nint* listingPointer = &listing)
+        fixed (nint* messagePointer = &message)
+            return ((delegate*<nint, nint, nint, nint, int>)LlvmManaged.llvmnet_native_objects)((nint)pathUtf8, (nint)directoryUtf8, (nint)listingPointer, (nint)messagePointer);
+    }
+    private static int StampFile(string path, string abi, string isa, int textual, out nint message)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.StampFile(path, abi, isa, textual, out message);
+        message = default;
+        fixed (byte* pathUtf8 = LlvmManaged.Utf8(LlvmManaged.ProgramPath(path)))
+        fixed (byte* abiUtf8 = LlvmManaged.Utf8(abi))
+        fixed (byte* isaUtf8 = LlvmManaged.Utf8(isa))
+        fixed (nint* messagePointer = &message)
+            return ((delegate*<nint, nint, nint, int, nint, int>)LlvmManaged.llvmnet_stamp_abi)((nint)pathUtf8, (nint)abiUtf8, (nint)isaUtf8, textual, (nint)messagePointer);
+    }
+    private static nint IsaLevelsOf(nint module) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.llvmnet_isa_levels)(module) : LlvmNative.IsaLevelsOf(module);
+    internal static nint CreateNativeShim(nint source) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.llvmnet_create_native_shim)(source) : LlvmNative.CreateNativeShim(source);
+    internal static uint LowerConstrainedFloatingPoint(nint module) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.llvmnet_lower_constrained_fp)(module) : LlvmNative.LowerConstrainedFloatingPoint(module);
+    internal static uint WrapVectorInvokes(nint source) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.llvmnet_wrap_vector_invokes)(source) : LlvmNative.WrapVectorInvokes(source);
+    internal static uint NarrowVectorIntegers(nint module) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.llvmnet_narrow_vector_integers)(module) : LlvmNative.NarrowVectorIntegers(module);
+    internal static uint ExpandCountTrailingZeroElements(nint module) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.llvmnet_expand_cttz_elts)(module) : LlvmNative.ExpandCountTrailingZeroElements(module);
+    internal static uint ExpandVectorGeps(nint module) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.llvmnet_expand_vector_geps)(module) : LlvmNative.ExpandVectorGeps(module);
+    internal static uint FuseMultiplyAdds(nint module) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.llvmnet_fuse_multiply_adds)(module) : LlvmNative.FuseMultiplyAdds(module);
+    internal static uint ScalarizeFunctions(nint* functions, uint count) => LlvmManaged.Active ? ((delegate*<nint, uint, uint>)LlvmManaged.llvmnet_scalarize_functions)((nint)functions, count) : LlvmNative.ScalarizeFunctions(functions, count);
+    internal static uint RoundingAverages(nint function, uint fragmentBits) => LlvmManaged.Active ? ((delegate*<nint, uint, uint>)LlvmManaged.llvmnet_rounding_averages)(function, fragmentBits) : LlvmNative.RoundingAverages(function, fragmentBits);
+    internal static uint WideningReductions(nint function, uint fragmentBits, out uint products)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.WideningReductions(function, fragmentBits, out products);
+        products = default;
+        fixed (uint* productsPointer = &products)
+            return ((delegate*<nint, uint, nint, uint>)LlvmManaged.llvmnet_widening_reductions)(function, fragmentBits, (nint)productsPointer);
+    }
+    internal static uint StridedGathers(nint function, uint fragmentBits, int apply, out uint lanes, out uint loads)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.StridedGathers(function, fragmentBits, apply, out lanes, out loads);
+        lanes = default;
+        loads = default;
+        fixed (uint* lanesPointer = &lanes)
+        fixed (uint* loadsPointer = &loads)
+            return ((delegate*<nint, uint, int, nint, nint, uint>)LlvmManaged.llvmnet_strided_gathers)(function, fragmentBits, apply, (nint)lanesPointer, (nint)loadsPointer);
+    }
+    internal static void AddNativeThunk(nint shim, nint function, nint call, string name)
+    {
+        if (!LlvmManaged.Active) { LlvmNative.AddNativeThunk(shim, function, call, name); return; }
+        fixed (byte* nameUtf8 = LlvmManaged.Utf8(name))
+            ((delegate*<nint, nint, nint, nint, void>)LlvmManaged.llvmnet_add_native_thunk)(shim, function, call, (nint)nameUtf8);
+    }
+    internal static void AddNativeForwarder(nint shim, nint function, string name)
+    {
+        if (!LlvmManaged.Active) { LlvmNative.AddNativeForwarder(shim, function, name); return; }
+        fixed (byte* nameUtf8 = LlvmManaged.Utf8(name))
+            ((delegate*<nint, nint, nint, void>)LlvmManaged.llvmnet_add_native_forwarder)(shim, function, (nint)nameUtf8);
+    }
+    internal static int LLVMWriteBitcodeToFile(nint module, string path)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMWriteBitcodeToFile(module, path);
+        fixed (byte* pathUtf8 = LlvmManaged.Utf8(LlvmManaged.ProgramPath(path)))
+            return ((delegate*<nint, nint, int>)LlvmManaged.LLVMWriteBitcodeToFile)(module, (nint)pathUtf8);
+    }
+    internal static nint LLVMGetTarget(nint module) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetTarget)(module) : LlvmNative.LLVMGetTarget(module);
+    private static void LLVMGetVersion(out uint major, out uint minor, out uint patch)
+    {
+        if (!LlvmManaged.Active) { LlvmNative.LLVMGetVersion(out major, out minor, out patch); return; }
+        major = default;
+        minor = default;
+        patch = default;
+        fixed (uint* majorPointer = &major)
+        fixed (uint* minorPointer = &minor)
+        fixed (uint* patchPointer = &patch)
+            ((delegate*<nint, nint, nint, void>)LlvmManaged.LLVMGetVersion)((nint)majorPointer, (nint)minorPointer, (nint)patchPointer);
+    }
 
     /// <summary>Version of the LLVM library loaded into the compiler process.</summary>
     internal static string Version
@@ -90,7 +138,7 @@ internal static unsafe class Llvm
         try
         {
             for (int index = 0; index < pointers.Length; index++)
-                pointers[index] = Marshal.StringToCoTaskMemUTF8(index < paths.Length ? paths[index] : index < paths.Length + entry.Length
+                pointers[index] = Marshal.StringToCoTaskMemUTF8(index < paths.Length ? LlvmManaged.ProgramPath(paths[index]) : index < paths.Length + entry.Length
                     ? entry[index - paths.Length] : required[index - paths.Length - entry.Length]);
             fixed (nint* pointer = pointers)
             fixed (int* flags = whole)
@@ -151,116 +199,187 @@ internal static unsafe class Llvm
         return result;
     }
 
-    [DllImport(Library)] internal static extern nint LLVMContextCreate();
-    [DllImport(Library)] internal static extern void LLVMContextDispose(nint context);
-    [DllImport(Library)] internal static extern int LLVMCreateMemoryBufferWithContentsOfFile([MarshalAs(UnmanagedType.LPUTF8Str)] string path, out nint buffer, out nint message);
-    [DllImport(Library)] internal static extern int LLVMParseIRInContext(nint context, nint buffer, out nint module, out nint message);
-    [DllImport(Library)] internal static extern void LLVMDisposeModule(nint module);
-    [DllImport(Library)] internal static extern void LLVMDisposeMessage(nint message);
-    [DllImport(Library)] internal static extern nint LLVMGetFirstFunction(nint module);
-    [DllImport(Library)] internal static extern nint LLVMGetNextFunction(nint function);
-    [DllImport(Library)] internal static extern int LLVMIsDeclaration(nint value);
-    [DllImport(Library)] internal static extern nint LLVMGetValueName2(nint value, out nuint length);
-    [DllImport(Library)] internal static extern nint LLVMGlobalGetValueType(nint global);
-    [DllImport(Library)] internal static extern nint LLVMGetReturnType(nint functionType);
-    [DllImport(Library)] internal static extern uint LLVMCountParams(nint function);
-    [DllImport(Library)] internal static extern nint LLVMGetParam(nint function, uint index);
-    [DllImport(Library)] internal static extern nint LLVMTypeOf(nint value);
-    [DllImport(Library)] internal static extern int LLVMGetTypeKind(nint type);
-    [DllImport(Library)] internal static extern uint LLVMGetIntTypeWidth(nint type);
-    [DllImport(Library)] internal static extern nint LLVMGetFirstBasicBlock(nint function);
-    [DllImport(Library)] internal static extern nint LLVMGetNextBasicBlock(nint block);
-    [DllImport(Library)] internal static extern nint LLVMGetFirstInstruction(nint block);
-    [DllImport(Library)] internal static extern nint LLVMGetNextInstruction(nint instruction);
-    [DllImport(Library)] internal static extern int LLVMGetInstructionOpcode(nint instruction);
-    [DllImport(Library)] internal static extern nint LLVMGetOperand(nint value, uint index);
-    [DllImport(Library)] internal static extern nint LLVMGetFirstUse(nint value);
-    [DllImport(Library)] internal static extern nint LLVMGetNextUse(nint use);
-    [DllImport(Library)] internal static extern nint LLVMGetUser(nint use);
-    [DllImport(Library)] internal static extern nint LLVMIsAInstruction(nint value);
-    [DllImport(Library)] internal static extern nint LLVMGetInstructionParent(nint instruction);
-    [DllImport(Library)] internal static extern nint LLVMGetBasicBlockParent(nint block);
-    [DllImport(Library)] internal static extern nint LLVMIsAConstantInt(nint value);
-    [DllImport(Library)] internal static extern long LLVMConstIntGetSExtValue(nint value);
-    [DllImport(Library)] internal static extern nint LLVMPrintValueToString(nint value);
-    [DllImport(Library)] internal static extern nint LLVMPrintTypeToString(nint type);
-    [DllImport(Library)] internal static extern nint LLVMGetDataLayoutStr(nint module);
-    [DllImport(Library)] internal static extern nint LLVMCreateTargetData(nint layout);
-    [DllImport(Library)] internal static extern void LLVMDisposeTargetData(nint data);
-    [DllImport(Library)] internal static extern int LLVMByteOrder(nint data);
-    [DllImport(Library)] internal static extern uint LLVMPointerSize(nint data);
-    [DllImport(Library)] internal static extern ulong LLVMABISizeOfType(nint data, nint type);
-    [DllImport(Library)] internal static extern uint LLVMABIAlignmentOfType(nint data, nint type);
-    [DllImport(Library)] internal static extern ulong LLVMOffsetOfElement(nint data, nint type, uint index);
-    [DllImport(Library)] internal static extern nint LLVMGetElementType(nint type);
-    [DllImport(Library)] internal static extern uint LLVMCountStructElementTypes(nint type);
-    [DllImport(Library)] internal static extern nint LLVMStructGetTypeAtIndex(nint type, uint index);
-    [DllImport(Library)] internal static extern ulong LLVMGetArrayLength2(nint type);
-    [DllImport(Library)] internal static extern uint LLVMGetVectorSize(nint type);
-    [DllImport(Library)] internal static extern ulong LLVMStoreSizeOfType(nint data, nint type);
-    [DllImport(Library)] internal static extern uint LLVMGetNumMaskElements(nint shuffle);
-    [DllImport(Library)] internal static extern int LLVMGetMaskValue(nint shuffle, uint element);
-    [DllImport(Library)] internal static extern uint LLVMGetFastMathFlags(nint instruction);
-    [DllImport(Library)] internal static extern uint LLVMCountParamTypes(nint type);
-    [DllImport(Library)] internal static extern void LLVMGetParamTypes(nint type, nint* parameters);
-    [DllImport(Library)] internal static extern int LLVMIsFunctionVarArg(nint type);
-    [DllImport(Library)] internal static extern nint LLVMGetFirstGlobal(nint module);
-    [DllImport(Library)] internal static extern nint LLVMGetNamedGlobal(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
-    [DllImport(Library)] internal static extern nint LLVMGetNextGlobal(nint global);
-    [DllImport(Library)] internal static extern nint LLVMGetInitializer(nint global);
-    [DllImport(Library)] internal static extern uint LLVMGetAlignment(nint value);
-    [DllImport(Library)] internal static extern int LLVMIsThreadLocal(nint global);
-    [DllImport(Library)] internal static extern nint LLVMGetFirstGlobalAlias(nint module);
-    [DllImport(Library)] internal static extern nint LLVMGetNextGlobalAlias(nint alias);
-    [DllImport(Library)] internal static extern nint LLVMAliasGetAliasee(nint alias);
-    [DllImport(Library)] internal static extern nint LLVMIsAGlobalAlias(nint value);
-    [DllImport(Library)] internal static extern int LLVMGetNumOperands(nint value);
-    [DllImport(Library)] internal static extern int LLVMIsNull(nint value);
-    [DllImport(Library)] internal static extern int LLVMIsConstant(nint value);
-    [DllImport(Library)] internal static extern int LLVMIsUndef(nint value);
-    [DllImport(Library)] internal static extern int LLVMIsPoison(nint value);
-    [DllImport(Library)] internal static extern nint LLVMIsAConstantFP(nint value);
-    [DllImport(Library)] internal static extern nint LLVMIsAConstantExpr(nint value);
-    [DllImport(Library)] internal static extern nint LLVMIsAInlineAsm(nint value);
-    [DllImport(Library)] internal static extern nint LLVMGetInlineAsmAsmString(nint value, out nuint length);
-    [DllImport(Library)] internal static extern nint LLVMGetInlineAsmConstraintString(nint value, out nuint length);
-    [DllImport(Library)] internal static extern nint LLVMIsAFunction(nint value);
-    [DllImport(Library)] internal static extern int LLVMGetConstOpcode(nint value);
-    [DllImport(Library)] internal static extern double LLVMConstRealGetDouble(nint value, out int losesInfo);
-    [DllImport(Library)] internal static extern nint LLVMGetAggregateElement(nint value, uint index);
-    [DllImport(Library)] internal static extern uint LLVMCountIncoming(nint phi);
-    [DllImport(Library)] internal static extern nint LLVMGetIncomingValue(nint phi, uint index);
-    [DllImport(Library)] internal static extern nint LLVMGetIncomingBlock(nint phi, uint index);
-    [DllImport(Library)] internal static extern uint LLVMGetNumSuccessors(nint terminator);
-    [DllImport(Library)] internal static extern nint LLVMGetSuccessor(nint terminator, uint index);
-    [DllImport(Library)] internal static extern nint LLVMGetSwitchCaseValue(nint instruction, uint successorIndex);
-    [DllImport(Library)] internal static extern nint LLVMGetCondition(nint branch);
-    [DllImport(Library)] internal static extern nint LLVMGetAllocatedType(nint alloca);
-    [DllImport(Library)] internal static extern int LLVMGetOrdering(nint instruction);
-    [DllImport(Library)] internal static extern int LLVMGetVolatile(nint instruction);
-    [DllImport(Library)] internal static extern int LLVMGetAtomicRMWBinOp(nint instruction);
-    [DllImport(Library)] internal static extern nint LLVMGetGEPSourceElementType(nint gep);
-    [DllImport(Library)] internal static extern int LLVMGetICmpPredicate(nint instruction);
-    [DllImport(Library)] internal static extern int LLVMGetFCmpPredicate(nint instruction);
-    [DllImport(Library)] internal static extern uint LLVMGetNumArgOperands(nint instruction);
-    [DllImport(Library)] internal static extern nint LLVMGetCalledValue(nint instruction);
-    [DllImport(Library)] internal static extern nint LLVMGetCalledFunctionType(nint instruction);
+    internal static nint LLVMContextCreate() => LlvmManaged.Active ? ((delegate*<nint>)LlvmManaged.LLVMContextCreate)() : LlvmNative.LLVMContextCreate();
+    internal static void LLVMContextDispose(nint context)
+    {
+        if (LlvmManaged.Active) ((delegate*<nint, void>)LlvmManaged.LLVMContextDispose)(context);
+        else LlvmNative.LLVMContextDispose(context);
+    }
+    internal static int LLVMCreateMemoryBufferWithContentsOfFile(string path, out nint buffer, out nint message)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMCreateMemoryBufferWithContentsOfFile(path, out buffer, out message);
+        buffer = default;
+        message = default;
+        fixed (byte* pathUtf8 = LlvmManaged.Utf8(LlvmManaged.ProgramPath(path)))
+        fixed (nint* bufferPointer = &buffer)
+        fixed (nint* messagePointer = &message)
+            return ((delegate*<nint, nint, nint, int>)LlvmManaged.LLVMCreateMemoryBufferWithContentsOfFile)((nint)pathUtf8, (nint)bufferPointer, (nint)messagePointer);
+    }
+    internal static int LLVMParseIRInContext(nint context, nint buffer, out nint module, out nint message)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMParseIRInContext(context, buffer, out module, out message);
+        module = default;
+        message = default;
+        fixed (nint* modulePointer = &module)
+        fixed (nint* messagePointer = &message)
+            return ((delegate*<nint, nint, nint, nint, int>)LlvmManaged.LLVMParseIRInContext)(context, buffer, (nint)modulePointer, (nint)messagePointer);
+    }
+    internal static void LLVMDisposeModule(nint module)
+    {
+        if (LlvmManaged.Active) ((delegate*<nint, void>)LlvmManaged.LLVMDisposeModule)(module);
+        else LlvmNative.LLVMDisposeModule(module);
+    }
+    internal static void LLVMDisposeMessage(nint message)
+    {
+        if (LlvmManaged.Active) ((delegate*<nint, void>)LlvmManaged.LLVMDisposeMessage)(message);
+        else LlvmNative.LLVMDisposeMessage(message);
+    }
+    internal static nint LLVMGetFirstFunction(nint module) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetFirstFunction)(module) : LlvmNative.LLVMGetFirstFunction(module);
+    internal static nint LLVMGetNextFunction(nint function) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetNextFunction)(function) : LlvmNative.LLVMGetNextFunction(function);
+    internal static int LLVMIsDeclaration(nint value) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMIsDeclaration)(value) : LlvmNative.LLVMIsDeclaration(value);
+    internal static nint LLVMGetValueName2(nint value, out nuint length)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMGetValueName2(value, out length);
+        length = default;
+        fixed (nuint* lengthPointer = &length)
+            return ((delegate*<nint, nint, nint>)LlvmManaged.LLVMGetValueName2)(value, (nint)lengthPointer);
+    }
+    internal static nint LLVMGlobalGetValueType(nint global) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGlobalGetValueType)(global) : LlvmNative.LLVMGlobalGetValueType(global);
+    internal static nint LLVMGetReturnType(nint functionType) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetReturnType)(functionType) : LlvmNative.LLVMGetReturnType(functionType);
+    internal static uint LLVMCountParams(nint function) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMCountParams)(function) : LlvmNative.LLVMCountParams(function);
+    internal static nint LLVMGetParam(nint function, uint index) => LlvmManaged.Active ? ((delegate*<nint, uint, nint>)LlvmManaged.LLVMGetParam)(function, index) : LlvmNative.LLVMGetParam(function, index);
+    internal static nint LLVMTypeOf(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMTypeOf)(value) : LlvmNative.LLVMTypeOf(value);
+    internal static int LLVMGetTypeKind(nint type) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetTypeKind)(type) : LlvmNative.LLVMGetTypeKind(type);
+    internal static uint LLVMGetIntTypeWidth(nint type) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetIntTypeWidth)(type) : LlvmNative.LLVMGetIntTypeWidth(type);
+    internal static nint LLVMGetFirstBasicBlock(nint function) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetFirstBasicBlock)(function) : LlvmNative.LLVMGetFirstBasicBlock(function);
+    internal static nint LLVMGetNextBasicBlock(nint block) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetNextBasicBlock)(block) : LlvmNative.LLVMGetNextBasicBlock(block);
+    internal static nint LLVMGetFirstInstruction(nint block) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetFirstInstruction)(block) : LlvmNative.LLVMGetFirstInstruction(block);
+    internal static nint LLVMGetNextInstruction(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetNextInstruction)(instruction) : LlvmNative.LLVMGetNextInstruction(instruction);
+    internal static int LLVMGetInstructionOpcode(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetInstructionOpcode)(instruction) : LlvmNative.LLVMGetInstructionOpcode(instruction);
+    internal static nint LLVMGetOperand(nint value, uint index) => LlvmManaged.Active ? ((delegate*<nint, uint, nint>)LlvmManaged.LLVMGetOperand)(value, index) : LlvmNative.LLVMGetOperand(value, index);
+    internal static nint LLVMGetFirstUse(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetFirstUse)(value) : LlvmNative.LLVMGetFirstUse(value);
+    internal static nint LLVMGetNextUse(nint use) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetNextUse)(use) : LlvmNative.LLVMGetNextUse(use);
+    internal static nint LLVMGetUser(nint use) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetUser)(use) : LlvmNative.LLVMGetUser(use);
+    internal static nint LLVMIsAInstruction(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMIsAInstruction)(value) : LlvmNative.LLVMIsAInstruction(value);
+    internal static nint LLVMGetInstructionParent(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetInstructionParent)(instruction) : LlvmNative.LLVMGetInstructionParent(instruction);
+    internal static nint LLVMGetBasicBlockParent(nint block) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetBasicBlockParent)(block) : LlvmNative.LLVMGetBasicBlockParent(block);
+    internal static nint LLVMIsAConstantInt(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMIsAConstantInt)(value) : LlvmNative.LLVMIsAConstantInt(value);
+    internal static long LLVMConstIntGetSExtValue(nint value) => LlvmManaged.Active ? ((delegate*<nint, long>)LlvmManaged.LLVMConstIntGetSExtValue)(value) : LlvmNative.LLVMConstIntGetSExtValue(value);
+    internal static nint LLVMPrintValueToString(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMPrintValueToString)(value) : LlvmNative.LLVMPrintValueToString(value);
+    internal static nint LLVMPrintTypeToString(nint type) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMPrintTypeToString)(type) : LlvmNative.LLVMPrintTypeToString(type);
+    internal static nint LLVMGetDataLayoutStr(nint module) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetDataLayoutStr)(module) : LlvmNative.LLVMGetDataLayoutStr(module);
+    internal static nint LLVMCreateTargetData(nint layout) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMCreateTargetData)(layout) : LlvmNative.LLVMCreateTargetData(layout);
+    internal static void LLVMDisposeTargetData(nint data)
+    {
+        if (LlvmManaged.Active) ((delegate*<nint, void>)LlvmManaged.LLVMDisposeTargetData)(data);
+        else LlvmNative.LLVMDisposeTargetData(data);
+    }
+    internal static int LLVMByteOrder(nint data) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMByteOrder)(data) : LlvmNative.LLVMByteOrder(data);
+    internal static uint LLVMPointerSize(nint data) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMPointerSize)(data) : LlvmNative.LLVMPointerSize(data);
+    internal static ulong LLVMABISizeOfType(nint data, nint type) => LlvmManaged.Active ? ((delegate*<nint, nint, ulong>)LlvmManaged.LLVMABISizeOfType)(data, type) : LlvmNative.LLVMABISizeOfType(data, type);
+    internal static uint LLVMABIAlignmentOfType(nint data, nint type) => LlvmManaged.Active ? ((delegate*<nint, nint, uint>)LlvmManaged.LLVMABIAlignmentOfType)(data, type) : LlvmNative.LLVMABIAlignmentOfType(data, type);
+    internal static ulong LLVMOffsetOfElement(nint data, nint type, uint index) => LlvmManaged.Active ? ((delegate*<nint, nint, uint, ulong>)LlvmManaged.LLVMOffsetOfElement)(data, type, index) : LlvmNative.LLVMOffsetOfElement(data, type, index);
+    internal static nint LLVMGetElementType(nint type) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetElementType)(type) : LlvmNative.LLVMGetElementType(type);
+    internal static uint LLVMCountStructElementTypes(nint type) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMCountStructElementTypes)(type) : LlvmNative.LLVMCountStructElementTypes(type);
+    internal static nint LLVMStructGetTypeAtIndex(nint type, uint index) => LlvmManaged.Active ? ((delegate*<nint, uint, nint>)LlvmManaged.LLVMStructGetTypeAtIndex)(type, index) : LlvmNative.LLVMStructGetTypeAtIndex(type, index);
+    internal static ulong LLVMGetArrayLength2(nint type) => LlvmManaged.Active ? ((delegate*<nint, ulong>)LlvmManaged.LLVMGetArrayLength2)(type) : LlvmNative.LLVMGetArrayLength2(type);
+    internal static uint LLVMGetVectorSize(nint type) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetVectorSize)(type) : LlvmNative.LLVMGetVectorSize(type);
+    internal static ulong LLVMStoreSizeOfType(nint data, nint type) => LlvmManaged.Active ? ((delegate*<nint, nint, ulong>)LlvmManaged.LLVMStoreSizeOfType)(data, type) : LlvmNative.LLVMStoreSizeOfType(data, type);
+    internal static uint LLVMGetNumMaskElements(nint shuffle) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetNumMaskElements)(shuffle) : LlvmNative.LLVMGetNumMaskElements(shuffle);
+    internal static int LLVMGetMaskValue(nint shuffle, uint element) => LlvmManaged.Active ? ((delegate*<nint, uint, int>)LlvmManaged.LLVMGetMaskValue)(shuffle, element) : LlvmNative.LLVMGetMaskValue(shuffle, element);
+    internal static uint LLVMGetFastMathFlags(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetFastMathFlags)(instruction) : LlvmNative.LLVMGetFastMathFlags(instruction);
+    internal static uint LLVMCountParamTypes(nint type) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMCountParamTypes)(type) : LlvmNative.LLVMCountParamTypes(type);
+    internal static void LLVMGetParamTypes(nint type, nint* parameters)
+    {
+        if (LlvmManaged.Active) ((delegate*<nint, nint, void>)LlvmManaged.LLVMGetParamTypes)(type, (nint)parameters);
+        else LlvmNative.LLVMGetParamTypes(type, parameters);
+    }
+    internal static int LLVMIsFunctionVarArg(nint type) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMIsFunctionVarArg)(type) : LlvmNative.LLVMIsFunctionVarArg(type);
+    internal static nint LLVMGetFirstGlobal(nint module) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetFirstGlobal)(module) : LlvmNative.LLVMGetFirstGlobal(module);
+    internal static nint LLVMGetNamedGlobal(nint module, string name)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMGetNamedGlobal(module, name);
+        fixed (byte* nameUtf8 = LlvmManaged.Utf8(name))
+            return ((delegate*<nint, nint, nint>)LlvmManaged.LLVMGetNamedGlobal)(module, (nint)nameUtf8);
+    }
+    internal static nint LLVMGetNextGlobal(nint global) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetNextGlobal)(global) : LlvmNative.LLVMGetNextGlobal(global);
+    internal static nint LLVMGetInitializer(nint global) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetInitializer)(global) : LlvmNative.LLVMGetInitializer(global);
+    internal static uint LLVMGetAlignment(nint value) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetAlignment)(value) : LlvmNative.LLVMGetAlignment(value);
+    internal static int LLVMIsThreadLocal(nint global) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMIsThreadLocal)(global) : LlvmNative.LLVMIsThreadLocal(global);
+    internal static nint LLVMGetFirstGlobalAlias(nint module) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetFirstGlobalAlias)(module) : LlvmNative.LLVMGetFirstGlobalAlias(module);
+    internal static nint LLVMGetNextGlobalAlias(nint alias) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetNextGlobalAlias)(alias) : LlvmNative.LLVMGetNextGlobalAlias(alias);
+    internal static nint LLVMAliasGetAliasee(nint alias) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMAliasGetAliasee)(alias) : LlvmNative.LLVMAliasGetAliasee(alias);
+    internal static nint LLVMIsAGlobalAlias(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMIsAGlobalAlias)(value) : LlvmNative.LLVMIsAGlobalAlias(value);
+    internal static int LLVMGetNumOperands(nint value) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetNumOperands)(value) : LlvmNative.LLVMGetNumOperands(value);
+    internal static int LLVMIsNull(nint value) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMIsNull)(value) : LlvmNative.LLVMIsNull(value);
+    internal static int LLVMIsConstant(nint value) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMIsConstant)(value) : LlvmNative.LLVMIsConstant(value);
+    internal static int LLVMIsUndef(nint value) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMIsUndef)(value) : LlvmNative.LLVMIsUndef(value);
+    internal static int LLVMIsPoison(nint value) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMIsPoison)(value) : LlvmNative.LLVMIsPoison(value);
+    internal static nint LLVMIsAConstantFP(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMIsAConstantFP)(value) : LlvmNative.LLVMIsAConstantFP(value);
+    internal static nint LLVMIsAConstantExpr(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMIsAConstantExpr)(value) : LlvmNative.LLVMIsAConstantExpr(value);
+    internal static nint LLVMIsAInlineAsm(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMIsAInlineAsm)(value) : LlvmNative.LLVMIsAInlineAsm(value);
+    internal static nint LLVMGetInlineAsmAsmString(nint value, out nuint length)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMGetInlineAsmAsmString(value, out length);
+        length = default;
+        fixed (nuint* lengthPointer = &length)
+            return ((delegate*<nint, nint, nint>)LlvmManaged.LLVMGetInlineAsmAsmString)(value, (nint)lengthPointer);
+    }
+    internal static nint LLVMGetInlineAsmConstraintString(nint value, out nuint length)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMGetInlineAsmConstraintString(value, out length);
+        length = default;
+        fixed (nuint* lengthPointer = &length)
+            return ((delegate*<nint, nint, nint>)LlvmManaged.LLVMGetInlineAsmConstraintString)(value, (nint)lengthPointer);
+    }
+    internal static nint LLVMIsAFunction(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMIsAFunction)(value) : LlvmNative.LLVMIsAFunction(value);
+    internal static int LLVMGetConstOpcode(nint value) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetConstOpcode)(value) : LlvmNative.LLVMGetConstOpcode(value);
+    internal static double LLVMConstRealGetDouble(nint value, out int losesInfo)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMConstRealGetDouble(value, out losesInfo);
+        losesInfo = default;
+        fixed (int* losesInfoPointer = &losesInfo)
+            return ((delegate*<nint, nint, double>)LlvmManaged.LLVMConstRealGetDouble)(value, (nint)losesInfoPointer);
+    }
+    internal static nint LLVMGetAggregateElement(nint value, uint index) => LlvmManaged.Active ? ((delegate*<nint, uint, nint>)LlvmManaged.LLVMGetAggregateElement)(value, index) : LlvmNative.LLVMGetAggregateElement(value, index);
+    internal static uint LLVMCountIncoming(nint phi) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMCountIncoming)(phi) : LlvmNative.LLVMCountIncoming(phi);
+    internal static nint LLVMGetIncomingValue(nint phi, uint index) => LlvmManaged.Active ? ((delegate*<nint, uint, nint>)LlvmManaged.LLVMGetIncomingValue)(phi, index) : LlvmNative.LLVMGetIncomingValue(phi, index);
+    internal static nint LLVMGetIncomingBlock(nint phi, uint index) => LlvmManaged.Active ? ((delegate*<nint, uint, nint>)LlvmManaged.LLVMGetIncomingBlock)(phi, index) : LlvmNative.LLVMGetIncomingBlock(phi, index);
+    internal static uint LLVMGetNumSuccessors(nint terminator) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetNumSuccessors)(terminator) : LlvmNative.LLVMGetNumSuccessors(terminator);
+    internal static nint LLVMGetSuccessor(nint terminator, uint index) => LlvmManaged.Active ? ((delegate*<nint, uint, nint>)LlvmManaged.LLVMGetSuccessor)(terminator, index) : LlvmNative.LLVMGetSuccessor(terminator, index);
+    internal static nint LLVMGetSwitchCaseValue(nint instruction, uint successorIndex) => LlvmManaged.Active ? ((delegate*<nint, uint, nint>)LlvmManaged.LLVMGetSwitchCaseValue)(instruction, successorIndex) : LlvmNative.LLVMGetSwitchCaseValue(instruction, successorIndex);
+    internal static nint LLVMGetCondition(nint branch) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetCondition)(branch) : LlvmNative.LLVMGetCondition(branch);
+    internal static nint LLVMGetAllocatedType(nint alloca) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetAllocatedType)(alloca) : LlvmNative.LLVMGetAllocatedType(alloca);
+    internal static int LLVMGetOrdering(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetOrdering)(instruction) : LlvmNative.LLVMGetOrdering(instruction);
+    internal static int LLVMGetVolatile(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetVolatile)(instruction) : LlvmNative.LLVMGetVolatile(instruction);
+    internal static int LLVMGetAtomicRMWBinOp(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetAtomicRMWBinOp)(instruction) : LlvmNative.LLVMGetAtomicRMWBinOp(instruction);
+    internal static nint LLVMGetGEPSourceElementType(nint gep) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetGEPSourceElementType)(gep) : LlvmNative.LLVMGetGEPSourceElementType(gep);
+    internal static int LLVMGetICmpPredicate(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetICmpPredicate)(instruction) : LlvmNative.LLVMGetICmpPredicate(instruction);
+    internal static int LLVMGetFCmpPredicate(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetFCmpPredicate)(instruction) : LlvmNative.LLVMGetFCmpPredicate(instruction);
+    internal static uint LLVMGetNumArgOperands(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetNumArgOperands)(instruction) : LlvmNative.LLVMGetNumArgOperands(instruction);
+    internal static nint LLVMGetCalledValue(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetCalledValue)(instruction) : LlvmNative.LLVMGetCalledValue(instruction);
+    internal static nint LLVMGetCalledFunctionType(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetCalledFunctionType)(instruction) : LlvmNative.LLVMGetCalledFunctionType(instruction);
     /// <summary>0 none, 1 tail, 2 musttail, 3 notail.</summary>
-    [DllImport(Library)] internal static extern int LLVMGetTailCallKind(nint call);
-    [DllImport(Library)] internal static extern uint LLVMGetInstructionCallConv(nint instruction);
-    [DllImport(Library)] internal static extern uint LLVMGetFunctionCallConv(nint function);
-    [DllImport(Library)] internal static extern uint LLVMGetNumIndices(nint instruction);
-    [DllImport(Library)] internal static extern uint LLVMGetNumClauses(nint instruction);
-    [DllImport(Library)] internal static extern nint LLVMGetClause(nint instruction, uint index);
-    [DllImport(Library)] internal static extern uint LLVMGetEnumAttributeKindForName([MarshalAs(UnmanagedType.LPUTF8Str)] string name, nuint length);
-    [DllImport(Library)] internal static extern nint LLVMGetEnumAttributeAtIndex(nint function, uint index, uint kind);
-    [DllImport(Library)] internal static extern nint LLVMGetCallSiteEnumAttribute(nint instruction, uint index, uint kind);
-    [DllImport(Library)] internal static extern nint LLVMGetTypeAttributeValue(nint attribute);
-    [DllImport(Library)] internal static extern ulong LLVMGetEnumAttributeValue(nint attribute);
+    internal static int LLVMGetTailCallKind(nint call) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetTailCallKind)(call) : LlvmNative.LLVMGetTailCallKind(call);
+    internal static uint LLVMGetInstructionCallConv(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetInstructionCallConv)(instruction) : LlvmNative.LLVMGetInstructionCallConv(instruction);
+    internal static uint LLVMGetFunctionCallConv(nint function) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetFunctionCallConv)(function) : LlvmNative.LLVMGetFunctionCallConv(function);
+    internal static uint LLVMGetNumIndices(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetNumIndices)(instruction) : LlvmNative.LLVMGetNumIndices(instruction);
+    internal static uint LLVMGetNumClauses(nint instruction) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetNumClauses)(instruction) : LlvmNative.LLVMGetNumClauses(instruction);
+    internal static nint LLVMGetClause(nint instruction, uint index) => LlvmManaged.Active ? ((delegate*<nint, uint, nint>)LlvmManaged.LLVMGetClause)(instruction, index) : LlvmNative.LLVMGetClause(instruction, index);
+    internal static uint LLVMGetEnumAttributeKindForName(string name, nuint length)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMGetEnumAttributeKindForName(name, length);
+        fixed (byte* nameUtf8 = LlvmManaged.Utf8(name))
+            return ((delegate*<nint, nuint, uint>)LlvmManaged.LLVMGetEnumAttributeKindForName)((nint)nameUtf8, length);
+    }
+    internal static nint LLVMGetEnumAttributeAtIndex(nint function, uint index, uint kind) => LlvmManaged.Active ? ((delegate*<nint, uint, uint, nint>)LlvmManaged.LLVMGetEnumAttributeAtIndex)(function, index, kind) : LlvmNative.LLVMGetEnumAttributeAtIndex(function, index, kind);
+    internal static nint LLVMGetCallSiteEnumAttribute(nint instruction, uint index, uint kind) => LlvmManaged.Active ? ((delegate*<nint, uint, uint, nint>)LlvmManaged.LLVMGetCallSiteEnumAttribute)(instruction, index, kind) : LlvmNative.LLVMGetCallSiteEnumAttribute(instruction, index, kind);
+    internal static nint LLVMGetTypeAttributeValue(nint attribute) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetTypeAttributeValue)(attribute) : LlvmNative.LLVMGetTypeAttributeValue(attribute);
+    internal static ulong LLVMGetEnumAttributeValue(nint attribute) => LlvmManaged.Active ? ((delegate*<nint, ulong>)LlvmManaged.LLVMGetEnumAttributeValue)(attribute) : LlvmNative.LLVMGetEnumAttributeValue(attribute);
 
     internal static nint ParameterAttribute(nint function, uint index, string name) =>
         LLVMGetEnumAttributeAtIndex(function, index + 1, LLVMGetEnumAttributeKindForName(name, (nuint)name.Length));
-    [DllImport(Library)] internal static extern uint* LLVMGetIndices(nint instruction);
+    internal static uint* LLVMGetIndices(nint instruction) => LlvmManaged.Active ? (uint*)((delegate*<nint, nint>)LlvmManaged.LLVMGetIndices)(instruction) : LlvmNative.LLVMGetIndices(instruction);
 
     internal static string Name(nint value)
     {
@@ -268,25 +387,51 @@ internal static unsafe class Llvm
         return Marshal.PtrToStringUTF8(pointer, checked((int)length)) ?? "";
     }
 
-    [DllImport("llvmnet-llvm", EntryPoint = "llvmnet_demangle")]
-    private static extern nint DemangleName([MarshalAs(UnmanagedType.LPUTF8Str)] string name);
-    [DllImport(Library)] private static extern nint LLVMGetDebugLocFilename(nint value, out uint length);
-    [DllImport(Library)] private static extern nint LLVMGetDebugLocDirectory(nint value, out uint length);
-    [DllImport(Library)] private static extern uint LLVMGetDebugLocLine(nint value);
-    [DllImport(Library)] private static extern uint LLVMGetDebugLocColumn(nint value);
-    [DllImport(Library)] internal static extern int LLVMGetLinkage(nint global);
-    [DllImport(Library)] internal static extern int LLVMGetVisibility(nint global);
-    [DllImport(Library)] internal static extern nint LLVMGetNamedFunction(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
-    [DllImport(Library)] internal static extern nint LLVMAddFunction(nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, nint type);
-    [DllImport(Library)] internal static extern nint LLVMFunctionType(nint result, nint* parameters, uint count, int variadic);
+    private static nint DemangleName(string name)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.DemangleName(name);
+        fixed (byte* nameUtf8 = LlvmManaged.Utf8(name))
+            return ((delegate*<nint, nint>)LlvmManaged.llvmnet_demangle)((nint)nameUtf8);
+    }
+    private static nint LLVMGetDebugLocFilename(nint value, out uint length)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMGetDebugLocFilename(value, out length);
+        length = default;
+        fixed (uint* lengthPointer = &length)
+            return ((delegate*<nint, nint, nint>)LlvmManaged.LLVMGetDebugLocFilename)(value, (nint)lengthPointer);
+    }
+    private static nint LLVMGetDebugLocDirectory(nint value, out uint length)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMGetDebugLocDirectory(value, out length);
+        length = default;
+        fixed (uint* lengthPointer = &length)
+            return ((delegate*<nint, nint, nint>)LlvmManaged.LLVMGetDebugLocDirectory)(value, (nint)lengthPointer);
+    }
+    private static uint LLVMGetDebugLocLine(nint value) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetDebugLocLine)(value) : LlvmNative.LLVMGetDebugLocLine(value);
+    private static uint LLVMGetDebugLocColumn(nint value) => LlvmManaged.Active ? ((delegate*<nint, uint>)LlvmManaged.LLVMGetDebugLocColumn)(value) : LlvmNative.LLVMGetDebugLocColumn(value);
+    internal static int LLVMGetLinkage(nint global) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetLinkage)(global) : LlvmNative.LLVMGetLinkage(global);
+    internal static int LLVMGetVisibility(nint global) => LlvmManaged.Active ? ((delegate*<nint, int>)LlvmManaged.LLVMGetVisibility)(global) : LlvmNative.LLVMGetVisibility(global);
+    internal static nint LLVMGetNamedFunction(nint module, string name)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMGetNamedFunction(module, name);
+        fixed (byte* nameUtf8 = LlvmManaged.Utf8(name))
+            return ((delegate*<nint, nint, nint>)LlvmManaged.LLVMGetNamedFunction)(module, (nint)nameUtf8);
+    }
+    internal static nint LLVMAddFunction(nint module, string name, nint type)
+    {
+        if (!LlvmManaged.Active) return LlvmNative.LLVMAddFunction(module, name, type);
+        fixed (byte* nameUtf8 = LlvmManaged.Utf8(name))
+            return ((delegate*<nint, nint, nint, nint>)LlvmManaged.LLVMAddFunction)(module, (nint)nameUtf8, type);
+    }
+    internal static nint LLVMFunctionType(nint result, nint* parameters, uint count, int variadic) => LlvmManaged.Active ? ((delegate*<nint, nint, uint, int, nint>)LlvmManaged.LLVMFunctionType)(result, (nint)parameters, count, variadic) : LlvmNative.LLVMFunctionType(result, parameters, count, variadic);
     /// <summary>The type of a function without parameters.</summary>
     internal static nint FunctionType(nint result) => LLVMFunctionType(result, null, 0, 0);
-    [DllImport(Library)] internal static extern nint LLVMPointerTypeInContext(nint context, uint addressSpace);
-    [DllImport(Library)] internal static extern nint LLVMGetModuleContext(nint module);
-    [DllImport(Library)] internal static extern nint LLVMGetFirstGlobalIFunc(nint module);
-    [DllImport(Library)] internal static extern nint LLVMGetNextGlobalIFunc(nint ifunc);
-    [DllImport(Library)] internal static extern nint LLVMIsAGlobalIFunc(nint value);
-    [DllImport(Library)] internal static extern nint LLVMIsAGlobalVariable(nint value);
+    internal static nint LLVMPointerTypeInContext(nint context, uint addressSpace) => LlvmManaged.Active ? ((delegate*<nint, uint, nint>)LlvmManaged.LLVMPointerTypeInContext)(context, addressSpace) : LlvmNative.LLVMPointerTypeInContext(context, addressSpace);
+    internal static nint LLVMGetModuleContext(nint module) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetModuleContext)(module) : LlvmNative.LLVMGetModuleContext(module);
+    internal static nint LLVMGetFirstGlobalIFunc(nint module) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetFirstGlobalIFunc)(module) : LlvmNative.LLVMGetFirstGlobalIFunc(module);
+    internal static nint LLVMGetNextGlobalIFunc(nint ifunc) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMGetNextGlobalIFunc)(ifunc) : LlvmNative.LLVMGetNextGlobalIFunc(ifunc);
+    internal static nint LLVMIsAGlobalIFunc(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMIsAGlobalIFunc)(value) : LlvmNative.LLVMIsAGlobalIFunc(value);
+    internal static nint LLVMIsAGlobalVariable(nint value) => LlvmManaged.Active ? ((delegate*<nint, nint>)LlvmManaged.LLVMIsAGlobalVariable)(value) : LlvmNative.LLVMIsAGlobalVariable(value);
     internal const int ExternalWeakLinkage = 12;
     internal const int InternalLinkage = 8, PrivateLinkage = 9;
     internal const int DefaultVisibility = 0;
@@ -296,6 +441,19 @@ internal static unsafe class Llvm
     /// visibility, so -fvisibility=hidden and visibility attributes select the exports as they do for a native library.
     /// </summary>
     internal static bool IsExported(nint global) => LLVMGetLinkage(global) is not (InternalLinkage or PrivateLinkage) && LLVMGetVisibility(global) == DefaultVisibility;
+
+    /// <summary>The names of the module's definitions, functions and variables, that a library exports (<see cref="IsExported"/>).</summary>
+    internal static HashSet<string> ExportedDefinitions(nint module)
+    {
+        HashSet<string> names = new(StringComparer.Ordinal);
+        foreach (nint function in Functions(module))
+            if (LLVMIsDeclaration(function) == 0 && IsExported(function)) names.Add(Name(function));
+        for (nint global = LLVMGetFirstGlobal(module); global != 0; global = LLVMGetNextGlobal(global))
+            if (LLVMIsDeclaration(global) == 0 && IsExported(global)) names.Add(Name(global));
+        for (nint alias = LLVMGetFirstGlobalAlias(module); alias != 0; alias = LLVMGetNextGlobalAlias(alias))
+            if (IsExported(alias)) names.Add(Name(alias));
+        return names;
+    }
 
     /// <summary>Human-readable symbol name: demangled for C++ and Rust, unchanged otherwise.</summary>
     internal static string Demangle(string name)
@@ -337,7 +495,12 @@ internal static unsafe class Llvm
         return text;
     }
 
-    [DllImport(Library)] private static extern void LLVMRemoveStringAttributeAtIndex(nint function, uint index, [MarshalAs(UnmanagedType.LPUTF8Str)] string key, uint length);
+    private static void LLVMRemoveStringAttributeAtIndex(nint function, uint index, string key, uint length)
+    {
+        if (!LlvmManaged.Active) { LlvmNative.LLVMRemoveStringAttributeAtIndex(function, index, key, length); return; }
+        fixed (byte* keyUtf8 = LlvmManaged.Utf8(key))
+            ((delegate*<nint, uint, nint, uint, void>)LlvmManaged.LLVMRemoveStringAttributeAtIndex)(function, index, (nint)keyUtf8, length);
+    }
 
     /// <summary>
     /// Removes host CPU tuning (target-cpu, target-features, tune-cpu) from every function. It has no meaning for CIL,

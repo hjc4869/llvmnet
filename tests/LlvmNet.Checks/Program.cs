@@ -222,6 +222,31 @@ try
     if (args is ["jit-all", .. string[] roots] && roots.Length > 0)
         return JitValidation.Run(roots);
 #endif
+    // Calls int f(void) exports of a managed library in order and prints name=value for each; thread:<name> calls it on a
+    // new .NET thread, for libraries that give each calling thread its own C library state (--embed-libc).
+    if (args is ["call-exports", string libraryPath, .. string[] calls] && calls.Length > 0)
+    {
+        Type program = Assembly.LoadFrom(Path.GetFullPath(libraryPath)).GetType("Program", throwOnError: true)!;
+        foreach (string call in calls)
+        {
+            bool thread = call.StartsWith("thread:", StringComparison.Ordinal);
+            string name = thread ? call["thread:".Length..] : call;
+            MethodInfo method = program.GetMethod(name, BindingFlags.Public | BindingFlags.Static, Type.EmptyTypes)
+                ?? throw new InvalidOperationException($"{libraryPath} exports no int {name}(void)");
+            object? result = null;
+            if (thread)
+            {
+                var worker = new Thread(() => result = method.Invoke(null, null));
+                worker.Start();
+                worker.Join();
+            }
+            else
+                result = method.Invoke(null, null);
+            Console.Out.Flush();
+            Console.WriteLine($"{call}={result}");
+        }
+        return 0;
+    }
     if (args is ["inspect", string assemblyPath])
     {
         using FileStream stream = File.OpenRead(assemblyPath);

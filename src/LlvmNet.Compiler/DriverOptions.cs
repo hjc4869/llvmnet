@@ -150,6 +150,7 @@ internal static class DriverOptions
         new("--vector-width=", OptionKind.Joined, Modes, "128 (the default) or 256: the width of the Vector128 or Vector256 fragments vector IR runs as (ADR-16); 256 runs a vector of more than 128 bits as Vector256 (shorter ones stay Vector128), a 256-bit one as one instruction where the host has AVX2, and is meant for builds that target such hosts, because elsewhere .NET runs Vector256 in software, slower than 128; --isa=x86-64-v3 implies 256", H, value: "<bits>"),
         // Managed and native libraries
         new("--cil-reference", OptionKind.JoinedOrSeparate, Managed, "Resolve calls to the public CExport methods of a managed library built with -shared, in the same mode", H, value: "<assembly>"),
+        new("--embed-libc", OptionKind.Flag, Managed, "Portable mode, with -shared: link the C library (musl, libc++, flang-rt, libomp) into the library, which then initializes it at its first call, so .NET code can call a library that uses the C library without a program around it; its exports are the default-visibility functions of the inputs", H),
         new("--system-library", OptionKind.JoinedOrSeparate, Managed, "System mode: a native shared library whose functions the program calls through generated bridges", H, value: "<library>"),
         new("--print-kernel-data=", OptionKind.Joined, Hidden, "", H, value: "<file>"),
         new("--native-kernels", OptionKind.JoinedOrSeparate, Managed, "Portable mode: a native kernel package (its directory, with manifest.json) whose library defines functions the program declares, such as assembly kernels; the image calls them through P/Invoke stubs, loads the library of the running host from runtimes/<rid>/native/ beside it and NativeAOT links the target's static library (docs/user/native-kernels.md)", H, value: "<dir>"),
@@ -173,6 +174,8 @@ internal static class DriverOptions
         // Information
         new("--help", OptionKind.Flag, Information, "This list; docs/user/driver.md is the full reference", H),
         new("--version", OptionKind.Flag, Information, "llvmnet's version, the LLVM version and the ABI tags, then the frontend's own version", H),
+        new("--print-llvm-imports", OptionKind.Flag, Hidden, "", H),
+        new("--write-launcher=", OptionKind.Joined, Hidden, "", H, value: "<payload>"),
         new("--list-extensions", OptionKind.Flag, Information, "List the native extensions installed in the sysroot's ext/ directory, with their -l names, host libraries and headers", H),
         new("--install-extension", OptionKind.JoinedOrSeparate, Information, "Install a built native extension package (a directory with manifest.json, include/ and lib/) in the sysroot's ext/ directory, after checking its assembly, its llvmnet version and its names", H, value: "<dir>"),
         new("--uninstall-extension", OptionKind.JoinedOrSeparate, Information, "Remove an installed native extension from the sysroot's ext/ directory", H, value: "<name>"),

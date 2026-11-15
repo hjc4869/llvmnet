@@ -1,15 +1,83 @@
 #!/usr/bin/env bash
+# The llvmnet driver. Under the names llvmnet-clang, llvmnet-clang++ and llvmnet-flang it is that driver; under
+# llvmnet-ar, llvmnet-ranlib and llvmnet-nm it runs the toolchain's LLVM tool of that name. It runs the compiler
+# (lib/llvmnet/llvmnet.dll in a toolchain, the build output in a checkout) on the .NET 10 runtime, which it finds through
+# LLVMNET_DOTNET, DOTNET_ROOT, PATH or the usual install locations, and says what to install when it is missing.
+# bash 3.2 compatible (macOS); bin/llvmnet.cmd is the Windows version.
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The directory part of a path, without running dirname (this runs at every compile).
+directory_of() { case "$1" in */*) printf '%s' "${1%/*}" ;; *) printf . ;; esac; }
+self="${BASH_SOURCE[0]}"
+name="${self##*/}"
+# Follow links to this script, so a link from another directory (/usr/local/bin/llvmnet-clang) finds the toolchain.
+while [[ -h "$self" ]]; do
+    link="$(readlink -- "$self")"
+    case "$link" in /*) self="$link" ;; *) self="$(directory_of "$self")/$link" ;; esac
+done
+root="$(cd -P -- "$(directory_of "$self")/.." && pwd -P)"
 export LLVMNET_ROOT="${LLVMNET_ROOT:-$root}"
-if [[ -d "$root/libexec/llvm/lib" ]]; then
-    export LD_LIBRARY_PATH="$root/libexec/llvm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-fi
-case "$(basename "$0")" in
+
+# The dotnet that runs the compiler and llvmnet-built tools, found once when one of them needs it (a self-contained
+# toolchain's compiler and a native LLVM need none): LLVMNET_DOTNET, DOTNET_ROOT, PATH, then the usual install locations.
+# It is exported as LLVMNET_DOTNET, which launchers and the compiler then use.
+require_dotnet() {
+    local install_hint='Install it from https://dotnet.microsoft.com/download/dotnet/10.0 (or with the system package manager), or set DOTNET_ROOT or LLVMNET_DOTNET to its location.'
+    local host link frameworks framework found installed candidate
+    dotnet="${LLVMNET_DOTNET:-}"
+    if [[ -n "$dotnet" ]]; then return; fi
+    if [[ -n "${DOTNET_ROOT:-}" && -x "$DOTNET_ROOT/dotnet" ]]; then
+        dotnet="$DOTNET_ROOT/dotnet"
+    elif command -v dotnet >/dev/null 2>&1; then
+        dotnet="$(command -v dotnet)"
+    else
+        for candidate in /usr/local/share/dotnet/dotnet /usr/share/dotnet/dotnet /usr/lib/dotnet/dotnet /opt/homebrew/opt/dotnet/libexec/dotnet \
+            /usr/local/opt/dotnet/libexec/dotnet "$HOME/.dotnet/dotnet"; do
+            if [[ -x "$candidate" ]]; then dotnet="$candidate"; break; fi
+        done
+    fi
+    if [[ -z "$dotnet" ]]; then
+        printf 'llvmnet: the .NET 10 runtime is required, and no dotnet was found on PATH, in DOTNET_ROOT or in the usual install locations.\n%s\n' "$install_hint" >&2
+        exit 127
+    fi
+    # The runtimes are beside the host (with links resolved); a layout without shared/ is left to dotnet to judge.
+    host="$dotnet"
+    while [[ -h "$host" ]]; do
+        link="$(readlink -- "$host")"
+        case "$link" in /*) host="$link" ;; *) host="$(directory_of "$host")/$link" ;; esac
+    done
+    frameworks="$(directory_of "$host")/shared/Microsoft.NETCore.App"
+    if [[ -d "$frameworks" ]]; then
+        found=0
+        for framework in "$frameworks"/10.*; do [[ -d "$framework" ]] && found=1; done
+        if [[ "$found" == 0 ]]; then
+            installed="$(cd "$frameworks" && printf '%s ' *)"
+            printf 'llvmnet: the .NET 10 runtime (Microsoft.NETCore.App 10.x) is required; %s has %s\n%s\n' "$dotnet" "${installed:-no runtime}" "$install_hint" >&2
+            exit 150
+        fi
+    fi
+    export LLVMNET_DOTNET="$dotnet"
+}
+
+case "$name" in
+    llvmnet-ar | llvmnet-ranlib | llvmnet-nm)
+        tool="llvm-${name#llvmnet-}-22"
+        # The toolchain's LLVM tool (a native one, or an llvmnet-built launcher in a portable toolchain), else the host's.
+        if [[ -d "$root/libexec/llvm/lib" ]]; then export LD_LIBRARY_PATH="$root/libexec/llvm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; fi
+        if [[ -x "$root/libexec/llvm/bin/$tool" ]]; then
+            # An llvmnet-built tool is a launcher script, which runs on dotnet.
+            IFS= read -r first <"$root/libexec/llvm/bin/$tool" || true
+            if [[ "$first" == "#!"* ]]; then require_dotnet; fi
+            exec "$root/libexec/llvm/bin/$tool" "$@"
+        fi
+        exec "$tool" "$@"
+        ;;
     llvmnet-clang++) export LLVMNET_DRIVER=clang++ ;;
     llvmnet-flang) export LLVMNET_DRIVER=flang ;;
     *) export LLVMNET_DRIVER="${LLVMNET_DRIVER:-clang}" ;;
 esac
+if [[ -d "$root/libexec/llvm/lib" ]]; then
+    export LD_LIBRARY_PATH="$root/libexec/llvm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 compiler="$root/lib/llvmnet/llvmnet.dll"
 if [[ ! -f "$compiler" ]]; then compiler="$root/src/LlvmNet.Compiler/bin/Release/net10.0/llvmnet.dll"; fi
 if [[ ! -f "$compiler" ]]; then
@@ -17,4 +85,5 @@ if [[ ! -f "$compiler" ]]; then
     exit 1
 fi
 if [[ -x "$root/lib/llvmnet/llvmnet" ]]; then exec "$root/lib/llvmnet/llvmnet" "$@"; fi
-exec "${LLVMNET_DOTNET:-dotnet}" "$compiler" "$@"
+require_dotnet
+exec "$dotnet" "$compiler" "$@"

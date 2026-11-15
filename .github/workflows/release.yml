@@ -1,12 +1,25 @@
-# Release artifacts from a tag (TC-11): the thin and bundled-LLVM toolchain packages as reproducible tar.xz files, the
-# dotnet tool package, SHA256SUMS, and a Sigstore signature of each file made with the workflow's own identity (cosign
-# keyless signing through GitHub's OIDC token: no key to keep). The gate runs first, so a tag never ships untested.
+# Release artifacts from a tag (TC-11, XP-04): the thin and bundled-LLVM Linux toolchain packages as reproducible tar.xz
+# files, the dotnet tool package, the portable toolchain (.tar.xz and .zip: the compiler on LLVM built by llvmnet and the
+# llvmnet-built clang, flang, opt and llvm-ar, for every .NET 10 host), SHA256SUMS, and a Sigstore signature of each file
+# made with the workflow's own identity (cosign keyless signing through GitHub's OIDC token: no key to keep). The gate
+# runs first, and the portable toolchain compiles and runs the cross-platform fixtures on Windows, macOS and Linux
+# before anything is published, so a tag never ships untested.
+#
+# The portable job builds LLVM, Clang, MLIR and Flang with llvmnet (scripts/selfhost/): about 5,300 objects, hours on a
+# 4-core runner when the cache is cold. Its build tree is cached (restored from the newest entry and saved even when the
+# job times out, so a cold build completes over reruns), and the repository variable LLVMNET_PORTABLE_RUNNER can name a
+# larger runner.
 name: release
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      portable:
+        description: Build and test the portable toolchain (LLVM built with llvmnet)
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -18,7 +31,7 @@ env:
 
 jobs:
   artifacts:
-    name: Build, test, package and sign (Linux x64)
+    name: Build, test and package (Linux x64)
     runs-on: ubuntu-24.04
     container: debian:trixie
     timeout-minutes: 180
@@ -44,17 +57,174 @@ jobs:
         run: |
           bash scripts/release-artifacts.sh dist-again
           diff dist/SHA256SUMS dist-again/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            dist/*.tar.xz
+            dist/*.nupkg
+
+  portable:
+    name: Portable toolchain (LLVM built with llvmnet)
+    if: github.event_name == 'push' || inputs.portable
+    runs-on: ${{ vars.LLVMNET_PORTABLE_RUNNER || 'ubuntu-24.04' }}
+    container: debian:trixie
+    timeout-minutes: 360
+    steps:
+      - name: Install git
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install packages
+        run: bash scripts/ci/install-packages.sh --selfhost
+      - name: Mark the workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Hash the dependency inputs
+        id: deps
+        shell: bash
+        run: |
+          echo "hash=$(git ls-files -z '*.csproj' Directory.Build.props scripts/sources.lock | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+          echo "selfhost=$(git ls-files -z scripts/sources.lock scripts/selfhost | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            artifacts/vendor/downloads
+            artifacts/vendor/musl-native
+          key: deps-${{ runner.os }}-${{ steps.deps.outputs.hash }}
+      # The patched source copy and the build tree: ninja rebuilds what the compiler, the sysroot headers or the flags
+      # changed, which after a compiler-only change is the links and translations.
+      - name: Restore the LLVM build tree
+        id: selfhost-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            artifacts/selfhost-build/llvm-project
+            artifacts/selfhost-build/llvm
+          key: selfhost-${{ steps.deps.outputs.selfhost }}-${{ github.sha }}
+          restore-keys: |
+            selfhost-${{ steps.deps.outputs.selfhost }}-
+            selfhost-
+      - name: Build the compiler and the sysroots
+        run: bash scripts/ensure-built.sh
+      - name: Fetch LLVM's sources
+        run: scripts/fetch-sources.sh llvm-project
+      - name: Configure LLVM for portable mode
+        run: bash scripts/selfhost/configure.sh
+      - name: Build LlvmNet.Llvm.dll (the compiler's LLVM)
+        run: JOBS=4 bash scripts/selfhost/build-library.sh
+      - name: Build clang, flang, opt, llvm-ar and llvm-nm
+        run: JOBS=4 bash scripts/selfhost/build-tools.sh
+      - name: Save the LLVM build tree
+        if: always() && steps.selfhost-cache.outputs.cache-matched-key != format('selfhost-{0}-{1}', steps.deps.outputs.selfhost, github.sha)
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            artifacts/selfhost-build/llvm-project
+            artifacts/selfhost-build/llvm
+          key: selfhost-${{ steps.deps.outputs.selfhost }}-${{ github.sha }}
+      # The universal package, and the same toolchain precompiled (ReadyToRun) for each supported host, where compiles
+      # start in about a second instead of five to ten; each still runs everywhere under the JIT.
+      - name: Package the portable toolchain
+        run: |
+          LLVMNET_RELEASE_VARIANTS="portable portable-linux-x64 portable-linux-arm64 portable-win-x64 portable-osx-arm64" \
+            JOBS=2 bash scripts/release-artifacts.sh dist
+      - name: Make the cross-platform kit (fixture sources and native results)
+        run: bash tests/portable-toolchain/make-kit.sh artifacts/tests/portable-toolchain/kit
+      - name: Compile and run the kit with the universal and the precompiled package (Linux x64)
+        run: |
+          mkdir -p /tmp/universal /tmp/precompiled
+          tar -xJf dist/llvmnet-*-portable.tar.xz -C /tmp/universal
+          tar -xJf dist/llvmnet-*-portable-linux-x64.tar.xz -C /tmp/precompiled
+          kit=artifacts/tests/portable-toolchain/kit
+          bash $kit/run.sh --jobs 4 $kit /tmp/universal/llvmnet-*
+          bash $kit/run.sh --jobs 4 $kit /tmp/precompiled/llvmnet-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-toolchain
+          path: |
+            dist/*.tar.xz
+            dist/*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-kit
+          path: artifacts/tests/portable-toolchain/kit.tar.gz
+
+  portable-test:
+    name: Portable toolchain on ${{ matrix.name }}
+    needs: portable
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows x64, os: windows-2025, package: portable-win-x64.zip }
+          - { name: macOS ARM64, os: macos-15, package: portable-osx-arm64.tar.xz }
+          - { name: Linux ARM64, os: ubuntu-24.04-arm, package: portable-linux-arm64.tar.xz }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      # The runtime alone is what the toolchain needs; the SDK the action installs includes it.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/download-artifact@v4
+        with:
+          name: portable-toolchain
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: portable-kit
+      - name: Unpack the toolchain and the kit
+        shell: bash
+        run: |
+          mkdir -p toolchain
+          case "${{ matrix.package }}" in
+            *.zip) pwsh -NoProfile -Command "Expand-Archive -Path (Get-Item dist/llvmnet-*-${{ matrix.package }}).FullName -DestinationPath toolchain" ;;
+            *) tar -xJf dist/llvmnet-*-${{ matrix.package }} -C toolchain ;;
+          esac
+          tar xzf kit.tar.gz
+      - name: Compile and run the kit with the portable toolchain
+        shell: bash
+        run: bash kit/run.sh --jobs 3 kit toolchain/llvmnet-*
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-results-${{ matrix.os }}
+          path: kit/results
+          if-no-files-found: ignore
+
+  publish:
+    name: Sign and publish
+    needs: [artifacts, portable, portable-test]
+    if: ${{ !cancelled() && needs.artifacts.result == 'success' && (needs.portable.result == 'skipped' || needs.portable-test.result == 'success') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-artifacts
+          path: dist
+      - uses: actions/download-artifact@v4
+        if: needs.portable.result == 'success'
+        with:
+          name: portable-toolchain
+          path: dist
+      - name: Checksums
+        run: cd dist && sha256sum -- *.tar.xz *.zip *.nupkg 2>/dev/null >SHA256SUMS && cat SHA256SUMS
       - uses: sigstore/cosign-installer@v3
       - name: Sign every artifact (Sigstore bundle next to each file)
         run: |
           cd dist
-          for file in *.tar.xz *.nupkg SHA256SUMS; do
+          for file in *.tar.xz *.zip *.nupkg SHA256SUMS; do
+            [[ -f "$file" ]] || continue
             cosign sign-blob --yes --bundle "$file.sigstore.json" "$file"
           done
       - name: Verify the signatures
         run: |
           cd dist
-          for file in *.tar.xz *.nupkg SHA256SUMS; do
+          for file in *.tar.xz *.zip *.nupkg SHA256SUMS; do
+            [[ -f "$file" ]] || continue
             cosign verify-blob --bundle "$file.sigstore.json" \
               --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com "$file"
@@ -68,8 +238,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          apt-get install -y --no-install-recommends gh
           version="${GITHUB_REF_NAME#v}"
+          shopt -s nullglob
           gh release create "$GITHUB_REF_NAME" --title "llvmnet $version" --notes-file <(awk -v v="$version" '
               $0 ~ "^## \\[" v "\\]" { on = 1; next } /^## \[/ { on = 0 } on' CHANGELOG.md) \
-            dist/*.tar.xz dist/*.nupkg dist/SHA256SUMS dist/*.sigstore.json
+            dist/*.tar.xz dist/*.zip dist/*.nupkg dist/SHA256SUMS dist/*.sigstore.json

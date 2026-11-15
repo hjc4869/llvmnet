@@ -54,7 +54,7 @@ std::string describe(llvm::MemoryBufferRef buffer, const std::string &file, std:
 // project's archives beside its bitcode. For an ELF, COFF or Mach-O object `path`, or each such member of an archive
 // (written into `directory` under a unique name, as one archive can hold two members of one name), the listing has the
 // file and its global symbols (describe). Bitcode members and other inputs list nothing.
-extern "C" int llvmnet_native_objects(const char *path, const char *directory, char **listing, char **message)
+extern "C" __attribute__((visibility("default"))) int llvmnet_native_objects(const char *path, const char *directory, char **listing, char **message)
 {
     auto buffer = llvm::MemoryBuffer::getFile(path);
     if (!buffer) {

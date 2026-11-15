@@ -15,7 +15,7 @@ else
 fi
 output="$root/artifacts/tests/deployment"
 mkdir -p "$output/essentials"
-for utility in bash dirname basename; do
+for utility in bash dirname basename readlink; do
     ln -sfn "$(command -v "$utility")" "$output/essentials/$utility"
 done
 for notice in LICENSE.TXT THIRD-PARTY-NOTICES.md; do

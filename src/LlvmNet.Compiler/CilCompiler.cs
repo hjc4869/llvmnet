@@ -66,6 +66,9 @@ internal sealed class CilCompiler(CompilerOptions options)
     private MethodBuilder? initializer;
     private nint libcMain;
     private nint libcFinalizer;
+    // __llvmnet_libc_init of a library that embeds the C library (--embed-libc), which its type initializer calls.
+    private nint libcInit;
+    private readonly Dictionary<nint, MethodBuilder> exportWrappers = [];
 
     private static readonly Lazy<HashSet<string>> FrameworkAssemblyNames = new(() =>
         ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string) ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
@@ -370,6 +373,10 @@ internal sealed class CilCompiler(CompilerOptions options)
         libcMain = Llvm.LLVMGetNamedFunction(module, "__llvmnet_libc_main");
         if (libcMain != 0 && Llvm.LLVMIsDeclaration(libcMain) != 0) libcMain = 0;
         libcFinalizer = Llvm.LLVMGetNamedFunction(module, "__llvmnet_register_finalizer");
+        libcInit = options.EmbedLibc ? Llvm.LLVMGetNamedFunction(module, "__llvmnet_libc_init") : 0;
+        if (libcInit != 0 && Llvm.LLVMIsDeclaration(libcInit) != 0) libcInit = 0;
+        if (options.EmbedLibc && libcInit == 0)
+            throw new InvalidOperationException("--embed-libc found no __llvmnet_libc_init in the link: the sysroot's crt1.o predates it; rebuild the sysroot (scripts/build-sysroot.sh).");
         using HostInterop? host = options.Runtime == "system" ? new HostInterop(this, module, output, options) : null;
         Host = host;
         if (options.Simd128)
@@ -419,23 +426,28 @@ internal sealed class CilCompiler(CompilerOptions options)
             nint signature = Llvm.LLVMGlobalGetValueType(function);
             // A library exports its external, default-visibility definitions as public CExport methods (-fvisibility and
             // visibility attributes decide, as for a native library); the rest, and everything in an executable, is private.
-            bool exported = options.Library && Llvm.IsExported(function);
+            bool exported = options.Library && Llvm.IsExported(function) && (options.EmbeddedExports is null || options.EmbeddedExports.Contains(Llvm.Name(function)));
+            // A library that embeds the C library exports a wrapper that gives the calling .NET thread musl's thread state
+            // on its first call (NativeCallbacks.Enter) and calls the function, which the library's own code calls directly.
+            bool wrapped = exported && options.EmbedLibc;
             MethodBuilder method;
             try
             {
-                method = (exported ? Program : MethodHolder()).DefineMethod(Llvm.Name(function), (exported ? MethodAttributes.Public : MethodAttributes.Assembly) | MethodAttributes.Static,
+                method = (exported && !wrapped ? Program : MethodHolder()).DefineMethod(Llvm.Name(function), (exported && !wrapped ? MethodAttributes.Public : MethodAttributes.Assembly) | MethodAttributes.Static,
                     Types.Return(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
+                if (wrapped) exportWrappers[function] = ExportWrapper(Llvm.Name(function), method, Types.Return(Llvm.LLVMGetReturnType(signature)), Types.Parameters(signature));
             }
             catch (Exception error) { throw CompilationError.InFunction(error, function); }
-            if (exported) method.SetCustomAttribute(new CustomAttributeBuilder(typeof(CExportAttribute).GetConstructor([typeof(string)])!, [Llvm.Name(function)]));
+            if (exported) (wrapped ? exportWrappers[function] : method).SetCustomAttribute(new CustomAttributeBuilder(typeof(CExportAttribute).GetConstructor([typeof(string)])!, [Llvm.Name(function)]));
             Methods[function] = method;
         }
         for (nint alias = Llvm.LLVMGetFirstGlobalAlias(module); alias != 0; alias = Llvm.LLVMGetNextGlobalAlias(alias))
         {
             // Library builds export each public alias of an exported function under its own name too.
             if (options.Library && Methods.TryGetValue(ResolveAlias(alias), out MethodInfo? aliased) && aliased is MethodBuilder builder &&
-                builder.IsPublic && Llvm.IsExported(alias))
-                builder.SetCustomAttribute(new CustomAttributeBuilder(typeof(CExportAttribute).GetConstructor([typeof(string)])!, [Llvm.Name(alias)]));
+                (exportWrappers.GetValueOrDefault(ResolveAlias(alias)) ?? builder) is MethodBuilder export && export.IsPublic && Llvm.IsExported(alias) &&
+                (options.EmbeddedExports is null || options.EmbeddedExports.Contains(Llvm.Name(alias))))
+                export.SetCustomAttribute(new CustomAttributeBuilder(typeof(CExportAttribute).GetConstructor([typeof(string)])!, [Llvm.Name(alias)]));
         }
         for (nint ifunc = Llvm.LLVMGetFirstGlobalIFunc(module); ifunc != 0; ifunc = Llvm.LLVMGetNextGlobalIFunc(ifunc))
             if (Llvm.LLVMGetFirstUse(ifunc) != 0)
@@ -709,11 +721,30 @@ internal sealed class CilCompiler(CompilerOptions options)
         il.Emit(OpCodes.Ldc_I4_1);
         il.Emit(OpCodes.Ret);
         il.MarkLabel(supported);
+        // The entry point runs on a thread with the stack RLIMIT_STACK promises where the main thread has less (Windows).
+        il.Emit(OpCodes.Ldftn, entry);
         il.Emit(OpCodes.Ldarg_0);
-        il.Emit(OpCodes.Call, entry);
+        il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.RunEntry))!);
         il.Emit(OpCodes.Ret);
         startup.CreateType();
         return main;
+    }
+
+    /// <summary>
+    /// The public CExport method of a function that a library embedding the C library exports: it gives a .NET thread
+    /// that has no musl thread state yet one (NativeCallbacks.Enter, a thread-local test on later calls) and calls the
+    /// translated function.
+    /// </summary>
+    private MethodBuilder ExportWrapper(string name, MethodBuilder implementation, Type returnType, Type[] parameters)
+    {
+        MethodBuilder wrapper = Program.DefineMethod(name, MethodAttributes.Public | MethodAttributes.Static, returnType, parameters);
+        ILGenerator il = wrapper.GetILGenerator();
+        il.Emit(OpCodes.Call, typeof(NativeCallbacks).GetMethod(nameof(NativeCallbacks.Enter))!);
+        for (int index = 0; index < parameters.Length; index++)
+            il.Emit(OpCodes.Ldarg, (short)index);
+        il.Emit(OpCodes.Call, implementation);
+        il.Emit(OpCodes.Ret);
+        return wrapper;
     }
 
     /// <summary>A C++ exception no handler catches calls std::terminate with that exception current, as in native C++;
@@ -864,14 +895,26 @@ internal sealed class CilCompiler(CompilerOptions options)
             il.Emit(OpCodes.Call, typeof(SystemAbi).GetMethod(variadic ? nameof(SystemAbi.RegisterVariadicCallback) : nameof(SystemAbi.RegisterCallback))!);
             il.Emit(OpCodes.Pop);
         }
-        if (libcMain == 0) il.Emit(OpCodes.Call, constructors);
+        if (libcInit != 0)
+        {
+            // An embedded C library starts as a program's would, without main: the host vectors, then __init_libc and the
+            // constructors on this thread, the first to call the library (__llvmnet_libc_init in crt1.o).
+            il.Emit(OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Newarr, typeof(string));
+            il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.InitializeStartup))!);
+            il.Emit(OpCodes.Pop);
+            il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetProperty(nameof(ProcessRuntime.Arguments))!.GetMethod!);
+            il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetProperty(nameof(ProcessRuntime.EnvironmentVector))!.GetMethod!);
+            il.Emit(OpCodes.Call, ResolveFunction(libcInit));
+        }
+        else if (libcMain == 0) il.Emit(OpCodes.Call, constructors);
         il.Emit(OpCodes.Ret);
         ILGenerator lifecycle = constructors.GetILGenerator();
         foreach (nint function in LifecycleFunctions("llvm.global_dtors"))
         {
             MethodInfo destructor = ResolveFunction(function);
             lifecycle.Emit(OpCodes.Ldftn, Host is null ? destructor : Host.Callback(function, destructor));
-            if (libcMain != 0 && libcFinalizer != 0)
+            if ((libcMain != 0 || libcInit != 0) && libcFinalizer != 0)
             {
                 // musl runs these through atexit, before it flushes stdio, as it does .fini_array entries.
                 lifecycle.Emit(OpCodes.Call, ResolveFunction(libcFinalizer));

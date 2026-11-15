@@ -5,6 +5,10 @@ namespace LlvmNet;
 internal sealed class CompilerOptions
 {
     internal bool Library { get; set; }
+    /// <summary>--embed-libc: a portable library that links and initializes the C library itself (XP-04).</summary>
+    internal bool EmbedLibc { get; set; }
+    /// <summary>With --embed-libc, the names the library exports: the inputs' default-visibility definitions.</summary>
+    internal HashSet<string>? EmbeddedExports { get; set; }
     internal string Runtime { get; set; } = "portable";
     internal bool Verbose { get; set; }
     internal bool NativeAot { get; set; }
@@ -98,6 +102,10 @@ internal sealed class Invocation
     /// <summary>The hidden --print-kernel-data: a file of the data names a kernel package shares with the program.</summary>
     internal string? KernelData { get; private set; }
     internal bool ListExtensions { get; private set; }
+    /// <summary>The hidden --print-llvm-imports: the C names the compiler calls in its LLVM, the roots of LlvmNet.Llvm.dll (XP-04).</summary>
+    internal bool PrintLlvmImports { get; private set; }
+    /// <summary>The hidden --write-launcher=&lt;payload&gt;: write -o's launcher for an existing payload, as a POSIX script and a .cmd (scripts/selfhost/build-tools.sh).</summary>
+    internal string? WriteLauncher { get; private set; }
     /// <summary>--install-extension: a built extension package to install in the sysroot's ext/ directory.</summary>
     internal string? InstallExtension { get; private set; }
     /// <summary>--uninstall-extension: the name of an installed extension to remove.</summary>
@@ -204,11 +212,14 @@ internal sealed class Invocation
                     Options.VectorIdioms = value == "on";
                     break;
                 case "--cil-reference": Options.CilReferences.Add(Path.GetFullPath(value)); break;
+                case "--embed-libc": Options.EmbedLibc = true; break;
                 case "--system-library": Options.SystemLibraries.Add(value); break;
                 case "--extension": ExtensionNames.Add(value); break;
                 case "--native-kernels": KernelDirectories.Add(Path.GetFullPath(value)); break;
                 case "--print-kernel-data=": KernelData = Path.GetFullPath(value); break;
                 case "--list-extensions": ListExtensions = true; break;
+                case "--print-llvm-imports": PrintLlvmImports = true; break;
+                case "--write-launcher=": WriteLauncher = Path.GetFullPath(value); break;
                 case "--install-extension": InstallExtension = Path.GetFullPath(value); break;
                 case "--uninstall-extension": UninstallExtension = value; break;
                 case "--nativeaot": Options.NativeAot = true; break;
@@ -295,6 +306,8 @@ internal sealed class Invocation
         if (AotProject is not null && RuntimeId is not null)
             throw new ArgumentException("--aot-project takes no --runtime-id: the runtime identifier is chosen when the project is published (dotnet publish -r <rid>).");
         if (Options.Runtime != "system" && Options.SystemLibraries.Count != 0) throw new ArgumentException("--system-library requires --runtime=system.");
+        if (Options.EmbedLibc && (!Options.Library || Options.Runtime != "portable"))
+            throw new ArgumentException("--embed-libc requires -shared in portable mode: it links the portable C library into a managed library.");
         // x86-64-v3 code targets AVX2 hosts, where 256-bit vectors held whole run faster than as two halves (SV-06); a
         // --vector-width the command line gives wins.
         if (Options.Isa == "x86-64-v3" && !VectorWidthGiven) Options.VectorWidth = 256;
@@ -328,6 +341,20 @@ internal static class Driver
 
     internal static int Run(string[] arguments)
     {
+        // The hidden --run-launcher <launcher> [arguments]: runs an executable output through its payload, with the
+        // launcher's argv[0] and path, as the host layer starts one. The CMake toolchain runs configure probes and tests
+        // with it on Windows, where neither the shell script nor cmd.exe /c with CMake's forward-slash paths can.
+        if (arguments is ["--run-launcher", string launcherPath, .. string[] launcherArguments])
+        {
+            string launcher = Path.GetFullPath(launcherPath);
+            if (!File.Exists(launcher) && OperatingSystem.IsWindows() && File.Exists(launcher + ".cmd")) launcher += ".cmd";
+            string payload = Launchers.Payload(launcher) ?? throw new ArgumentException($"{launcherPath} is not an llvmnet launcher.");
+            System.Diagnostics.ProcessStartInfo start = Launchers.Start(launcher, payload, launcherPath);
+            foreach (string argument in launcherArguments) start.ArgumentList.Add(argument);
+            using System.Diagnostics.Process process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException($"Cannot start {launcherPath}");
+            process.WaitForExit();
+            return process.ExitCode;
+        }
         arguments = Toolchain.ExpandResponseFiles(arguments);
         string driver = Environment.GetEnvironmentVariable("LLVMNET_DRIVER") ?? "clang";
         List<ParsedArgument> parsed = DriverOptions.Parse(arguments);
@@ -360,6 +387,14 @@ internal static class Driver
         var invocation = new Invocation(parsed, driver);
         driver = invocation.Driver;
         if (invocation.ListExtensions) { Console.Write(Extensions.Listing()); return 0; }
+        if (invocation.WriteLauncher is string launcherPayload)
+        {
+            if (invocation.Output is null || !File.Exists(launcherPayload))
+                throw new ArgumentException("--write-launcher=<payload> needs an existing payload and -o <launcher>.");
+            Toolchain.Launcher(Path.GetFullPath(invocation.Output), launcherPayload, windows: true);
+            return 0;
+        }
+        if (invocation.PrintLlvmImports) { Console.Write(string.Concat(LlvmNative.Imports.Select(name => name + "\n"))); return 0; }
         if (invocation.InstallExtension is not null) { Console.WriteLine(Extensions.Install(invocation.InstallExtension)); return 0; }
         if (invocation.UninstallExtension is not null) { Console.WriteLine(Extensions.Uninstall(invocation.UninstallExtension)); return 0; }
         CompilerOptions options = invocation.Options;
@@ -542,10 +577,23 @@ internal static class Driver
                 options.Extensions.Add(extension);
                 if (File.Exists(extension.Wrappers)) bitcode.Add((extension.Wrappers, false));
             }
+            // A library that embeds the C library (--embed-libc) exports the default-visibility definitions of its own
+            // inputs, which a link of the inputs alone shows; what the C library adds to the link stays internal (XP-04).
+            if (options.EmbedLibc)
+            {
+                if (bitcode.All(input => LinkerInputKind(input.Path) == ".a" && !input.WholeArchive))
+                    throw new ArgumentException("Provide at least one explicit object or source as the link root, or -Wl,--whole-archive before an archive.");
+                string inputsModule = Path.Combine(temporary, "library-inputs.bc");
+                Llvm.Link([.. bitcode.Select(input => input.Path)], [.. bitcode.Select(input => input.WholeArchive)], inputsModule, options.AbiTag);
+                using (var inputsLinked = new LlvmModule(inputsModule))
+                    options.EmbeddedExports = Llvm.ExportedDefinitions(inputsLinked.Handle);
+                bitcode.Clear();
+                bitcode.Add((inputsModule, false));
+            }
             // Portable executables link musl's start object and the sysroot archives, in dependency order. Libraries do
-            // not: musl keeps per-process state (thread pointer, heap, stdio) that one image per process must own. Nor
-            // does a relocatable link (-r), which combines the inputs for a later link.
-            if (options.Runtime == "portable" && !options.Library && !invocation.Relocatable)
+            // not, unless they embed the C library: musl keeps per-process state (thread pointer, heap, stdio) that one
+            // image per process must own. Nor does a relocatable link (-r), which combines the inputs for a later link.
+            if (options.Runtime == "portable" && (!options.Library || options.EmbedLibc) && !invocation.Relocatable)
             {
                 PortableAbi.RequireSysroot();
                 if (invocation.StartFiles) bitcode.Add((PortableAbi.Library("crt1.o"), false));
@@ -581,7 +629,8 @@ internal static class Driver
                 throw new ArgumentException("Provide at least one explicit object or source as the link root, or -Wl,--whole-archive before an archive.");
             // An executable that uses a native extension also links the musl port's thread attachment, which the
             // extensions' reverse thunks need on threads a host library started (NX-08).
-            string[] threadAttachment = executable && options.Extensions.Count != 0 && options.Runtime == "portable" && invocation.DefaultLibraries
+            // So does a library that embeds the C library, whose exports any .NET thread may call.
+            string[] threadAttachment = (executable && options.Extensions.Count != 0 || options.EmbedLibc) && options.Runtime == "portable" && invocation.DefaultLibraries
                 ? ["__llvmnet_attach_thread", "__llvmnet_detach_thread"] : [];
             // Data a kernel package shares with the program stays in the link even when only the package's code reads it.
             string[] dataNames = invocation.KernelData is null ? [] : [.. File.ReadAllLines(invocation.KernelData).Select(line => line.Trim()).Where(line => line.Length != 0)];
@@ -624,8 +673,16 @@ internal static class Driver
                 throw new ArgumentException("--simd128 needs the typed vector lowering; it cannot be combined with --vector-lowering=scalar.");
             string scalarizer = options.TypedVectors ? "" : ",scalarizer<load-store>";
             string reductions = options.TypedVectors ? "" : "expand-reductions,";
-            string passes = (options.Library ? "" : "internalize,globaldce,") + $"function(lower-constant-intrinsics,{reductions}scalarize-masked-mem-intrin{scalarizer}),globaldce,verify";
+            bool internalize = !options.Library || options.EmbedLibc;
+            string passes = (internalize ? "internalize,globaldce," : "") + $"function(lower-constant-intrinsics,{reductions}scalarize-masked-mem-intrin{scalarizer}),globaldce,verify";
             List<string> optimization = [$"-passes={passes}", linked, "-o", lowered];
+            if (options.EmbeddedExports is HashSet<string> exports)
+            {
+                // A file rather than a list on the command line: a library may export thousands of names.
+                string publicApi = Path.Combine(temporary, "exports.txt");
+                File.WriteAllLines(publicApi, [.. exports.Order(StringComparer.Ordinal), .. EmbeddedLibcRoots]);
+                optimization.Add("--internalize-public-api-file=" + publicApi);
+            }
             if (!options.Library) optimization.Add("--internalize-public-api-list=main,_QQmain" + (options.Runtime == "portable" ? ",__llvmnet_libc_main,__llvmnet_register_finalizer,__llvmnet_cxx_can_catch" : "") +
                 (options.Extensions.Count != 0 && options.Runtime == "portable" ? ",__llvmnet_attach_thread,__llvmnet_detach_thread" : "") +
                 string.Concat(options.KernelPackages.SelectMany(package => package.Data).Concat(nativeReferences).Select(data => "," + data)));
@@ -780,6 +837,12 @@ internal static class Driver
     }
 
     private static readonly HashSet<string> SourceExtensions = new(StringComparer.Ordinal) { ".c", ".cc", ".cpp", ".cxx", ".C", ".i", ".ii", ".ll", ".bc" };
+
+    /// <summary>
+    /// What a library that embeds the C library keeps besides its exports: the start object's initializer and finalizer
+    /// registration, libc++abi's catch matcher and the musl port's thread attachment, which the image calls by name.
+    /// </summary>
+    private static readonly string[] EmbeddedLibcRoots = ["__llvmnet_libc_init", "__llvmnet_register_finalizer", "__llvmnet_cxx_can_catch", "__llvmnet_attach_thread", "__llvmnet_detach_thread"];
 
     /// <summary>Whether a file is a native object (ELF, COFF or Mach-O), by its content.</summary>
     internal static bool IsNativeObject(string path)

@@ -163,7 +163,7 @@ struct LinkDiagnostics {
 // never needed, and the copies of an inline function that every C++ object carries, cost little more than their
 // symbol tables. One Linker serves the whole link, because a Linker indexes every struct type of the destination
 // module when it is constructed: one per input made the link of a large program quadratic in its size.
-extern "C" int llvmnet_link(const char *const *paths, const int *wholeArchive, unsigned count, const char *const *entry,
+extern "C" __attribute__((visibility("default"))) int llvmnet_link(const char *const *paths, const int *wholeArchive, unsigned count, const char *const *entry,
                             unsigned entryCount, const char *const *required, unsigned requiredCount, const char *output,
                             const char *abi, char **message)
 {

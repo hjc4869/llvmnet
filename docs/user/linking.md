@@ -25,7 +25,23 @@ llvmnet-clang consumer.c --cil-reference Exports.dll -o consumer.dll
 
 Scalar and pointer signatures (`int`, `long`, `float`, `double`, pointers) are the stable surface for 1.0 ([ADR-09](../plan/decisions.md#adr-09-portable-abi-evolution)); aggregate parameters and results across assemblies are not yet a stable ABI. .NET code can call the exports too: they are ordinary `public static` methods on the `Program` class, taking pointers as `nint`, and the library carries `LlvmNet.Runtime.CExportAttribute` with each C name (`LlvmNet.Checks inspect Exports.dll` lists them). C# reaches them through reflection for now: the library is built against `System.Private.CoreLib`, so a C# project that references it and calls `Program.add` directly fails with CS0012 ([NX-14](../plan/11-native-extensions.md)).
 
-A portable library does not contain the C library: musl's process state (the thread pointer, the heap, stdio) belongs to the program image, so a library that calls the C library must be linked into a program as bitcode, or the program must be built in the same mode and provide it. A library built from several objects links them together as a program does.
+A portable library does not contain the C library: musl's process state (the thread pointer, the heap, stdio) belongs to the program image, so a library that calls the C library must be linked into a program as bitcode, or the program must be built in the same mode and provide it, or it embeds the C library (below). A library built from several objects links them together as a program does.
+
+### Libraries that embed the C library
+
+`-shared --embed-libc` (portable mode) links the C library into the library itself, as an executable links it: musl's start object, musl with mimalloc, libc++, libc++abi, the OpenMP runtime, flang-rt and compiler-rt's builtins, of which only what the library uses stays. Such a library is called from .NET without any llvmnet program around it, so a C or C++ code base that uses stdio, the heap, threads or C++ exceptions becomes one managed assembly:
+
+```sh
+llvmnet-clang++ -O2 -shared --embed-libc -fvisibility=hidden engine.cpp -o Engine.dll
+```
+
+- **Exports.** The default-visibility functions of the library's own inputs, the objects and the archive members they pull in (found by linking them alone first). Everything the C library adds is internal, whatever its visibility, so the C library does not leak into the library's surface; mark the API with `__attribute__((visibility("default")))` and compile with `-fvisibility=hidden`; without it every external function of the inputs is exported.
+- **Initialization.** The library's type initializer runs before its first export: it starts musl (`__init_libc`, with the process's arguments and environment) and runs the C++ static constructors, on the calling thread, which becomes musl's main thread.
+- **Threads.** Every export is a thin wrapper that gives a .NET thread musl's thread state on its first call (errno, `thread_local`, locks and `pthread_self` work), as callbacks of [native extensions](extensions.md) do on threads a host library started; the state is released when the thread ends. Thread-local destructors do not run for such threads.
+- **Destructors** run through `atexit` when the library calls `exit`, as a native library's do; a .NET process that just ends does not run them.
+- **One per process.** The thread pointer and the host layer's descriptor table belong to the process, so a process holds at most one image with a C library: one such library, or one llvmnet program.
+
+The compiler itself uses this: on hosts without a native LLVM 22 it calls `LlvmNet.Llvm.dll`, LLVM's C API built with llvmnet this way ([deployment.md](deployment.md#the-portable-toolchain)). `tests/embedded-libc.sh` calls a C++ library from two .NET threads.
 
 ## Native libraries (system mode)
 

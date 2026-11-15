@@ -2,9 +2,17 @@
 # Install the llvmnet build and test prerequisites on Debian 13 (trixie). Run as root.
 # Shared by .devcontainer/Dockerfile and .github/workflows/ci.yml so both use the same package set.
 #   --integration   also install the tools needed by the integration tag (ffmpeg, Meson, Node.js, nasm, rsync)
+#   --selfhost      also install what building LLVM with llvmnet needs (scripts/selfhost/: clang-tblgen, patch)
 set -euo pipefail
 integration=0
-[[ "${1:-}" == --integration ]] && integration=1
+selfhost=0
+for option in "$@"; do
+    case "$option" in
+        --integration) integration=1 ;;
+        --selfhost) selfhost=1 ;;
+        *) printf 'Unknown option %s\n' "$option" >&2; exit 2 ;;
+    esac
+done
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends ca-certificates curl git xz-utils file time
@@ -31,6 +39,7 @@ packages=(
     libvulkan1 mesa-vulkan-drivers
 )
 if [[ "$integration" -eq 1 ]]; then packages+=(meson ffmpeg nodejs nasm rsync); fi
+if [[ "$selfhost" -eq 1 ]]; then packages+=(clang-tools-22 patch); fi
 apt-get install -y --no-install-recommends "${packages[@]}"
 # NativeAOT invokes "clang" as its native compiler and linker; use the pinned LLVM release.
 ln -sfn /usr/bin/clang-22 /usr/local/bin/clang

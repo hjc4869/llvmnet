@@ -18,3 +18,13 @@ __attribute__((weak)) int __llvmnet_libc_main(int argc, char **argv, char **envp
     __llvmnet_run_constructors();
     exit(main_function(argc, argv, envp));
 }
+
+/* A library that embeds the C library (-shared --embed-libc) has no main: its type initializer calls this once, on the
+ * .NET thread that first calls one of its exports, which becomes musl's main thread. Other threads get their thread
+ * state on their first call through __llvmnet_attach_thread (src/thread/llvmnet). Destructors run through atexit when
+ * the library calls exit, as a native library's do. */
+__attribute__((weak)) void __llvmnet_libc_init(char **argv, char **envp)
+{
+    __init_libc(envp, argv[0]);
+    __llvmnet_run_constructors();
+}

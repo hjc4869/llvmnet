@@ -85,6 +85,10 @@ Everything above the host layer is translated C; the host layer is the only hand
 
 - [ ] **LC-32** (S, P2) musl differences that libraries see, documented in the limitations page or fixed where cheap ([library survey](../evidence/2026-11-02-library-survey.md)): iconv has no EBCDIC or IBM-1141 converter and does not decode EUC-JP 0x8F (JIS X 0212) sequences, so 24 libxml2 sub-tests skip; the headers lack C23 `nullptr_t`; `libm` results differ from glibc's in the last bit, so 6 of 991 Skia golden images differ by at most 5/255.
 
+### Found by TC-21 (2026-11-02)
+
+- [ ] **LC-33** (S, P2) `argv[0]` of spawned children: a child started with `posix_spawn`, `system` or `popen` gets the path of its executable as `argv[0]`, not the one its parent passed (`customname` natively, `/bin/sh` under llvmnet for `posix_spawn("/bin/sh", {"customname", ...})`), because the host starts it through .NET's `Process`, which sets `argv[0]` itself. Programs that start themselves under another name (a busybox-style multi-call program, Clang's driver modes) see a different name in the child. Done when a child, native or another llvmnet launcher, sees the `argv[0]` its parent passed, with a test ([evidence](../evidence/2026-11-02-tc21-launcher-identity.md)).
+
 ## Exit criteria for M3
 
 LC-04 through LC-10, LC-14 through LC-17, LC-19 through LC-23 are done; the portable ffmpeg profile, all 31 media fixtures and the private 4K HDR full-file hash gate pass; portable SPEC passes are at parity with system mode as [ADR-14](decisions.md#adr-14-linux-identity-of-the-portable-target) defines it: documented per-benchmark portability flags are allowed, and programs that need `fork`, rely on glibc behavior musl does not share, or call through a prototype that contradicts the definition are listed exclusions.

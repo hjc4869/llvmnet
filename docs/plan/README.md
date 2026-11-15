@@ -17,6 +17,15 @@ Related: [README.md](../../README.md), [user/limitations.md](../user/limitations
 
 The owner settled every open decision in [decisions.md](decisions.md): the `dotnet64-v2` tag and ADR-14 option 3 are confirmed, and parity for SPEC means passing with documented per-benchmark flags, except listed exclusions (`fork`, which stays `ENOSYS`; glibc behavior that musl does not share; and prototypes that contradict the definition, accepted 2026-10-31). v2 freezes at 1.0 with `-funsigned-char` allowed (BE-41). ADR-05, 06, 10, 11 and 12 are accepted as recommended. ADR-08 is deferred: no numeric performance target for 1.0. `--native-import` is removed (SA-01). Item-level decisions are recorded on SA-07, LC-24, FT-08, PF-08 and WG-06.
 
+## Progress (2026-11-15, the portable toolchain)
+
+The owner asked for the self-hosted Clang/LLVM stack to run on Windows and macOS from one build, published as a portable toolchain that needs only the .NET 10 runtime, built by a GitHub Actions release job, and for the README to present llvmnet as a drop-in compiler with portable outputs. Measurements are in [evidence/2026-11-15-portable-toolchain.md](../evidence/2026-11-15-portable-toolchain.md). The work is on the local branch `portable-toolchain`, which also merges TC-21 (`claude/cool-napier-3e23cf`); nothing is pushed.
+
+- **XP-04 (done).** The compiler runs on `LlvmNet.Llvm.dll`, LLVM 22's C API and `native/*.cpp` built with llvmnet, and runs the llvmnet-built Clang, Flang, `opt`, `llvm-ar` and `llvm-nm`; one package runs on Linux, Windows and macOS, x64 and ARM64. The 59 cross-platform fixtures compile and run with it on all three tested hosts; zlib, libxml2 and dav1d build with their own build systems; every host's compiler gives byte-identical assemblies. Precompiled (ReadyToRun) packages per host bring a C compile and link from 12 s to about 2 s.
+- **XP-09 (done).** `-shared --embed-libc` libraries carry their own C library and serve any .NET thread.
+- **Owner decision proposed.** Windows, macOS and Linux ARM64 as compiler hosts for 1.0 through the portable toolchain ([ADR-05](decisions.md#adr-05-supported-platforms-for-10)).
+- **Open.** XP-10 (Windows dependency-file paths), XP-11 (bootstrapping releases with the previous portable toolchain), XP-12 (splitting very large type initializers), XP-13 (start-up of the universal package); the release workflow's portable jobs have not run on GitHub; the branch `claude/eager-rubin-a429d0` (BE-48, TC-24, TC-25) is still unmerged and was not needed.
+
 ## Progress (2026-11-07, 548.exchange2_r)
 
 The owner asked to merge the day's work to master and push it (`5bfa820`, after the cross-platform bundle passed on Windows and macOS), then to profile 548.exchange2_r, the largest remaining intrate gap (1.44), and to implement what the profile found. Measurements are in [evidence/2026-11-07-exchange2.md](../evidence/2026-11-07-exchange2.md).
@@ -167,8 +176,8 @@ The owner asked how a portable program could reference standardized native libra
 An experiment outside the repository (`artifacts/selfhost/`, like the library survey) built LLVM, Clang and Flang 22.1.8 with llvmnet in portable mode: every LLVM tool llvmnet runs (`clang-22`, `flang-22`, `opt-22`, `llvm-ar-22`, `llvm-nm-22`) became a .NET program, under the JIT and as a NativeAOT executable. Replaying the build's 3,542 compile commands with the built `clang-22` gave the same IR as native Clang, and llvmnet's sysroots rebuilt by those tools match master's.
 
 - **BE-47 (done).** Programs with more than 65,535 methods (Clang 119,681, Flang 234,651) linked but did not start, because the CLR limits the methods of one class. Internal methods now go to several classes, 32,768 per class ([evidence](../evidence/2026-11-02-method-holders.md)).
+- **TC-21 (done).** A program started through its launcher saw the image as `argv[0]` and the `dotnet` host as `/proc/self/exe`. The shell launcher now follows links to itself and passes its `$0` and resolved path to the runtime, so `argv[0]`, `/proc/self/exe` and re-executing it match a native program on Linux and macOS, except that through `PATH` a script sees the path the shell found. Children started with `posix_spawn` still get their executable's path as `argv[0]` (LC-33) ([evidence](../evidence/2026-11-02-tc21-launcher-identity.md)).
 - **Other findings, in progress on their own branches.**
-  - The launcher's `argv[0]` and `/proc/self/exe` (TC-21).
   - `llvm.frameaddress`.
   - Precompiled headers.
   - NativeAOT's 32 MB metadata limit for Flang-sized programs.
