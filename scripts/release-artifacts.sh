@@ -10,6 +10,8 @@
 #                              llvmnet-built LLVM (scripts/selfhost/, LLVMNET_PORTABLE_LIBRARY and LLVMNET_PORTABLE_STAGE);
 #                              portable-<rid> (win-x64, osx-arm64, linux-x64, linux-arm64) is the same toolchain
 #                              precompiled for that host (ReadyToRun), a .zip for Windows and a .tar.xz otherwise
+#   LLVMNET_PORTABLE_UNIVERSAL an unpacked universal portable toolchain that portable-<rid> precompiles, instead of one
+#                              packaged from this checkout (the release workflow precompiles each host in its own job)
 #   SOURCE_DATE_EPOCH          the timestamp recorded in the archives (default: the commit time of HEAD)
 # Reproducibility: the same commit on the same toolchain produces byte-identical archives (tests/release.sh checks).
 set -euo pipefail
@@ -89,9 +91,15 @@ for variant in $variants; do
             zip_pack "llvmnet-$version-portable" "$prefix"
             ;;
         portable-*)
+            # A copy of the universal toolchain (one this run packaged, or LLVMNET_PORTABLE_UNIVERSAL) precompiled in place;
+            # hard links make the copy cheap, and the precompiler replaces files rather than writing into them.
             rid="${variant#portable-}"
+            universal="${LLVMNET_PORTABLE_UNIVERSAL:-$work/llvmnet-$version-portable}"
+            if [[ ! -d "$universal" ]]; then bash "$root/scripts/package-toolchain.sh" "$universal" --portable >"$work/portable.log"; fi
             prefix="$work/llvmnet-$version-portable-$rid"
-            bash "$root/scripts/package-toolchain.sh" "$prefix" --portable --readytorun="$rid" >"$work/$variant.log"
+            rm -rf "$prefix"
+            cp -al "$universal" "$prefix" 2>/dev/null || cp -a "$universal" "$prefix"
+            bash "$root/scripts/precompile-toolchain.sh" "$prefix" "$rid"
             if [[ "$rid" == win-* ]]; then zip_pack "llvmnet-$version-portable-$rid" "$prefix"; else pack "llvmnet-$version-portable-$rid" "$prefix"; fi
             rm -rf "$prefix"
             ;;

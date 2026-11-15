@@ -137,11 +137,7 @@ if [[ "$bundle_llvm" -eq 1 ]]; then
 fi
 # --readytorun=<rid>: the same toolchain with every managed assembly precompiled for one runtime identifier, which still
 # runs everywhere else under the JIT; on that host compiles start in about a second instead of five to ten.
-if [[ -n "$readytorun" ]]; then
-    bash "$root/scripts/readytorun.sh" "$readytorun" "$prefix"/lib/llvmnet/llvmnet.dll "$prefix"/lib/llvmnet/LlvmNet.Llvm.dll \
-        "$prefix"/lib/llvmnet/LlvmNet.Runtime.dll "$prefix"/libexec/llvm/bin/*.llvmnet/program.dll "$prefix"/libexec/llvm/bin/*.llvmnet/LlvmNet.Runtime.dll >/dev/null
-    printf '%s\n' "$readytorun" >"$prefix/lib/llvmnet/readytorun.txt"
-fi
+if [[ -n "$readytorun" ]]; then bash "$root/scripts/precompile-toolchain.sh" "$prefix" "$readytorun"; fi
 # The compiler's own native bridge and the publish output are stripped of what a run does not need.
 if [[ -f "$prefix/lib/llvmnet/libllvmnet-llvm.so" ]]; then strip --strip-unneeded "$prefix/lib/llvmnet/libllvmnet-llvm.so" 2>/dev/null || true; fi
 rm -f "$prefix/lib/llvmnet/libllvmnet-llvm.stamp"

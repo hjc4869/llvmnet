@@ -1,14 +1,15 @@
 # Release artifacts from a tag (TC-11, XP-04): the thin and bundled-LLVM Linux toolchain packages as reproducible tar.xz
 # files, the dotnet tool package, the portable toolchain (.tar.xz and .zip: the compiler on LLVM built by llvmnet and the
-# llvmnet-built clang, flang, opt and llvm-ar, for every .NET 10 host), SHA256SUMS, and a Sigstore signature of each file
-# made with the workflow's own identity (cosign keyless signing through GitHub's OIDC token: no key to keep). The gate
-# runs first, and the portable toolchain compiles and runs the cross-platform fixtures on Windows, macOS and Linux
-# before anything is published, so a tag never ships untested.
+# llvmnet-built clang, flang, opt and llvm-ar, for every .NET 10 host) and the same precompiled for each supported host,
+# SHA256SUMS, and a Sigstore signature of each file made with the workflow's own identity (cosign keyless signing through
+# GitHub's OIDC token: no key to keep).
 #
-# The portable job builds LLVM, Clang, MLIR and Flang with llvmnet (scripts/selfhost/): about 5,300 objects, hours on a
-# 4-core runner when the cache is cold. Its build tree is cached (restored from the newest entry and saved even when the
-# job times out, so a cold build completes over reruns), and the repository variable LLVMNET_PORTABLE_RUNNER can name a
-# larger runner.
+# The workflow only builds and packages: the gate (ci.yml) tests the commit, and tests/portable-toolchain/ checks a
+# portable toolchain on a host by hand (docs/dev/release-process.md). The portable job builds LLVM, Clang, MLIR and Flang
+# with llvmnet (scripts/selfhost/): about 5,300 objects, hours on a 4-core runner when the cache is cold. Its build tree is
+# cached (restored from the newest entry and saved even when the job times out, so a cold build completes over reruns),
+# and the repository variable LLVMNET_PORTABLE_RUNNER can name a larger runner. Each host's precompiled package is made
+# from the universal one in a job of its own, in parallel.
 name: release
 
 on:
@@ -17,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       portable:
-        description: Build and test the portable toolchain (LLVM built with llvmnet)
+        description: Build the portable toolchain (LLVM built with llvmnet)
         type: boolean
         default: true
 
@@ -31,10 +32,10 @@ env:
 
 jobs:
   artifacts:
-    name: Build, test and package (Linux x64)
+    name: Linux x64 packages and the dotnet tool
     runs-on: ubuntu-24.04
     container: debian:trixie
-    timeout-minutes: 180
+    timeout-minutes: 90
     steps:
       - name: Install git
         run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
@@ -45,18 +46,32 @@ jobs:
         run: bash scripts/ci/install-packages.sh
       - name: Mark the workspace safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - name: Build
-        run: bash scripts/ensure-built.sh
-      - name: Unit tests
-        run: dotnet test tests/LlvmNet.UnitTests -c Release --no-build
-      - name: Core and toolchain tests, including the package and deployment checks
-        run: tests/run.sh --no-build --tag core --tag toolchain -j 4
-      - name: Release artifacts
-        run: bash scripts/release-artifacts.sh dist
-      - name: Reproducibility check against a second build
+      - name: Hash the dependency and sysroot inputs
+        id: deps
+        shell: bash
         run: |
-          bash scripts/release-artifacts.sh dist-again
-          diff dist/SHA256SUMS dist-again/SHA256SUMS
+          echo "hash=$(git ls-files -z '*.csproj' Directory.Build.props scripts/sources.lock | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+          echo "sysroot=$(git ls-files -z ports scripts/build-sysroot.sh 'scripts/build-portable-*.sh' scripts/build-flang-rt.sh \
+            src/LlvmNet.Compiler/Driver.cs src/LlvmNet.Compiler/PortableAbi.cs src/LlvmNet.Compiler/Llvm.cs native/abi.cpp scripts/sources.lock |
+            xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            artifacts/vendor/downloads
+            artifacts/vendor/musl-native
+          key: deps-${{ runner.os }}-${{ steps.deps.outputs.hash }}
+      # build-sysroot.sh checks its own input hash in the restored sysroot and rebuilds it when it differs.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            sysroot/dotnet64-v2
+            sysroot/system-linux-x64-v1
+          key: sysroot-${{ runner.os }}-${{ steps.deps.outputs.sysroot }}
+      - name: Build the compiler and the sysroots
+        run: bash scripts/ensure-built.sh
+      - name: Package
+        run: bash scripts/release-artifacts.sh dist
       - uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts
@@ -80,11 +95,14 @@ jobs:
         run: bash scripts/ci/install-packages.sh --selfhost
       - name: Mark the workspace safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - name: Hash the dependency inputs
+      - name: Hash the dependency, sysroot and LLVM build inputs
         id: deps
         shell: bash
         run: |
           echo "hash=$(git ls-files -z '*.csproj' Directory.Build.props scripts/sources.lock | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+          echo "sysroot=$(git ls-files -z ports scripts/build-sysroot.sh 'scripts/build-portable-*.sh' scripts/build-flang-rt.sh \
+            src/LlvmNet.Compiler/Driver.cs src/LlvmNet.Compiler/PortableAbi.cs src/LlvmNet.Compiler/Llvm.cs native/abi.cpp scripts/sources.lock |
+            xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
           echo "selfhost=$(git ls-files -z scripts/sources.lock scripts/selfhost | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
@@ -93,8 +111,14 @@ jobs:
             artifacts/vendor/downloads
             artifacts/vendor/musl-native
           key: deps-${{ runner.os }}-${{ steps.deps.outputs.hash }}
-      # The patched source copy and the build tree: ninja rebuilds what the compiler, the sysroot headers or the flags
-      # changed, which after a compiler-only change is the links and translations.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            sysroot/dotnet64-v2
+            sysroot/system-linux-x64-v1
+          key: sysroot-${{ runner.os }}-${{ steps.deps.outputs.sysroot }}
+      # The patched source copy and the build tree: ninja rebuilds what the sysroot headers or the flags changed, which
+      # after a compiler-only change is nothing; the tools and the library are relinked every time.
       - name: Restore the LLVM build tree
         id: selfhost-cache
         uses: actions/cache/restore@v4
@@ -113,9 +137,9 @@ jobs:
       - name: Configure LLVM for portable mode
         run: bash scripts/selfhost/configure.sh
       - name: Build LlvmNet.Llvm.dll (the compiler's LLVM)
-        run: JOBS=4 bash scripts/selfhost/build-library.sh
+        run: bash scripts/selfhost/build-library.sh
       - name: Build clang, flang, opt, llvm-ar and llvm-nm
-        run: JOBS=4 bash scripts/selfhost/build-tools.sh
+        run: bash scripts/selfhost/build-tools.sh
       - name: Save the LLVM build tree
         if: always() && steps.selfhost-cache.outputs.cache-matched-key != format('selfhost-{0}-{1}', steps.deps.outputs.selfhost, github.sha)
         uses: actions/cache/save@v4
@@ -124,80 +148,55 @@ jobs:
             artifacts/selfhost-build/llvm-project
             artifacts/selfhost-build/llvm
           key: selfhost-${{ steps.deps.outputs.selfhost }}-${{ github.sha }}
-      # The universal package, and the same toolchain precompiled (ReadyToRun) for each supported host, where compiles
-      # start in about a second instead of five to ten; each still runs everywhere under the JIT.
-      - name: Package the portable toolchain
-        run: |
-          LLVMNET_RELEASE_VARIANTS="portable portable-linux-x64 portable-linux-arm64 portable-win-x64 portable-osx-arm64" \
-            JOBS=2 bash scripts/release-artifacts.sh dist
-      - name: Make the cross-platform kit (fixture sources and native results)
-        run: bash tests/portable-toolchain/make-kit.sh artifacts/tests/portable-toolchain/kit
-      - name: Compile and run the kit with the universal and the precompiled package (Linux x64)
-        run: |
-          mkdir -p /tmp/universal /tmp/precompiled
-          tar -xJf dist/llvmnet-*-portable.tar.xz -C /tmp/universal
-          tar -xJf dist/llvmnet-*-portable-linux-x64.tar.xz -C /tmp/precompiled
-          kit=artifacts/tests/portable-toolchain/kit
-          bash $kit/run.sh --jobs 4 $kit /tmp/universal/llvmnet-*
-          bash $kit/run.sh --jobs 4 $kit /tmp/precompiled/llvmnet-*
+      - name: Package the universal portable toolchain
+        run: LLVMNET_RELEASE_VARIANTS=portable bash scripts/release-artifacts.sh dist
       - uses: actions/upload-artifact@v4
         with:
-          name: portable-toolchain
+          name: portable-universal
+          compression-level: 0
           path: |
             dist/*.tar.xz
             dist/*.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: portable-kit
-          path: artifacts/tests/portable-toolchain/kit.tar.gz
 
-  portable-test:
-    name: Portable toolchain on ${{ matrix.name }}
+  portable-precompiled:
+    name: Portable toolchain precompiled for ${{ matrix.rid }}
     needs: portable
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: Windows x64, os: windows-2025, package: portable-win-x64.zip }
-          - { name: macOS ARM64, os: macos-15, package: portable-osx-arm64.tar.xz }
-          - { name: Linux ARM64, os: ubuntu-24.04-arm, package: portable-linux-arm64.tar.xz }
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+        rid: [linux-x64, linux-arm64, win-x64, osx-arm64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      # The runtime alone is what the toolchain needs; the SDK the action installs includes it.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # crossgen2 and the target's runtime pack come from NuGet through the SDK; no build of the checkout is needed.
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
       - uses: actions/download-artifact@v4
         with:
-          name: portable-toolchain
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          name: portable-kit
-      - name: Unpack the toolchain and the kit
-        shell: bash
+          name: portable-universal
+          path: universal-archive
+      - name: Precompile and package
         run: |
-          mkdir -p toolchain
-          case "${{ matrix.package }}" in
-            *.zip) pwsh -NoProfile -Command "Expand-Archive -Path (Get-Item dist/llvmnet-*-${{ matrix.package }}).FullName -DestinationPath toolchain" ;;
-            *) tar -xJf dist/llvmnet-*-${{ matrix.package }} -C toolchain ;;
-          esac
-          tar xzf kit.tar.gz
-      - name: Compile and run the kit with the portable toolchain
-        shell: bash
-        run: bash kit/run.sh --jobs 3 kit toolchain/llvmnet-*
-      - if: always()
-        uses: actions/upload-artifact@v4
+          mkdir -p universal
+          tar -xJf universal-archive/llvmnet-*-portable.tar.xz -C universal
+          LLVMNET_PORTABLE_UNIVERSAL="$(echo "$PWD"/universal/llvmnet-*-portable)" LLVMNET_RELEASE_VARIANTS="portable-${{ matrix.rid }}" \
+            JOBS=2 bash scripts/release-artifacts.sh dist
+      - uses: actions/upload-artifact@v4
         with:
-          name: portable-results-${{ matrix.os }}
-          path: kit/results
-          if-no-files-found: ignore
+          name: portable-${{ matrix.rid }}
+          compression-level: 0
+          path: |
+            dist/*.tar.xz
+            dist/*.zip
 
   publish:
     name: Sign and publish
-    needs: [artifacts, portable, portable-test]
-    if: ${{ !cancelled() && needs.artifacts.result == 'success' && (needs.portable.result == 'skipped' || needs.portable-test.result == 'success') }}
+    needs: [artifacts, portable, portable-precompiled]
+    if: ${{ !cancelled() && needs.artifacts.result == 'success' && (needs.portable.result == 'skipped' || needs.portable-precompiled.result == 'success') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -208,23 +207,24 @@ jobs:
       - uses: actions/download-artifact@v4
         if: needs.portable.result == 'success'
         with:
-          name: portable-toolchain
+          pattern: portable-*
+          merge-multiple: true
           path: dist
       - name: Checksums
-        run: cd dist && sha256sum -- *.tar.xz *.zip *.nupkg 2>/dev/null >SHA256SUMS && cat SHA256SUMS
+        run: cd dist && shopt -s nullglob && sha256sum -- *.tar.xz *.zip *.nupkg >SHA256SUMS && cat SHA256SUMS
       - uses: sigstore/cosign-installer@v3
       - name: Sign every artifact (Sigstore bundle next to each file)
         run: |
           cd dist
+          shopt -s nullglob
           for file in *.tar.xz *.zip *.nupkg SHA256SUMS; do
-            [[ -f "$file" ]] || continue
             cosign sign-blob --yes --bundle "$file.sigstore.json" "$file"
           done
       - name: Verify the signatures
         run: |
           cd dist
+          shopt -s nullglob
           for file in *.tar.xz *.zip *.nupkg SHA256SUMS; do
-            [[ -f "$file" ]] || continue
             cosign verify-blob --bundle "$file.sigstore.json" \
               --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com "$file"
@@ -232,6 +232,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
+          compression-level: 0
           path: dist
       - name: Create the GitHub release with the artifacts attached
         if: startsWith(github.ref, 'refs/tags/v')

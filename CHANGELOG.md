@@ -130,6 +130,7 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 
 ### Fixed
 
+- Portable programs on Linux started with an `AT_HWCAP` taken from CPUID, which differs from the kernel's where a hypervisor clears bits (a GitHub runner); the runtime now passes on the kernel's `AT_HWCAP` and `AT_HWCAP2` from `/proc/self/auxv` (SV-12).
 - Portable programs on Windows ran on the 1.5 MB main-thread stack dotnet.exe gives, while they are promised the 8 MB `RLIMIT_STACK` reports; an llvmnet-built clang overflowed it in its type initializer. The entry point now runs on an 8 MB thread there (XP-04).
 - Every portable compile started the frontend once more for `-print-resource-dir`; Clang's builtin headers are now found beside it (XP-04).
 - System mode answers the CPUID queries of Clang's `<cpuid.h>` (`__cpuid`, `__cpuid_count`) through native thunks, as it did the other spellings.
