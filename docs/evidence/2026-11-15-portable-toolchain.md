@@ -33,7 +33,7 @@ The core gate with the compiler forced onto the managed LLVM (`LLVMNET_LLVM=<lib
 | macOS ARM64 | `osx-arm64` | 62 of 62 | 37 s (6 jobs) |
 | Windows x64 | `win-x64`, unpacked from the zip with Windows' `tar` | 63 of 63 | 74 s (6 jobs) |
 
-The Linux and Windows rows after the `.cmd` exit-status fix also run each launcher through `llvmnet --run-launcher`.
+The Linux and Windows rows after the `.cmd` exit-status fix also run each launcher through `llvmnet --run-launcher`. Builds: the Linux archive is `dc0791c`'s tree; Windows ran the `win-x64` package of `e2045d1` with `llvmnet.dll` and the CMake file of `dc0791c` put in; macOS ran the `osx-arm64` package of `aa98f0d`, whose later changes concern Windows only.
 
 Compile and link of a hello program, best of two:
 
