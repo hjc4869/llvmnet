@@ -39,6 +39,32 @@ public static unsafe class ProcessRuntime
         return value.Length > 0 ? value : null;
     }
 
+    /// <summary>The main thread's stack portable programs get, what RLIMIT_STACK reports where the host cannot tell (8 MB).</summary>
+    private const int MainStackSize = 8 << 20;
+
+    /// <summary>
+    /// Runs an image's entry point (<paramref name="entry"/>, its <c>int __Entry(string[])</c>). Portable programs are
+    /// promised the 8 MB main-thread stack that RLIMIT_STACK reports (docs/dev/host-abi.md), which Linux and macOS give
+    /// the main thread; on Windows, where dotnet.exe and NativeAOT executables give it 1.5 MB, the entry point runs on a
+    /// thread with 8 MB instead. Large programs need it before main: the precompiled type initializer of an llvmnet-built
+    /// clang takes about 2 MB of stack, and compilers recurse deeply on nested code.
+    /// </summary>
+    public static unsafe int RunEntry(nint entry, string[] arguments)
+    {
+        if (!OperatingSystem.IsWindows()) return ((delegate*<string[], int>)entry)(arguments);
+        int status = 0;
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? failure = null;
+        var thread = new Thread(() =>
+        {
+            try { status = ((delegate*<string[], int>)entry)(arguments); }
+            catch (Exception exception) { failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception); }
+        }, MainStackSize) { Name = "main" };
+        thread.Start();
+        thread.Join();
+        failure?.Throw();
+        return status;
+    }
+
     public static int Initialize(string[] arguments)
     {
         string[] values = [ProgramName, .. arguments];

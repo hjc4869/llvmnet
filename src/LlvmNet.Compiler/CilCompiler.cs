@@ -721,8 +721,10 @@ internal sealed class CilCompiler(CompilerOptions options)
         il.Emit(OpCodes.Ldc_I4_1);
         il.Emit(OpCodes.Ret);
         il.MarkLabel(supported);
+        // The entry point runs on a thread with the stack RLIMIT_STACK promises where the main thread has less (Windows).
+        il.Emit(OpCodes.Ldftn, entry);
         il.Emit(OpCodes.Ldarg_0);
-        il.Emit(OpCodes.Call, entry);
+        il.Emit(OpCodes.Call, typeof(ProcessRuntime).GetMethod(nameof(ProcessRuntime.RunEntry))!);
         il.Emit(OpCodes.Ret);
         startup.CreateType();
         return main;
