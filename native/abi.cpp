@@ -14,7 +14,7 @@
 
 // Records the ABI tag, which every object of a link must share, and the ISA level (--isa) unless it is the baseline:
 // objects of different levels link, and the image records the levels its objects were compiled for.
-extern "C" int llvmnet_stamp_abi(const char *path, const char *tag, const char *isa, int textual, char **message)
+extern "C" __attribute__((visibility("default"))) int llvmnet_stamp_abi(const char *path, const char *tag, const char *isa, int textual, char **message)
 {
     llvm::LLVMContext context;
     llvm::SMDiagnostic diagnostic;
@@ -43,7 +43,7 @@ extern "C" int llvmnet_stamp_abi(const char *path, const char *tag, const char *
 }
 
 // The ISA levels a linked module's objects recorded, sorted and comma-separated; empty when all are the baseline.
-extern "C" char *llvmnet_isa_levels(LLVMModuleRef moduleRef)
+extern "C" __attribute__((visibility("default"))) char *llvmnet_isa_levels(LLVMModuleRef moduleRef)
 {
     std::vector<std::string> levels;
     if (auto *tuple = llvm::dyn_cast_or_null<llvm::MDTuple>(llvm::unwrap(moduleRef)->getModuleFlag("llvmnet.isa")))
@@ -56,7 +56,7 @@ extern "C" char *llvmnet_isa_levels(LLVMModuleRef moduleRef)
     return LLVMCreateMessage(joined.c_str());
 }
 
-extern "C" LLVMModuleRef llvmnet_create_native_shim(LLVMModuleRef source)
+extern "C" __attribute__((visibility("default"))) LLVMModuleRef llvmnet_create_native_shim(LLVMModuleRef source)
 {
     auto *input = llvm::unwrap(source);
     auto *module = new llvm::Module("llvmnet-native-abi", input->getContext());
@@ -65,7 +65,7 @@ extern "C" LLVMModuleRef llvmnet_create_native_shim(LLVMModuleRef source)
     return llvm::wrap(module);
 }
 
-extern "C" unsigned llvmnet_wrap_vector_invokes(LLVMModuleRef sourceRef)
+extern "C" __attribute__((visibility("default"))) unsigned llvmnet_wrap_vector_invokes(LLVMModuleRef sourceRef)
 {
     auto *module = llvm::unwrap(sourceRef);
     std::vector<llvm::InvokeInst *> invokes;
@@ -116,7 +116,7 @@ extern "C" unsigned llvmnet_wrap_vector_invokes(LLVMModuleRef sourceRef)
 
 // A forwarder for a native object's function (SV-15): an exported function of the same signature and attributes that
 // tail-calls it, so that translated code can call a function the object keeps hidden directly, without a thunk's buffer.
-extern "C" void llvmnet_add_native_forwarder(LLVMModuleRef shimRef, LLVMValueRef functionRef, const char *exportName)
+extern "C" __attribute__((visibility("default"))) void llvmnet_add_native_forwarder(LLVMModuleRef shimRef, LLVMValueRef functionRef, const char *exportName)
 {
     auto *module = llvm::unwrap(shimRef);
     auto *source = llvm::cast<llvm::Function>(llvm::unwrap(functionRef));
@@ -133,7 +133,7 @@ extern "C" void llvmnet_add_native_forwarder(LLVMModuleRef shimRef, LLVMValueRef
     else builder.CreateRet(call);
 }
 
-extern "C" void llvmnet_add_native_thunk(LLVMModuleRef shimRef, LLVMValueRef functionRef,
+extern "C" __attribute__((visibility("default"))) void llvmnet_add_native_thunk(LLVMModuleRef shimRef, LLVMValueRef functionRef,
                                         LLVMValueRef callRef, const char *exportName)
 {
     auto *module = llvm::unwrap(shimRef);

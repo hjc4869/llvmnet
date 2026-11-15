@@ -11,7 +11,7 @@
 // the number replaced. llvmnet's floating-point environment is round-to-nearest-even without exception flags, so
 // the plain form computes the same value unless the call names another static rounding mode; such calls are left
 // for the compiler to reject.
-extern "C" unsigned llvmnet_lower_constrained_fp(LLVMModuleRef handle)
+extern "C" __attribute__((visibility("default"))) unsigned llvmnet_lower_constrained_fp(LLVMModuleRef handle)
 {
     llvm::Module &module = *llvm::unwrap(handle);
     std::vector<llvm::ConstrainedFPIntrinsic *> calls;

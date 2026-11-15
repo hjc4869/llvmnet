@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 
-extern "C" unsigned llvmnet_constant_bits(LLVMValueRef value, uint8_t *destination, unsigned capacity)
+extern "C" __attribute__((visibility("default"))) unsigned llvmnet_constant_bits(LLVMValueRef value, uint8_t *destination, unsigned capacity)
 {
     llvm::Value *unwrapped = llvm::unwrap(value);
     llvm::APInt bits;
@@ -25,7 +25,7 @@ extern "C" unsigned llvmnet_constant_bits(LLVMValueRef value, uint8_t *destinati
 #include <string>
 
 // Demangles an Itanium or Rust symbol for diagnostics; returns a message the caller frees with LLVMDisposeMessage.
-extern "C" char *llvmnet_demangle(const char *name)
+extern "C" __attribute__((visibility("default"))) char *llvmnet_demangle(const char *name)
 {
     return LLVMCreateMessage(llvm::demangle(std::string(name)).c_str());
 }

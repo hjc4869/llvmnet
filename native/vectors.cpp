@@ -24,7 +24,7 @@
 // function(expand-reductions,scalarizer<load-store>) does, and returns how many it ran on. The typed vector lowering translates the vector code of every other function; the
 // compiler passes the functions whose vector code it does not translate (lanes of no CIL vector type, vector
 // intrinsics without a lowering), which then run as scalar code, as all vector code did before.
-extern "C" unsigned llvmnet_scalarize_functions(LLVMValueRef *functions, unsigned count)
+extern "C" __attribute__((visibility("default"))) unsigned llvmnet_scalarize_functions(LLVMValueRef *functions, unsigned count)
 {
     llvm::LoopAnalysisManager loops;
     llvm::FunctionAnalysisManager analyses;
@@ -55,7 +55,7 @@ extern "C" unsigned llvmnet_scalarize_functions(LLVMValueRef *functions, unsigne
 // one integer, of which lshr and trunc take a part (a sub-vector at an offset, as Highway's AVX2 broadcasts compile), or
 // which is compared with zero or all ones. llvmnet has no integers wider than 128 bits, so the parts become shuffles or
 // element extracts and the comparisons or- and and-reductions of 64-bit lanes. Returns how many it rewrote.
-extern "C" unsigned llvmnet_narrow_vector_integers(LLVMModuleRef moduleRef)
+extern "C" __attribute__((visibility("default"))) unsigned llvmnet_narrow_vector_integers(LLVMModuleRef moduleRef)
 {
     auto *module = llvm::unwrap(moduleRef);
     std::vector<llvm::BitCastInst *> casts;
@@ -124,7 +124,7 @@ extern "C" unsigned llvmnet_narrow_vector_integers(LLVMModuleRef moduleRef)
 // -mfma, target("fma")), and llvmnet otherwise rounds twice (architecture.md), so in those functions the calls become
 // llvm.fma, which .NET computes fused on every host (SV-09). Runs before the target attributes are removed; returns how
 // many calls it changed.
-extern "C" unsigned llvmnet_fuse_multiply_adds(LLVMModuleRef moduleRef)
+extern "C" __attribute__((visibility("default"))) unsigned llvmnet_fuse_multiply_adds(LLVMModuleRef moduleRef)
 {
     auto *module = llvm::unwrap(moduleRef);
     unsigned fused = 0;
@@ -155,7 +155,7 @@ extern "C" unsigned llvmnet_fuse_multiply_adds(LLVMModuleRef moduleRef)
 // struct indices, and inttoptr back. The typed lowering translates those and scalarized a function with a vector GEP,
 // its vectorized loops included (x264's frame_init_lowres_core ran 26 times native that way, SV-25). Returns how many
 // it rewrote.
-extern "C" unsigned llvmnet_expand_vector_geps(LLVMModuleRef moduleRef)
+extern "C" __attribute__((visibility("default"))) unsigned llvmnet_expand_vector_geps(LLVMModuleRef moduleRef)
 {
     auto *module = llvm::unwrap(moduleRef);
     const llvm::DataLayout &layout = module->getDataLayout();
@@ -211,7 +211,7 @@ extern "C" unsigned llvmnet_expand_vector_geps(LLVMModuleRef moduleRef)
 // with such a loop failed to link (SV-31); it becomes the umin reduction of the lane indices the mask selects, N in the
 // other lanes, as SelectionDAG expands it generically, in lanes of 8 bits for fewer than 256 lanes. Returns how many it
 // rewrote.
-extern "C" unsigned llvmnet_expand_cttz_elts(LLVMModuleRef moduleRef)
+extern "C" __attribute__((visibility("default"))) unsigned llvmnet_expand_cttz_elts(LLVMModuleRef moduleRef)
 {
     auto *module = llvm::unwrap(moduleRef);
     std::vector<llvm::CallInst *> calls;
@@ -454,7 +454,7 @@ bool Leaves(llvm::CallInst *reduction, llvm::SmallVectorImpl<llvm::Instruction *
 // total can tell apart, so a tree whose values anything else reads is left alone; for the same reason two leaves of one
 // block whose operands are half an instruction wide (the 64-bit vectors of LLVM's x86 cost model) share one instruction,
 // and the other leaf becomes zero. Returns how many leaves of differences the function got and stores how many of products.
-extern "C" unsigned llvmnet_widening_reductions(LLVMValueRef functionRef, unsigned fragmentBits, unsigned *products)
+extern "C" __attribute__((visibility("default"))) unsigned llvmnet_widening_reductions(LLVMValueRef functionRef, unsigned fragmentBits, unsigned *products)
 {
     auto *function = llvm::unwrap<llvm::Function>(functionRef);
     std::vector<llvm::CallInst *> reductions;
@@ -558,7 +558,7 @@ llvm::Value *Narrowed(llvm::IRBuilder<> &builder, llvm::Value *value, llvm::Type
 // interpolation). It becomes llvm.x86's pavg.b or pavg.w on 16-byte pieces (32, AVX2's forms, with 256-bit fragments),
 // whose helpers run Sse2.Average, AdvSimd's urhadd or an exact composition, and a trunc of the shift to the narrow lanes
 // is the average itself. Returns how many it rewrote.
-extern "C" unsigned llvmnet_rounding_averages(LLVMValueRef functionRef, unsigned fragmentBits)
+extern "C" __attribute__((visibility("default"))) unsigned llvmnet_rounding_averages(LLVMValueRef functionRef, unsigned fragmentBits)
 {
     auto *function = llvm::unwrap<llvm::Function>(functionRef);
     const llvm::DataLayout &layout = function->getParent()->getDataLayout();
@@ -970,7 +970,7 @@ unsigned Rewrite(std::vector<Gather> &gathers, bool apply)
 // loads interleaved groups whole, gathers are left alone. Returns how many gathers the function has and stores their
 // lanes and the wide loads they take; rewrites them unless apply is zero, so that the typed lowering's cost can count
 // the inserts it saves first.
-extern "C" unsigned llvmnet_strided_gathers(LLVMValueRef functionRef, unsigned fragmentBits, int apply, unsigned *lanes, unsigned *loads)
+extern "C" __attribute__((visibility("default"))) unsigned llvmnet_strided_gathers(LLVMValueRef functionRef, unsigned fragmentBits, int apply, unsigned *lanes, unsigned *loads)
 {
     auto *function = llvm::unwrap<llvm::Function>(functionRef);
     const llvm::DataLayout &layout = function->getParent()->getDataLayout();
