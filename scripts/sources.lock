@@ -4,7 +4,7 @@
 # Every URL must serve a byte-identical archive. Update a row only together with the code that depends on it.
 musl	1.2.5	a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4	musl-1.2.5.tar.gz	https://musl.libc.org/releases/musl-1.2.5.tar.gz https://deb.debian.org/debian/pool/main/m/musl/musl_1.2.5.orig.tar.gz
 llvm-project	22.1.8	922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888	llvm-project-22.1.8.src.tar.xz	https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/llvm-project-22.1.8.src.tar.xz
-llvmnet-bootstrap	0.3.0-dev.3	0aea205a19818574b5942560a900fdfcf49e391e2929237bde80523d81e2c824	llvmnet-0.3.0-dev+1715df60616b-portable.tar.xz	https://github.com/hjc4869/llvmnet/releases/download/v0.3.0-dev.3/llvmnet-0.3.0-dev%2B1715df60616b-portable.tar.xz
+llvmnet-bootstrap	0.3.0-dev.5	ce9dbd06685589d3fb837082a127314912d0c3eb9db595a0babadbb728c44831	llvmnet-0.3.0-dev+209eb2333a35-portable-linux-x64.tar.xz	https://github.com/hjc4869/llvmnet/releases/download/v0.3.0-dev.5/llvmnet-0.3.0-dev%2B209eb2333a35-portable-linux-x64.tar.xz
 mimalloc	3.6.1	7321fbe8e3d2bb447cba127603c44450db0d8ef35e8240bb4a56a7455eba0a68	mimalloc-v3.6.1-source.tar.gz	https://github.com/microsoft/mimalloc/releases/download/v3.6.1/mimalloc-v3.6.1-source.tar.gz
 ffmpeg	9.0.2	8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e	ffmpeg-9.0.2.tar.xz	https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz https://deb.debian.org/debian/pool/main/f/ffmpeg/ffmpeg_9.0.2.orig.tar.xz
 dav1d	1.5.4	686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5	dav1d-1.5.4.tar.xz	https://downloads.videolan.org/pub/videolan/dav1d/1.5.4/dav1d-1.5.4.tar.xz

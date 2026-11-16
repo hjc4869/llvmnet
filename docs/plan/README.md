@@ -23,7 +23,7 @@ The owner asked for the release pipeline to build LLVM with the published v0.3.0
 
 - **XP-11 (done).** The release pinned in `scripts/sources.lock` compiles LLVM, Clang, MLIR, Flang and their TableGen, and the commit's own compiler links the library and the tools: the outputs match a build on Debian's LLVM byte for byte, apart from source paths in Flang's messages.
 - **XP-14 (done).** The precompiled packages have Clang, Flang and the LLVM tools as NativeAOT executables, published on a runner of each host; the kit passes on Linux, macOS and Windows, compiles start about twice as fast, and the archives are less than half the size.
-- **Open.** XP-15 (the compiler under NativeAOT, which needs an emitter without `System.Reflection.Emit`); the release workflow has not run on GitHub; the compiler and the sysroots in the portable job still use Debian's LLVM.
+- **Open.** XP-15 (the compiler under NativeAOT, which needs an emitter without `System.Reflection.Emit`); the release workflow has run on GitHub once (v0.3.0-dev.5, from `209eb23`), and its `linux-x64` package with NativeAOT tools is now the pin that bootstraps LLVM; the compiler and the sysroots in the portable job still use Debian's LLVM.
 
 ## Progress (2026-11-15, the portable toolchain)
 
