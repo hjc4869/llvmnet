@@ -69,6 +69,23 @@ cp "$llvm/libcxxabi/LICENSE.TXT" "$stage/share/licenses/libcxxabi.LICENSE.TXT"
 cp "$llvm/openmp/LICENSE.TXT" "$stage/share/licenses/openmp.LICENSE.TXT"
 cp "$llvm/flang-rt/LICENSE.TXT" "$stage/share/licenses/flang-rt.LICENSE.TXT" 2>/dev/null ||
     cp "$llvm/flang/LICENSE.TXT" "$stage/share/licenses/flang-rt.LICENSE.TXT"
+# The ABI stamps (PortableAbi.AbiStamp): for each ISA level a module with the portable target and data layout, taken
+# from what Clang writes for an empty source, and nothing but the module flags the driver tags that level's objects
+# with, which it writes into this module as into any LLVM IR it compiles. Clang links the level's stamp into each object
+# it compiles, so the driver does not load LLVM to tag the object.
+mkdir -p "$stage/lib/abi"
+: >"$build/abi-stamp.c"
+"$root/bin/llvmnet" --runtime=portable --portable-sysroot "$stage" -S "$build/abi-stamp.c" -o "$build/abi-stamp-source.ll"
+grep -E '^target (datalayout|triple) = ' "$build/abi-stamp-source.ll" >"$build/abi-stamp.ll"
+if [[ "$(wc -l <"$build/abi-stamp.ll")" -ne 2 ]]; then
+    printf 'FAIL: no target and data layout in %s for the ABI stamps\n' "$build/abi-stamp-source.ll" >&2
+    exit 1
+fi
+# From the build directory, so the module names its source without this checkout's path; -w: an ISA level's options
+# apply to no LLVM IR.
+for isa in baseline x86-64-v2 x86-64-v3 wasm-simd128; do
+    (cd "$build" && "$root/bin/llvmnet" --runtime=portable --portable-sysroot "$stage" --isa="$isa" -w -c abi-stamp.ll -o "$stage/lib/abi/$isa.bc")
+done
 printf '%s\n' "$inputs" >"$stage/.llvmnet-inputs"
 # Objects compiled against the sysroot depend only on its headers: builds of other projects key on this hash.
 (cd "$stage/include" && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1) >"$stage/.llvmnet-headers"

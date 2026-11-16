@@ -89,6 +89,9 @@ All notable user-visible changes are recorded here. The format follows [Keep a C
 
 ### Changed
 
+- The LLVM tools of a precompiled portable package are linked for NativeAOT instead of being published from the universal package's JIT images (`scripts/selfhost/build-aot-projects.sh`, which the release workflow runs): they have no type initializer to test before a global is read, no fat-pointer test at indirect calls and frame slots for stack allocations, and Clang compiles LLVM's own sources in about 12% less CPU time (XP-16).
+- A C or C++ compile no longer loads the compiler's in-process LLVM: Clang writes the object's ABI tag itself, from a stamp in the sysroot (`lib/abi/<level>.bc`), where the driver parsed every object and wrote it again. The driver's part of a compile in a precompiled portable package goes from 0.20 s to 0.045 s. A sysroot built before this release has no stamps, and the driver tags its objects as before (XP-17).
+- Loads, stores and arithmetic of integers of 65 to 128 bits and of 3, 5, 6 or 7 bytes, which LLVM makes from adjacent bit-fields and small aggregates, are a few instructions instead of loops in the runtime; `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` are inlined; and the portable C library's `memcmp` compares eight bytes at a time (PF-30).
 - System mode translates the SSE intrinsic paths its predefined `__SSE2__` selects instead of rejecting them at the link; AVX and later and `_mm_setcsr` still warn while compiling and fail when reached (SA-12, SV-08).
 - **Breaking:** `--runtime=portable` is the default, and the portable ABI tag is `dotnet64-v2`, the musl layout with glibc-width fast integer types; `dotnet64-v1` objects are rejected (LC-26, ADR-09).
 - **Breaking:** `--runtime=managed-host` is removed, and link inputs without an ABI tag are rejected (ADR-04).

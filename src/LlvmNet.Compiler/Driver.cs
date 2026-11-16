@@ -536,6 +536,11 @@ internal static class Driver
                 // Mixed-language builds pass Fortran module options to every input; Clang does not accept them.
                 command.AddRange(fortran ? frontend : WithoutFortranOptions(frontend));
                 command.AddRange(["-emit-llvm", invocation.Textual ? "-S" : "-c"]);
+                // Clang tags a portable object itself, with the sysroot's stamp of the level (PortableAbi.AbiStamp). What
+                // Flang compiles, LLVM IR, textual output and system-mode objects, whose target the command line can
+                // change, are tagged below.
+                string? stamp = options.Runtime == "portable" && !fortran && !ir && !invocation.Textual ? PortableAbi.AbiStamp(options.Isa) : null;
+                if (stamp is not null) command.AddRange(["-Xclang", "-mlink-builtin-bitcode", "-Xclang", stamp]);
                 if (input.Language is not null) command.AddRange(["-x", input.Language]);
                 command.AddRange([input.Path, "-o", destination]);
                 int result = Toolchain.Run(fortran ? flang : clang, command, verbose, options.Runtime == "portable");
@@ -544,12 +549,17 @@ internal static class Driver
                 if (invocation.DryRun) continue;
                 if (!File.Exists(destination))
                     throw new InvalidOperationException($"the frontend did not write {destination}; an option such as -fdriver-only or a -print query stops it before code generation.");
-                try { Llvm.StampAbi(destination, options.AbiTag, options.Isa, invocation.Textual); }
-                catch (InvalidOperationException error)
+                bool warn = !frontend.Contains("-w");
+                byte[]? written = stamp is not null || warn ? File.ReadAllBytes(destination) : null;
+                if (stamp is null || !Tagged(written))
                 {
-                    throw new InvalidOperationException($"the frontend's output {destination} is not LLVM {(invocation.Textual ? "IR" : "bitcode")} ({error.Message}); an option such as --analyze, -emit-ast or --precompile changes what the frontend writes.");
+                    try { Llvm.StampAbi(destination, options.AbiTag, options.Isa, invocation.Textual); }
+                    catch (InvalidOperationException error)
+                    {
+                        throw new InvalidOperationException($"the frontend's output {destination} is not LLVM {(invocation.Textual ? "IR" : "bitcode")} ({error.Message}); an option such as --analyze, -emit-ast or --precompile changes what the frontend writes.");
+                    }
                 }
-                if (!frontend.Contains("-w")) WarnX86Intrinsics(destination, options.Runtime == "system", new Diagnostics(arguments));
+                if (warn) WarnX86Intrinsics(destination, written, options.Runtime == "system", new Diagnostics(arguments));
                 bitcode.Add((destination, false));
             }
             if (invocation.CompileOnly || invocation.DryRun)
@@ -808,16 +818,25 @@ internal static class Driver
     private static List<string> IsaArguments(string isa) => isa is "x86-64-v2" or "x86-64-v3" ? ["-march=" + isa, "-mno-cx16"] : [];
 
     /// <summary>
+    /// Whether what the frontend wrote is bitcode that carries the ABI tag, which Clang linked in with the sysroot's stamp
+    /// (PortableAbi.AbiStamp): bitcode keeps metadata strings verbatim, so the flag's name is found without parsing the
+    /// module. Anything else, as the output of an option that changes what the frontend writes, goes to Llvm.StampAbi,
+    /// which tags it or reports what it is.
+    /// </summary>
+    private static bool Tagged(ReadOnlySpan<byte> content) =>
+        content.Length > 4 && content[0] == (byte)'B' && content[1] == (byte)'C' && content[2] == 0xC0 && content[3] == 0xDE && content.IndexOf("llvmnet.abi"u8) >= 0;
+
+    /// <summary>
     /// Warns, when the unit is compiled, about each x86 target intrinsic the backend does not translate
     /// (FunctionEmitter.TranslatesX86Intrinsic): such intrinsics come from SSE and AVX code paths, which system mode's
     /// native feature macros select, and the translation rejects them only at the final link. A warning, not an error:
     /// the link drops unreferenced functions, and library code often holds such a function that few programs reach
     /// (flang-rt's floating-point exception accessors read MXCSR). Bitcode keeps symbol names verbatim in its string
-    /// table, so a unit without the prefix is not parsed a second time.
+    /// table, so a unit without the prefix is not parsed: <paramref name="content"/> is what the frontend wrote.
     /// </summary>
-    private static void WarnX86Intrinsics(string path, bool system, Diagnostics diagnostics)
+    private static void WarnX86Intrinsics(string path, ReadOnlySpan<byte> content, bool system, Diagnostics diagnostics)
     {
-        if (File.ReadAllBytes(path).AsSpan().IndexOf("llvm.x86."u8) < 0) return;
+        if (content.IndexOf("llvm.x86."u8) < 0) return;
         using var module = new LlvmModule(path);
         foreach (nint function in Llvm.Functions(module.Handle))
         {

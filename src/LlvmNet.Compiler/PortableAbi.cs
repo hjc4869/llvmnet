@@ -15,6 +15,16 @@ internal static class PortableAbi
 
     internal static string Library(string name) => Path.Combine(Sysroot, "lib", name);
 
+    /// <summary>
+    /// The sysroot's ABI stamp of an ISA level (lib/abi/&lt;level&gt;.bc, scripts/build-sysroot.sh): a bitcode module with the
+    /// portable target and nothing but the module flags that tag a portable object, llvmnet.abi and the level's
+    /// llvmnet.isa. Clang links it into what it compiles (-mlink-builtin-bitcode), so the object comes out tagged and the
+    /// driver does not load LLVM to parse and rewrite it, which took most of the driver's time for a compile on the
+    /// managed in-process LLVM of a portable toolchain (XP-17). Null when the sysroot has none, as one that is being
+    /// built or was built before the stamps; the driver then tags the object itself.
+    /// </summary>
+    internal static string? AbiStamp(string isa) => Library(Path.Combine("abi", isa + ".bc")) is string path && File.Exists(path) ? path : null;
+
     /// <summary>Fails with build guidance when the sysroot has not been built.</summary>
     internal static void RequireSysroot()
     {

@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace LlvmNet.Runtime;
 
@@ -19,8 +20,31 @@ public static unsafe class WideInteger
     public static UInt128 FromUnsigned(long value) => unchecked((ulong)value);
     public static UInt128 FromSigned(long value) => unchecked((UInt128)(Int128)value);
     public static long Low(UInt128 value) => unchecked((long)(ulong)value);
-    public static UInt128 Mask(UInt128 value, int width) => width == 128 ? value : value & ((UInt128.One << width) - 1);
-    public static UInt128 ExtendSign(UInt128 value, int width) => width == 128 ? value : (value & (UInt128.One << (width - 1))) == 0 ? value : value | ~((UInt128.One << width) - 1);
+
+    // The compiler passes every width, opcode and predicate below as a constant, and translated C++ loads, stores and
+    // masks 65- to 128-bit and odd-width integers in hot code (LLVM merges adjacent bit-fields and small aggregates into
+    // one integer: Clang's AST node constructors, hashing), so these are inlined and written on the two 64-bit halves:
+    // RyuJIT then folds the tests of the constants and keeps the halves in registers, where calls of UInt128's operators
+    // with a variable shift stayed calls (PF-30).
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ulong High(UInt128 value) => (ulong)(value >> 64);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static UInt128 Mask(UInt128 value, int width)
+    {
+        if (width >= 128) return value;
+        if (width > 64) return new UInt128(High(value) & (ulong.MaxValue >> (128 - width)), (ulong)value);
+        return width == 64 ? (ulong)value : (ulong)value & ((1UL << width) - 1);
+    }
+
+    /// <summary>The value with the bits above its width set to its sign bit; the value is within its width.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static UInt128 ExtendSign(UInt128 value, int width)
+    {
+        if (width >= 128) return value;
+        if (width > 64) return new UInt128((ulong)((long)(High(value) << (128 - width)) >> (128 - width)), (ulong)value);
+        return (value & (UInt128.One << (width - 1))) == 0 ? value : value | ~((UInt128.One << width) - 1);
+    }
     // fptosi/fptoui: out-of-range inputs are poison in LLVM and may be evaluated speculatively, so they
     // must not trap; saturate like .NET's narrow conversions do.
     public static UInt128 FromFloating(double value, int signed) => FromFloatingSaturated(value, signed, 128);
@@ -108,51 +132,65 @@ public static unsafe class WideInteger
         return whole >= (double)umax ? umax : (UInt128)whole;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static UInt128 Binary(UInt128 left, UInt128 right, int opcode, int width)
     {
-        Int128 signedLeft = unchecked((Int128)ExtendSign(left, width));
-        Int128 signedRight = unchecked((Int128)ExtendSign(right, width));
-        if (opcode is 20 or 21 or 22 && right >= (uint)width)
-            throw new ArithmeticException("Undefined oversized LLVM integer shift.");
-        UInt128 result = opcode switch
+        switch (opcode)
         {
-            8 => unchecked(left + right),
-            10 => unchecked(left - right),
-            12 => unchecked(left * right),
-            14 => left / right,
-            15 => unchecked((UInt128)(signedLeft / signedRight)),
-            17 => left % right,
-            18 => unchecked((UInt128)(signedLeft % signedRight)),
-            20 => left << (int)right,
-            21 => left >> (int)right,
-            22 => unchecked((UInt128)(signedLeft >> (int)right)),
-            23 => left & right,
-            24 => left | right,
-            25 => left ^ right,
-            _ => throw new NotSupportedException($"Wide integer opcode {opcode}")
-        };
-        return Mask(result, width);
+            case 8:
+            {
+                ulong low = (ulong)left + (ulong)right;
+                return Mask(new UInt128(High(left) + High(right) + (low < (ulong)left ? 1UL : 0UL), low), width);
+            }
+            case 10:
+                return Mask(new UInt128(High(left) - High(right) - ((ulong)left < (ulong)right ? 1UL : 0UL), (ulong)left - (ulong)right), width);
+            case 12: return Mask(unchecked(left * right), width);
+            case 14: return Mask(left / right, width);
+            case 15: return Mask(unchecked((UInt128)((Int128)ExtendSign(left, width) / (Int128)ExtendSign(right, width))), width);
+            case 17: return Mask(left % right, width);
+            case 18: return Mask(unchecked((UInt128)((Int128)ExtendSign(left, width) % (Int128)ExtendSign(right, width))), width);
+            case 20: return Mask(left << ShiftAmount(right, width), width);
+            case 21: return Mask(left >> ShiftAmount(right, width), width);
+            case 22: return Mask(unchecked((UInt128)((Int128)ExtendSign(left, width) >> ShiftAmount(right, width))), width);
+            case 23: return Mask(new UInt128(High(left) & High(right), (ulong)left & (ulong)right), width);
+            case 24: return Mask(new UInt128(High(left) | High(right), (ulong)left | (ulong)right), width);
+            case 25: return Mask(new UInt128(High(left) ^ High(right), (ulong)left ^ (ulong)right), width);
+            default: throw new NotSupportedException($"Wide integer opcode {opcode}");
+        }
     }
+
+    private static int ShiftAmount(UInt128 amount, int width)
+    {
+        if (amount >= (uint)width) throw new ArithmeticException("Undefined oversized LLVM integer shift.");
+        return (int)(ulong)amount;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int Compare(UInt128 left, UInt128 right, int predicate, int width)
     {
-        Int128 signedLeft = unchecked((Int128)ExtendSign(left, width));
-        Int128 signedRight = unchecked((Int128)ExtendSign(right, width));
+        // Signed order is unsigned order of the sign-extended values with their sign bits flipped.
+        if (predicate is >= 38 and <= 41)
+        {
+            left = ExtendSign(left, width) ^ SignBit;
+            right = ExtendSign(right, width) ^ SignBit;
+            predicate -= 4;
+        }
+        ulong leftHigh = High(left), rightHigh = High(right), leftLow = (ulong)left, rightLow = (ulong)right;
         bool result = predicate switch
         {
-            32 => left == right,
-            33 => left != right,
-            34 => left > right,
-            35 => left >= right,
-            36 => left < right,
-            37 => left <= right,
-            38 => signedLeft > signedRight,
-            39 => signedLeft >= signedRight,
-            40 => signedLeft < signedRight,
-            41 => signedLeft <= signedRight,
+            32 => leftHigh == rightHigh && leftLow == rightLow,
+            33 => leftHigh != rightHigh || leftLow != rightLow,
+            34 => leftHigh > rightHigh || leftHigh == rightHigh && leftLow > rightLow,
+            35 => leftHigh > rightHigh || leftHigh == rightHigh && leftLow >= rightLow,
+            36 => leftHigh < rightHigh || leftHigh == rightHigh && leftLow < rightLow,
+            37 => leftHigh < rightHigh || leftHigh == rightHigh && leftLow <= rightLow,
             _ => throw new NotSupportedException($"Wide integer comparison {predicate}")
         };
         return result ? 1 : 0;
     }
+
+    private static UInt128 SignBit => new(1UL << 63, 0);
+
     public static void Overflow(int operation, int signed, int width, UInt128 left, UInt128 right, nint destination, int flagOffset)
     {
         BigInteger first = signed != 0 ? (BigInteger)unchecked((Int128)ExtendSign(left, width)) : (BigInteger)left;
@@ -163,20 +201,76 @@ public static unsafe class WideInteger
         Write(destination, (UInt128)(result & ((BigInteger.One << width) - 1)), width);
         *((byte*)destination + flagOffset) = result < minimum || result > maximum ? (byte)1 : (byte)0;
     }
+    /// <summary>The integer in the first 1 to 8 bytes at an address, with two loads that overlap when the count is not a power of two.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ulong ReadBytes(byte* address, int count) => count switch
+    {
+        1 => *address,
+        2 => Unsafe.ReadUnaligned<ushort>(address),
+        3 => Unsafe.ReadUnaligned<ushort>(address) | (ulong)address[2] << 16,
+        4 => Unsafe.ReadUnaligned<uint>(address),
+        5 or 6 or 7 => Unsafe.ReadUnaligned<uint>(address) | (ulong)Unsafe.ReadUnaligned<uint>(address + count - 4) << ((count - 4) * 8),
+        _ => Unsafe.ReadUnaligned<ulong>(address)
+    };
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void WriteBytes(byte* address, ulong value, int count)
+    {
+        switch (count)
+        {
+            case 1: *address = (byte)value; break;
+            case 2: Unsafe.WriteUnaligned(address, (ushort)value); break;
+            case 3:
+                Unsafe.WriteUnaligned(address, (ushort)value);
+                address[2] = (byte)(value >> 16);
+                break;
+            case 4: Unsafe.WriteUnaligned(address, (uint)value); break;
+            case 5 or 6 or 7:
+                Unsafe.WriteUnaligned(address, (uint)value);
+                Unsafe.WriteUnaligned(address + count - 4, (uint)(value >> ((count - 4) * 8)));
+                break;
+            default: Unsafe.WriteUnaligned(address, value); break;
+        }
+    }
+
+    /// <summary>A load of an integer of 1 to 128 bits: the (width + 7) / 8 bytes at the address, little-endian, within the width.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static UInt128 Read(nint address, int width)
     {
-        UInt128 value = 0;
-        for (int index = 0; index < (width + 7) / 8; index++)
-            value |= (UInt128)((byte*)address)[index] << (index * 8);
-        return Mask(value, width);
+        int count = (width + 7) / 8;
+        if (count > 8) return Mask(new UInt128(ReadBytes((byte*)address + 8, count - 8), Unsafe.ReadUnaligned<ulong>((byte*)address)), width);
+        return count == 0 ? UInt128.Zero : Mask(ReadBytes((byte*)address, count), width);
     }
+
+    /// <summary>A store of an integer of 1 to 128 bits: its low (width + 7) / 8 bytes.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void Write(nint address, UInt128 value, int width)
     {
-        for (int index = 0; index < (width + 7) / 8; index++)
-            ((byte*)address)[index] = (byte)(value >> (index * 8));
+        int count = (width + 7) / 8;
+        if (count > 8)
+        {
+            Unsafe.WriteUnaligned((byte*)address, (ulong)value);
+            WriteBytes((byte*)address + 8, High(value), count - 8);
+        }
+        else if (count != 0)
+            WriteBytes((byte*)address, (ulong)value, count);
     }
-    public static long ReadNarrow(nint address, int width) => unchecked((long)(ulong)Read(address, width));
-    public static void WriteNarrow(nint address, long value, int width) => Write(address, (ulong)value, width);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static long ReadNarrow(nint address, int width)
+    {
+        int count = (width + 7) / 8;
+        if (count == 0) return 0;
+        ulong value = ReadBytes((byte*)address, count);
+        return unchecked((long)(width >= 64 ? value : value & ((1UL << width) - 1)));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteNarrow(nint address, long value, int width)
+    {
+        int count = (width + 7) / 8;
+        if (count != 0) WriteBytes((byte*)address, unchecked((ulong)value), count);
+    }
 
     public static UInt128 ReadPacked(nint address, long index, int width)
     {
