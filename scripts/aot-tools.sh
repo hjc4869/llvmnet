@@ -8,7 +8,8 @@
 #       Writes the NativeAOT project of each tool image in <llvm-bin> (the <image>.llvmnet/ payloads of a portable
 #       toolchain's libexec/llvm/bin, or of scripts/selfhost/build-tools.sh's stage) into <projects-dir>/<image>, with
 #       this checkout's compiler (llvmnet --write-aot-project, the project --aot-project writes for a link). The projects
-#       are relocatable.
+#       are relocatable. They hold the JIT images, which is all a packaged toolchain has: a release publishes the
+#       projects scripts/selfhost/build-aot-projects.sh links for NativeAOT instead, whose tools are faster (XP-16).
 #   scripts/aot-tools.sh publish <projects-dir> <rid> <out-dir>
 #       Publishes each project for <rid> (dotnet publish; the .NET 10 SDK and the host's native toolchain, as for
 #       --nativeaot) and puts the executables in <out-dir> under the tools' versioned names: clang-22, flang-22, opt-22,

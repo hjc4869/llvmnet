@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace LlvmNet.Runtime;
 
@@ -30,6 +31,12 @@ public static unsafe class Numeric
     public static long LeadingZeros64(long value) => BitOperations.LeadingZeroCount((ulong)value);
     public static int TrailingZeros32(int value) => BitOperations.TrailingZeroCount((uint)value);
     public static long TrailingZeros64(long value) => BitOperations.TrailingZeroCount((ulong)value);
+    /// <summary>
+    /// llvm.ctpop, llvm.ctlz and llvm.cttz (operation 0, 1, 2) of an integer of up to 64 bits. The compiler passes the
+    /// width and the operation as constants, so inlined this is the one instruction: LLVM's own code counts zeros in
+    /// every hash table and bit vector, and as a call it took half a percent of a translated Clang's time (PF-30).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static long CountBits(long value, int width, int operation)
     {
         ulong bits = (ulong)value & (width == 64 ? ulong.MaxValue : (1UL << width) - 1);

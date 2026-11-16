@@ -7,15 +7,16 @@
 # The workflow only builds and packages: the gate (ci.yml) tests the commit, and tests/portable-toolchain/ checks a
 # portable toolchain on a host by hand (docs/dev/release-process.md). The portable job builds LLVM, Clang, MLIR and Flang
 # with llvmnet (scripts/selfhost/): about 5,300 objects, hours on a 4-core runner when the cache is cold. A bootstrap
-# build by default (XP-11): the release pinned as llvmnet-bootstrap in scripts/sources.lock, precompiled for the runner,
-# compiles LLVM, and this commit's compiler links the library and the tools, so no LLVM of the runner's is used for them;
-# a manual run can choose the checkout's compiler on Debian's LLVM 22 instead (llvm: native). Its build tree is cached
-# (restored from the newest entry and saved even when the job times out, so a cold build completes over reruns), and the
-# repository variable LLVMNET_PORTABLE_RUNNER can name a larger runner. Each host's precompiled package has the LLVM tools as NativeAOT
-# executables (XP-14), which NativeAOT can only compile on a host of the same operating system: the portable job writes
-# their projects, a runner of each host publishes them (aot-tools), and a Linux job per host makes the package from the
-# universal one with them, precompiling the compiler with ReadyToRun. The jobs hand their files on as short-lived
-# workflow artifacts.
+# build by default (XP-11): the release pinned as llvmnet-bootstrap in scripts/sources.lock, its linux-x64 package with
+# NativeAOT tools, compiles LLVM, and this commit's compiler links the library and the tools, so no LLVM of the runner's
+# is used for them; a manual run can choose the checkout's compiler on Debian's LLVM 22 instead (llvm: native). Its
+# build tree is cached (restored from the newest entry and saved even when the job times out, so a cold build completes
+# over reruns), and the repository variable LLVMNET_PORTABLE_RUNNER can name a larger runner. Each host's precompiled
+# package has the LLVM tools as NativeAOT executables (XP-14), which NativeAOT can only compile on a host of the same
+# operating system: the portable job links the tools a second time, for NativeAOT (XP-16: an executable published from a
+# JIT image takes about 1.15 times as long to compile), and uploads their projects, a runner of each host publishes them
+# (aot-tools), and a Linux job per host makes the package from the universal one with them, precompiling the compiler
+# with ReadyToRun. The jobs hand their files on as short-lived workflow artifacts.
 name: release
 
 on:
@@ -150,8 +151,8 @@ jobs:
       - name: Fetch LLVM's sources
         run: scripts/fetch-sources.sh llvm-project
       # The scripts take the toolchain that compiles LLVM from LLVMNET_SELFHOST_TOOLCHAIN (scripts/selfhost/common.sh):
-      # the pinned release's universal package with its LLVM tools made NativeAOT executables, about 15 minutes on a
-      # 4-core runner when the cache has none for the pin.
+      # the pinned release's package precompiled for linux-x64, used as it is: its LLVM tools are NativeAOT executables
+      # and its compiler is precompiled with ReadyToRun, where the universal package's run under the JIT.
       - name: Prepare the release that compiles LLVM (llvmnet-bootstrap in scripts/sources.lock)
         if: steps.deps.outputs.llvm == 'bootstrap'
         run: echo "LLVMNET_SELFHOST_TOOLCHAIN=$(bash scripts/selfhost/bootstrap.sh)" >>"$GITHUB_ENV"
@@ -162,7 +163,7 @@ jobs:
       - name: Build clang, flang, opt, llvm-ar and llvm-nm
         run: bash scripts/selfhost/build-tools.sh
       - name: Save the LLVM build tree
-        if: always() && steps.selfhost-cache.outputs.cache-matched-key != format('selfhost-{0}-{1}', steps.deps.outputs.selfhost, github.sha)
+        if: always() && steps.selfhost-cache.outputs.cache-matched-key != format('selfhost-{0}-{1}-{2}', steps.deps.outputs.llvm, steps.deps.outputs.selfhost, github.sha)
         uses: actions/cache/save@v4
         with:
           path: |
@@ -170,14 +171,12 @@ jobs:
             artifacts/selfhost-build/llvm
             artifacts/selfhost-build/bootstrap
           key: selfhost-${{ steps.deps.outputs.llvm }}-${{ steps.deps.outputs.selfhost }}-${{ github.sha }}
+      # The same objects and the same compiler as the JIT images above, translated for NativeAOT: no type initializer
+      # to test before a global is read, no fat-pointer test at indirect calls, frame slots for stack allocations.
+      - name: Link the LLVM tools for NativeAOT
+        run: bash scripts/selfhost/build-aot-projects.sh aot-projects
       - name: Package the universal portable toolchain
         run: LLVMNET_RELEASE_VARIANTS=portable bash scripts/release-artifacts.sh dist
-      # From the packaged payloads, so the executables are made from what the universal package ships.
-      - name: Write the NativeAOT projects of the LLVM tools
-        run: |
-          mkdir -p universal
-          tar -xJf dist/llvmnet-*-portable.tar.xz -C universal
-          bash scripts/aot-tools.sh projects universal/llvmnet-*-portable/libexec/llvm/bin aot-projects
       - uses: actions/upload-artifact@v4
         with:
           name: portable-universal

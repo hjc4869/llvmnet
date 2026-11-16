@@ -12,7 +12,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 stage="$(realpath -m "${1:-$work/stage}")"
 [[ -f "$build_dir/build.ninja" ]] || bash "$selfhost/configure.sh"
 settle_sysroot_headers
-images=(bin/clang-22 bin/flang-22 bin/opt bin/llvm-ar bin/llvm-nm)
+images=("${tool_images[@]}")
 # ninja compiles what the images link with the compiling toolchain; this checkout's compiler links them (common.sh). They
 # are relinked every time: ninja does not see the llvmnet compiler that links and translates them, and an image must
 # match the LlvmNet.Runtime it ships with.

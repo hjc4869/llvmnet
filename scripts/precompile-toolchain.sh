@@ -9,9 +9,13 @@
 # System.Reflection.Emit, which NativeAOT does not provide, so it stays a .NET program that starts from precompiled code.
 # The result runs on hosts of the identifier only.
 # Usage: scripts/precompile-toolchain.sh <portable-toolchain-prefix> <rid>
-#   LLVMNET_AOT_TOOLS  the tools already published for <rid> by "scripts/aot-tools.sh publish" on a host of its operating
-#                      system; without it they are published here, which NativeAOT can do for this host's operating
-#                      system only (and from Linux x64 for linux-arm64 with Debian's cross packages)
+#   LLVMNET_AOT_TOOLS     the tools already published for <rid> by "scripts/aot-tools.sh publish" on a host of its
+#                         operating system; without it they are published here, which NativeAOT can do for this host's
+#                         operating system only (and from Linux x64 for linux-arm64 with Debian's cross packages)
+#   LLVMNET_AOT_PROJECTS  the tools' projects to publish here, linked for NativeAOT by
+#                         scripts/selfhost/build-aot-projects.sh from the objects and the runtime of the toolchain's
+#                         tools; without it the projects are written from the toolchain's JIT images, whose executables
+#                         run about 1.15 times as long (XP-16)
 #   JOBS               assemblies precompiled at once, as for readytorun.sh
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,8 +31,12 @@ tools="${LLVMNET_AOT_TOOLS:-}"
 if [[ -z "$tools" ]]; then
     work="$(mktemp -d "${TMPDIR:-/tmp}/llvmnet-aot-tools.XXXXXX")"
     trap 'rm -rf "$work"' EXIT
-    bash "$root/scripts/aot-tools.sh" projects "$bin" "$work/projects"
-    bash "$root/scripts/aot-tools.sh" publish "$work/projects" "$rid" "$work/tools"
+    projects="${LLVMNET_AOT_PROJECTS:-}"
+    if [[ -z "$projects" ]]; then
+        projects="$work/projects"
+        bash "$root/scripts/aot-tools.sh" projects "$bin" "$projects"
+    fi
+    bash "$root/scripts/aot-tools.sh" publish "$projects" "$rid" "$work/tools"
     tools="$work/tools"
 fi
 for tool in clang-22 flang-22 opt-22 llvm-ar-22 llvm-nm-22; do

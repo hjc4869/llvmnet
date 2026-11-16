@@ -81,13 +81,25 @@ link_inputs() {
     ninja -C "$build_dir" -t query "$1" | awk '/^  input:/ { on = 1; next } /^  outputs:/ { on = 0 } on { sub(/^ +(\|\|? )?/, ""); print }'
 }
 
+# The tools llvmnet runs, as targets of the build tree: build-tools.sh links each as a JIT image and
+# build-aot-projects.sh for NativeAOT.
+tool_images=(bin/clang-22 bin/flang-22 bin/opt bin/llvm-ar bin/llvm-nm)
+
 # Links <target> of the build tree with this checkout's compiler (link_environment first): ninja's own link command for
-# it, with the compiling toolchain's driver replaced by this checkout's.
+# it, with the compiling toolchain's driver replaced by this checkout's. With a project directory the link is one for
+# NativeAOT (--aot-project): it writes the target's NativeAOT project there and leaves the JIT image as it is. The
+# project asks for the baseline instruction set, so the tools run on every x64 processor as the compiler does:
+# x86-64-v2, a link's default for vector code, makes Clang no faster.
 link_with_checkout() {
-    local target="$1" command
+    local target="$1" project="${2:-}" command driver="$root/bin/llvmnet-clang++"
     command="$(ninja -C "$build_dir" -t commands "$target" | tail -n 1)"
-    command="${command//"$toolchain/bin/llvmnet-clang++"/"$root/bin/llvmnet-clang++"}"
-    [[ "$command" == *"$root/bin/llvmnet-clang++"* ]] || { printf 'Cannot find the link command of %s in %s\n' "$target" "$build_dir" >&2; return 1; }
-    rm -rf "${build_dir:?}/$target" "${build_dir:?}/$target.llvmnet"
+    command="${command//"$toolchain/bin/llvmnet-clang++"/"$driver"}"
+    [[ "$command" == *"$driver"* ]] || { printf 'Cannot find the link command of %s in %s\n' "$target" "$build_dir" >&2; return 1; }
+    if [[ -n "$project" ]]; then
+        rm -rf "${project:?}"
+        command="${command/"$driver"/"$driver --aot-project $(printf '%q' "$project") --aot-instruction-set baseline"}"
+    else
+        rm -rf "${build_dir:?}/$target" "${build_dir:?}/$target.llvmnet"
+    fi
     (cd "$build_dir" && env ${link_env[@]+"${link_env[@]}"} bash -c "$command")
 }

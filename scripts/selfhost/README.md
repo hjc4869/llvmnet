@@ -9,6 +9,8 @@ whole toolchain is .NET code that runs on every .NET 10 host (XP-04). They produ
 - `clang`, `flang`, `opt`, `llvm-ar` and `llvm-nm` as portable JIT images, staged as a toolchain's `libexec/llvm`: a
   launcher pair (a POSIX script and a `.cmd`) for each name the compiler and the `bin/` commands call, Clang's resource
   headers, and Flang's intrinsic modules made by the built flang.
+- The same tools linked for NativeAOT, as projects (`build-aot-projects.sh`), which a precompiled package's executables
+  are published from on a host of each operating system (`scripts/aot-tools.sh publish`).
 
 `scripts/package-toolchain.sh <prefix> --portable [--precompile=<rid>]` puts them together with the compiler and the
 sysroots, and `scripts/release-artifacts.sh` with `LLVMNET_RELEASE_VARIANTS="portable portable-<rid>..."` archives the
@@ -23,6 +25,9 @@ bash scripts/selfhost/configure.sh           # one build tree for the library an
 bash scripts/selfhost/build-library.sh       # <work>/library/LlvmNet.Llvm.dll
 bash scripts/selfhost/build-tools.sh         # <work>/stage (libexec/llvm)
 bash scripts/package-toolchain.sh /tmp/llvmnet-portable --portable
+bash scripts/selfhost/build-aot-projects.sh  # <work>/aot-projects, for a precompiled package:
+LLVMNET_AOT_PROJECTS=artifacts/selfhost-build/aot-projects \
+    bash scripts/package-toolchain.sh /tmp/llvmnet-linux-x64 --portable --precompile=linux-x64
 ```
 
 `<work>` is `artifacts/selfhost-build` (`LLVMNET_SELFHOST_DIR`). `JOBS` sets the parallelism. The toolchain that compiles
@@ -30,18 +35,20 @@ LLVM is this checkout, on the host's LLVM 22, by default; `LLVMNET_SELFHOST_TOOL
 instead, which makes it a bootstrap build:
 
 ```sh
-export LLVMNET_SELFHOST_TOOLCHAIN="$(bash scripts/selfhost/bootstrap.sh)"   # the pinned release, precompiled for this host
+export LLVMNET_SELFHOST_TOOLCHAIN="$(bash scripts/selfhost/bootstrap.sh)"   # the pinned release's linux-x64 package
 ```
 
 ## Bootstrap builds
 
 A release's LLVM is built by the previous release's portable toolchain (XP-11), so it depends on no LLVM of the host's:
-`llvmnet-bootstrap` in `scripts/sources.lock` pins a release's universal package by its SHA-256, and `bootstrap.sh`
-precompiles it for this host in `<work>/bootstrap` as the release's own precompiled package is made
-(`scripts/precompile-toolchain.sh`, about 15 minutes on 4 cores). Its tools are then NativeAOT executables: one LLVM
-object costs about 1.3 times the CPU time of Debian's Clang with them, against 4.6 times with the ReadyToRun tools of a
-release before XP-14 and more under the JIT. The path stays the same when the pin changes, so the build tree keeps its
-objects, as after a compiler change.
+`llvmnet-bootstrap` in `scripts/sources.lock` pins a release's package precompiled for `linux-x64` by its SHA-256, and
+`bootstrap.sh` copies it to `<work>/bootstrap`. Its tools are NativeAOT executables (XP-14): one LLVM object costs about
+1.23 times the CPU time of Debian's Clang with v0.3.0-dev.5's, which were published from JIT images, and 1.02 times
+with a release's whose tools are linked for NativeAOT (XP-16) and whose driver leaves the ABI tag to Clang (XP-17), against 4.6 times with the ReadyToRun tools of a release before XP-14 and more under the JIT of a universal
+package ([evidence](../../docs/evidence/2026-11-16-bootstrap-performance.md)). A universal package can still be pinned: `bootstrap.sh` then precompiles
+it for this host as a release's precompiled package is made (`scripts/precompile-toolchain.sh`, about 15 minutes on 4
+cores). A precompiled package with ReadyToRun tools is refused. The path stays the same when the pin changes, so the
+build tree keeps its objects, as after a compiler change.
 
 - **Compiling.** The portable toolchain's `llvmnet-clang++` compiles LLVM's sources, as this checkout's would, with its
   own Clang, `opt` and sysroot headers. The host tools LLVM runs during its build (TableGen) come from its
@@ -83,10 +90,15 @@ objects, as after a compiler change.
 ## Rebuilding
 
 The build tree is incremental. ninja does not see the llvmnet compiler, so `build-tools.sh` relinks the five images
-every time and `build-library.sh` always relinks the library. `build-sysroot.sh` gives the sysroot's headers new times
-whenever it rebuilds; the scripts record the header hash the tree was compiled against (`.llvmnet-headers`) and give
-unchanged headers an older time, so a compiler-only change costs the links (about 10 minutes of CPU) rather than the
-5,300 objects (about 6 hours). CI caches `<work>/llvm-project`, `<work>/llvm` and `<work>/bootstrap` on that basis.
+every time, `build-aot-projects.sh` links them again for NativeAOT and `build-library.sh` always relinks the library.
+`build-sysroot.sh` gives the sysroot's headers new times whenever it rebuilds; the scripts record the header hash the
+tree was compiled against (`.llvmnet-headers`) and give unchanged headers an older time, so a compiler-only change costs
+the links (about 20 minutes of CPU) rather than the 5,300 objects (about 6 hours). When the pin of a bootstrap build
+changes, `bootstrap.sh` keeps the times of the files the new package has unchanged and gives the others the present
+time: a package's files carry the time of its release's commit, which would otherwise look newer than every object an
+earlier run compiled (the native TableGen build depends on the package's Clang headers), or older than them when a
+header really changed. CI caches `<work>/llvm-project`, `<work>/llvm` and `<work>/bootstrap` on that basis; a run whose
+cache has no tree of its kind compiles everything, which is what a first bootstrap build after native ones does.
 
 ## Costs (Linux x86-64, 2026-11-15; bootstrap 2026-11-16)
 
@@ -95,6 +107,9 @@ unchanged headers an older time, so a compiler-only change costs the links (abou
 - Images: clang 196 MB, flang 287 MB, opt 96 MB, `LlvmNet.Llvm.dll` 27 MB; the portable package is 733 MB (97 MB as
   `.tar.xz`), and precompiled for one host (`scripts/precompile-toolchain.sh`) 478 MB (116 MB as `.tar.xz`): NativeAOT
   publishes the five tools in 11 to 14 minutes on 4 to 8 cores, clang alone in about 6 minutes and 5 GB.
-- Bootstrap build: one object at about 1.3 times the CPU time of the build on Debian's LLVM with the prepared toolchain
-  (`bootstrap.sh`, 14 minutes on 4 cores); the library's two links about 3.5 minutes; the tools' links on the managed
-  in-process LLVM up to 12 GB, against 9 GB on Debian's ([evidence](../../docs/evidence/2026-11-16-bootstrap-and-native-tools.md)).
+- Bootstrap build: one object at about 1.23 times the CPU time of the build on Debian's LLVM with the pinned
+  v0.3.0-dev.5 (or 14 minutes on 4 cores for `bootstrap.sh` to precompile a universal package first); the library's two
+  links about 3.5 minutes; the tools' links on the managed in-process LLVM up to 12 GB, against 9 GB on Debian's
+  ([evidence](../../docs/evidence/2026-11-16-bootstrap-and-native-tools.md)).
+- The tools linked for NativeAOT (`build-aot-projects.sh`): 10 minutes for the five on Debian's LLVM, as long as their
+  links as JIT images, with the same memory.
